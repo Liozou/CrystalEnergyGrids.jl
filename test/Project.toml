@@ -1,0 +1,7 @@
+[deps]
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+RaspaGrids = "e6723af2-ddc1-4dc9-99e9-2a6c595dec7d"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+Aqua = "0.5"
