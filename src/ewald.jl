@@ -19,30 +19,34 @@ function cell_angles(mat::AbstractMatrix)
     return (a, b, c), (α, β, γ)
 end
 
-nint(x) = ifelse(x>=0.0, x+0.5, x-0.5)
 complexofpoint(x) = begin (s,c) = sincos(x); ComplexF64(c, s) end
 
 
-function setup_Eik(systems, numsites, kx, ky, kz, invmat)
+function setup_Eik(systems, numsites, kx, ky, kz, invmat, (superA, superB, superC))
     Eikx = Vector{ComplexF64}(undef, (kx+1)*numsites)
     Eiky = OffsetArray(Vector{ComplexF64}(undef, (2ky+1)*numsites), 1-ky*numsites:(ky+1)*numsites)
     Eikz = OffsetArray(Vector{ComplexF64}(undef, (2kz+1)*numsites), 1-kz*numsites:(kz+1)*numsites)
 
     i = 0
     for syst in systems
-        for j in 1:length(syst)
-            i += 1
-            Eikx[i] = 1.0
-            Eiky[i] = 1.0
-            Eikz[i] = 1.0
-            i₊ = numsites+i
-            i₋ = -numsites+i
-            px, py, pz = invmat * (position(syst, j) ./ (ANG_UNIT/(2π)))
-            Eikx[i₊] = complexofpoint(px)
-            tmp = Eiky[i₊] = complexofpoint(py)
-            Eiky[i₋] = conj(tmp)
-            tmp = Eikz[i₊] = complexofpoint(pz)
-            Eikz[i₋] = conj(tmp)
+        for sA in 0:(superA-1), sB in 0:(superB-1), sC in 0:(superC-1)
+            for j in 1:length(syst)
+                i += 1
+                Eikx[i] = 1.0
+                Eiky[i] = 1.0
+                Eikz[i] = 1.0
+                i₊ = numsites+i
+                i₋ = -numsites+i
+                px, py, pz = invmat * (position(syst, j) ./ ANG_UNIT)
+                px = 2π*(px + sA/superA)
+                py = 2π*(py + sB/superB)
+                pz = 2π*(pz + sC/superC)
+                Eikx[i₊] = complexofpoint(px)
+                tmp = Eiky[i₊] = complexofpoint(py)
+                Eiky[i₋] = conj(tmp)
+                tmp = Eikz[i₊] = complexofpoint(pz)
+                Eikz[i₋] = conj(tmp)
+            end
         end
     end
 
@@ -61,7 +65,7 @@ function setup_Eik(systems, numsites, kx, ky, kz, invmat)
     return Eikx, Eiky, Eikz
 end
 
-function ewald_main_loop(allcharges, numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz)
+function ewald_main_loop(allcharges, numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz, Π)
     idx = 0
     sums = zeros(ComplexF64, num_kvecs)
     Eikr_xy = Vector{ComplexF64}(undef, numsites)
@@ -77,11 +81,13 @@ function ewald_main_loop(allcharges, numsites, kx, ky, kz, recip_cutoff2, num_kv
             i = 0
             for charges in allcharges
                 m = length(charges)
-                for c in 1:m
-                    Eikr = Eikr_xy[i+c]*Eikz[ofs+i+c]
-                    sums[idx] += charges[c] * Eikr
+                for _ in 1:Π
+                    for c in 1:m
+                        Eikr = Eikr_xy[i+c]*Eikz[ofs+i+c]
+                        sums[idx] += charges[c] * Eikr
+                    end
+                    i += m
                 end
-                i += m
             end
         end
     end
@@ -95,7 +101,7 @@ Given `syst`, which contains a fixed system, return an object `x` to feed to
 `compute_ewald(x, mol)` to compute the Fourier contribution in the Ewald summation for the
 interaction between fixed system `syst` and molecule `mol`.
 """
-function initialize_ewald(syst::AbstractSystem{3}, precision=1e-6)
+function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=1e-6)
     @assert all(==(Periodic()), boundary_conditions(syst))
 
     cutoff_coulomb = 12.0
@@ -104,13 +110,13 @@ function initialize_ewald(syst::AbstractSystem{3}, precision=1e-6)
     α = sqrt(abs(log(ε*tol)))/cutoff_coulomb
     tol1 = sqrt(-log(ε*4.0*(tol*α)^2))
 
-    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst)) ./ ANG_UNIT))
+    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst) .* supercell) ./ ANG_UNIT))
     len_a, len_b, len_c = cell_lengths(mat)
     volume = abs(det(mat))
     __α = α*tol1/π
-    kx = floor(Int, nint(0.25 + __α*len_a))
-    ky = floor(Int, nint(0.25 + __α*len_b))
-    kz = floor(Int, nint(0.25 + __α*len_c))
+    kx = nint(0.25 + __α*len_a)
+    ky = nint(0.25 + __α*len_b)
+    kz = nint(0.25 + __α*len_c)
 
     recip_cutoff2 = (1.05*max(kx, ky, kz))^2
     num_kvecs = 0
@@ -120,8 +126,7 @@ function initialize_ewald(syst::AbstractSystem{3}, precision=1e-6)
     end
 
     invmat::SMatrix{3,3,Float64,9} = inv(mat)
-    il_ax, il_bx, il_cx, il_ay, il_by, il_cy, il_az, il_bz, il_cz = invmat
-
+    il_ax, il_ay, il_az, il_bx, il_by, il_bz, il_cx, il_cy, il_cz = invmat
     volume_factor = COULOMBIC_CONVERSION_FACTOR*π/volume
     α_factor = -0.25/α^2
 
@@ -146,19 +151,20 @@ function initialize_ewald(syst::AbstractSystem{3}, precision=1e-6)
                 rkz = 2π*(rk1z + k*il_cz)
                 # kvecs[idx_b] = SVector{3,Float64}(rkx, rky, rkz)
                 rksqr = rkx^2 + rky^2 + rkz^2
-                kfactors[idx_b] = volume_factor*(2.0+2.0*(i!=0))*exp(α_factor*rksqr)/rksqr
+                kfactors[idx_b] = volume_factor*(2.0*(1+(i!=0)))*exp(α_factor*rksqr)/rksqr
             end
         end
     end
 
-    numsites = length(syst)
+    Π = prod(supercell)
+    numsites = length(syst)*Π
 
     UIon = COULOMBIC_CONVERSION_FACTOR*α/sqrt(π) - sum(kfactors)
     charges::Vector{Float64} = syst[:,:atomic_charge] ./ CHARGE_UNIT
     energy_framework_self = sum(abs2, charges)*(COULOMBIC_CONVERSION_FACTOR/sqrt(π))*α
 
-    Eikx, Eiky, Eikz = setup_Eik((syst,), numsites, kx, ky, kz, invmat)
-    StoreRigidChargeFramework = ewald_main_loop((charges,), numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz)
+    Eikx, Eiky, Eikz = setup_Eik((syst,), numsites, kx, ky, kz, invmat, supercell)
+    StoreRigidChargeFramework = ewald_main_loop((charges,), numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz, Π)
     # UChargeChargeFrameworkRigid = 0.0
     # for idx in 1:num_kvecs
     #     UChargeChargeFrameworkRigid += kfactors[idx]*abs2(StoreRigidChargeFramework[idx])
@@ -179,8 +185,8 @@ function compute_ewald((α, kx, ky, kz, invmat, recip_cutoff2, num_kvecs, volume
     energy_adsorbate_self = sum(sum(abs2, charges)*chargefactor for charges in allcharges)
     net_charges = sum(sum(charges) for charges in allcharges)
 
-    Eikx, Eiky, Eikz = setup_Eik(systems, numsites, kx, ky, kz, invmat)
-    StoreTotalChargeAdsorbates = ewald_main_loop(allcharges, numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz)
+    Eikx, Eiky, Eikz = setup_Eik(systems, numsites, kx, ky, kz, invmat, (1,1,1))
+    StoreTotalChargeAdsorbates = ewald_main_loop(allcharges, numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz, 1)
     energy_framework_adsorbate = 0.0
     energy_adsorbate_adsorbate = 0.0
     for idx in 1:num_kvecs

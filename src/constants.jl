@@ -88,3 +88,7 @@ const COEFF = Float64.(
 const ANG_UNIT = 1.0AtomsBase.Unitful.Å
 const CHARGE_UNIT = 1.0AtomsBase.UnitfulAtomic.e_au
 const ATOMMASS_UNIT = 1.0AtomsBase.Unitful.u
+
+
+# other utils
+nint(x) = floor(Int, ifelse(x>=0.0, x+0.5, x-0.5))

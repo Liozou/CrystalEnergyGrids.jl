@@ -43,6 +43,8 @@ struct CrystalEnergyGrid
     unitcell::NTuple{3,Cdouble}
     num_unitcell::NTuple{3,Cint}
     ε_Ewald::Cfloat
+    mat::SMatrix{3,3,Float64,9}
+    invmat::SMatrix{3,3,Float64,9}
     grid::Array{Cfloat,4}
 end
 function Base.show(io::IO, ::MIME"text/plain", rg::CrystalEnergyGrid)
@@ -64,7 +66,8 @@ macro triplet(foo)
     end)
 end
 
-function parse_grid(file, iscoulomb)
+function parse_grid(file, iscoulomb, mat)
+    invmat = inv(mat)
     open(file) do io
         spacing = read(io, Cdouble)
         dims = @triplet read(io, Cint)
@@ -74,15 +77,17 @@ function parse_grid(file, iscoulomb)
         unitcell = @triplet read(io, Cdouble)
         num_unitcell = @triplet read(io, Cint)
         ε_Ewald = iscoulomb ? read(io, Cdouble) : Inf
-        grid = Array{Cfloat, 4}(undef, dims[1]+1, dims[2]+1, dims[3]+1, 8)
+        grid = Array{Cfloat, 4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
         read!(io, grid)
         grid .*= ENERGY_TO_KELVIN
-        CrystalEnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, grid)
+        CrystalEnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, mat, invmat, grid)
     end
 end
 
 function interpolate_grid(g::CrystalEnergyGrid, point)
-    shifted = @. (point - g.shift)/g.size*g.dims + 1
+    abc = g.invmat * (point isa SVector ? point : SVector{3,Float64}(point))
+    newpoint = g.mat * (abc .- floor.(abc))
+    shifted = @. (newpoint - g.shift)/g.size*g.dims + 1
     p0 = floor.(Int, shifted)
     p1 = p0 .+ 1
     r = shifted .- p0

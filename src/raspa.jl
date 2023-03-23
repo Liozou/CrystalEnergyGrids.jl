@@ -270,7 +270,9 @@ function raspa_setup(framework, forcefield_framework, molecule, forcefield_molec
     gridstep_name = @sprintf "%.6f" gridstep
     supercell_name = join(supercell, 'x')
     grid_dir = joinpath(raspa, "grids", forcefield_framework, framework, gridstep_name)
-    coulomb = parse_grid(joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid"), true)
+
+    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst_framework)) ./ ANG_UNIT))
+    coulomb = parse_grid(joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid"), true, mat)
 
     syst_mol = load_RASPA_molecule(molecule, forcefield_molecule, forcefield_framework, syst_framework)
     trunc_or_shift = strip(first(Iterators.filter(!startswith('#'), eachline(joinpath(raspa, "forcefield", forcefield_framework, "force_field_mixing_rules.def")))))
@@ -282,7 +284,7 @@ function raspa_setup(framework, forcefield_framework, molecule, forcefield_molec
     atomsidx = [atomdict[atom] for atom in atoms]
     grids = Vector{CrystalEnergyGrid}(undef, length(atomdict))
     for (atom, i) in atomdict
-        grids[i] = parse_grid(joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid")), false)
+        grids[i] = parse_grid(joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid")), false, mat)
     end
 
     ewald = initialize_ewald(syst_framework, supercell)
