@@ -6,7 +6,10 @@ using StaticArrays
 using OffsetArrays
 using AtomsBase
 
-export parse_grid, interpolate_grid # other exports in files
+export CrystalEnergyGrid, parse_grid, interpolate_grid
+export CrystalEnergySetup
+export energy_point, energy_grid
+# other exports in files
 
 include("constants.jl")
 include("raspa.jl")
@@ -31,7 +34,7 @@ include("ewald.jl")
 # end
 
 
-struct RaspaGrid
+struct CrystalEnergyGrid
     spacing::Cdouble
     dims::NTuple{3,Cint}
     size::NTuple{3,Cdouble}
@@ -42,7 +45,7 @@ struct RaspaGrid
     ε_Ewald::Cfloat
     grid::Array{Cfloat,4}
 end
-function Base.show(io::IO, ::MIME"text/plain", rg::RaspaGrid)
+function Base.show(io::IO, ::MIME"text/plain", rg::CrystalEnergyGrid)
     print(io, rg.ε_Ewald == Inf ? "VdW" : "Coulomb", " grid with ")
     join(io, rg.dims .+ 1, '×')
     print(io, " points for a ")
@@ -74,11 +77,11 @@ function parse_grid(file, iscoulomb)
         grid = Array{Cfloat, 4}(undef, dims[1]+1, dims[2]+1, dims[3]+1, 8)
         read!(io, grid)
         grid .*= ENERGY_TO_KELVIN
-        RaspaGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, grid)
+        CrystalEnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, grid)
     end
 end
 
-function interpolate_grid(g::RaspaGrid, point)
+function interpolate_grid(g::CrystalEnergyGrid, point)
     shifted = @. (point - g.shift)/g.size*g.dims + 1
     p0 = floor.(Int, shifted)
     p1 = p0 .+ 1
@@ -114,5 +117,13 @@ function interpolate_grid(g::RaspaGrid, point)
 end
 
 
+struct CrystalEnergySetup{TFramework,TMolecule}
+    framework::TFramework
+    molecule::TMolecule
+    coulomb::CrystalEnergyGrid
+    grids::Vector{CrystalEnergyGrid}
+    atomsidx::Vector{Int} # index of the grid corresponding to the atom
+    ewald::Tuple{Float64,Int,Int,Int,SMatrix{3,3,Float64,9},Float64,Int,Float64,Float64,Vector{Float64},Float64,Vector{ComplexF64},Float64}
+end
 
 end

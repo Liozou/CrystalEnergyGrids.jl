@@ -1,8 +1,11 @@
 # interface to RASPA2
 
 using DoubleArrayTries, AtomsIO
+using Printf
 
-export set_raspadir!, get_raspadir, parse_pseudoatoms
+export set_raspadir!, get_raspadir
+export PseudoAtomListing, parse_pseudoatoms
+export RaspaSystem, raspa_setup
 
 const RASPADIR = Ref(joinpath(ENV["HOME"], "RASPA2", "simulations", "share", "raspa"))
 
@@ -137,12 +140,33 @@ function parse_pseudoatoms(file)
     return PseudoAtomListing(dat, priority, exact, info)
 end
 
+function parse_molecule(file)
+    lines = filter!(x -> !isempty(x) && x[1] != '#', readlines(file))
+    num_atoms = parse(Int, lines[4])
+    num_groups = parse(Int, lines[5])
+    @assert num_groups == 1
+    @assert num_atoms == parse(Int, lines[7])
+    @assert num_atoms == 1 || strip(lines[6]) == "rigid"
+    positions = Vector{SVector{3,typeof(ANG_UNIT)}}(undef, num_atoms)
+    symbols = Vector{Symbol}(undef, num_atoms)
+    for i in 1:num_atoms
+        l = split(lines[7+i])
+        symbols[i] = Symbol(l[2])
+        positions[i] = if num_atoms == 1
+            zero(SVector{3,Float64})*ANG_UNIT
+        else
+            SVector{3,Float64}(parse(Float64, l[3]), parse(Float64, l[4]), parse(Float64, l[5]))*ANG_UNIT
+        end
+    end
+    (symbols, positions)
+end
+
 """
     RaspaSystem <: AbstractSystem{3}
 
 `AtomsBase`-compliant system extracted from a RASPA input.
 
-Use `load_RASPA_system`[@ref] to create one
+Use `load_RASPA_framework`[@ref] or `load_RASPA_molecule`[@ref] to create one.
 """
 struct RaspaSystem <: AbstractSystem{3}
     bounding_box::SVector{3,SVector{3,typeof(ANG_UNIT)}}
@@ -153,7 +177,7 @@ struct RaspaSystem <: AbstractSystem{3}
     atomic_charge::Vector{typeof(CHARGE_UNIT)}
 end
 AtomsBase.bounding_box(sys::RaspaSystem)     = sys.bounding_box
-AtomsBase.boundary_conditions(::RaspaSystem) = SVector{3,BoundaryCondition}([Periodic(), Periodic(), Periodic()])
+AtomsBase.boundary_conditions(sys::RaspaSystem) = SVector{3,BoundaryCondition}(ntuple(Returns(ifelse(isinf(bounding_box(sys)[1][1]), DirichletZero(), Periodic())), 3))
 Base.length(sys::RaspaSystem)                = length(sys.position)
 Base.size(sys::RaspaSystem)                  = size(sys.position)
 AtomsBase.species_type(::RaspaSystem)        = AtomView{RaspaSystem}
@@ -176,7 +200,13 @@ Base.getindex(system::RaspaSystem, i::Integer, x::Symbol) = getfield(system, x)[
 Base.getindex(system::RaspaSystem, ::Colon, x::Symbol)    = getfield(system, x)
 atomic_charge(s::RaspaSystem) = s.atomic_charge
 
-function load_RASPA_system(name, forcefield)
+"""
+    load_RASPA_framework(name, forcefield)
+
+Load the framework called `name` with the given `forcefield` from the RASPA directory.
+Return a [`RaspaSystem`](@ref).
+"""
+function load_RASPA_framework(name, forcefield)
     raspa::String = get_raspadir()
     cif = joinpath(raspa, "structures", "cif", splitext(name)[2] == ".cif" ? name : name*".cif")
     system = load_system(AtomsIO.ChemfilesParser(), cif)
@@ -189,4 +219,73 @@ function load_RASPA_system(name, forcefield)
         charges[i] = pseudo.charge*CHARGE_UNIT
     end
     RaspaSystem(bounding_box(system), position(system), atomic_symbol(system), atomic_number(system), mass, charges)
+end
+
+"""
+    load_RASPA_molecule(name::AbstractString, forcefield::AbstractString, framework_forcefield::AbstractString, framework_system::Union{AbstractSystem,Nothing}=nothing)
+
+Load the molecule called `name` with the given `forcefield` from the RASPA directory.
+The forcefield of the associated framework must be given in order to correctly set the
+atomic numbers, masses and charges of the constituents of the molecule.
+
+The framework system may optionnally be passed to set the corresponding bounding box.
+Otherwise, an infinite bounding box is assumed as well as no periodic conditions.
+
+Return a [`RaspaSystem`](@ref).
+"""
+function load_RASPA_molecule(name, forcefield, framework_forcefield, framework_system=nothing)
+    raspa::String = get_raspadir()
+    symbols, positions = parse_molecule(joinpath(raspa, "molecules", forcefield, splitext(name)[2] == ".def" ? name : name*".def"))
+    pseudoatoms = parse_pseudoatoms(joinpath(raspa, "forcefield", framework_forcefield, "pseudo_atoms.def"))
+    mass  = Vector{typeof(ATOMMASS_UNIT)}(undef, length(symbols))
+    charges = Vector{typeof(CHARGE_UNIT)}(undef, length(symbols))
+    atom_numbers = Vector{Int}(undef, length(symbols))
+    for (i, atom) in enumerate(symbols)
+        pseudo::PseudoAtomInfo = pseudoatoms[atom]
+        mass[i]    = pseudo.mass*ATOMMASS_UNIT
+        charges[i] = pseudo.charge*CHARGE_UNIT
+        atom_numbers[i] = AtomsBase.element(pseudo.symbol).number
+    end
+    bbox = if framework_system !== nothing
+        bounding_box(framework_system)
+    else
+        SVector{3,SVector{3,typeof(ANG_UNIT)}}([[Inf, 0.0, 0.0]*ANG_UNIT, [0.0, Inf, 0.0]*ANG_UNIT, [0.0, 0.0, Inf]*ANG_UNIT])
+    end
+    RaspaSystem(bbox, positions, symbols, atom_numbers, mass, charges)
+end
+
+
+"""
+    raspa_setup(framework, forcefield_framework, molecule, forcefield_molecule, gridstep=0.15, supercell=(1,1,1))
+
+Return a [`CrystalEnergySetup`](@ref) for studying `molecule` (with its forcefield) in
+`framework` (with its forcefield), extracted from existing RASPA grids and completed with
+Ewald sums precomputations.
+
+`gridsteps` and `supercell` should match that used when creating the grids.
+"""
+function raspa_setup(framework, forcefield_framework, molecule, forcefield_molecule, gridstep=0.15, supercell=(1,1,1))
+    raspa::String = get_raspadir()
+    syst_framework = load_RASPA_framework(framework, forcefield_framework)
+    gridstep_name = @sprintf "%.6f" gridstep
+    supercell_name = join(supercell, 'x')
+    grid_dir = joinpath(raspa, "grids", forcefield_framework, framework, gridstep_name)
+    coulomb = parse_grid(joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid"), true)
+
+    syst_mol = load_RASPA_molecule(molecule, forcefield_molecule, forcefield_framework, syst_framework)
+    trunc_or_shift = strip(first(Iterators.filter(!startswith('#'), eachline(joinpath(raspa, "forcefield", forcefield_framework, "force_field_mixing_rules.def")))))
+    atomdict = IdDict{Symbol,Int}()
+    atoms = syst_mol[:,:atomic_symbol]
+    for atom in atoms
+        get!(Returns(length(atomdict)+1), atomdict, atom)
+    end
+    atomsidx = [atomdict[atom] for atom in atoms]
+    grids = Vector{CrystalEnergyGrid}(undef, length(atomdict))
+    for (atom, i) in atomdict
+        grids[i] = parse_grid(joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid")), false)
+    end
+
+    ewald = initialize_ewald(syst_framework, supercell)
+
+    return CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald)
 end

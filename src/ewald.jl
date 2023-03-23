@@ -2,8 +2,9 @@ using LinearAlgebra: norm, det
 using StaticArrays
 using OffsetArrays
 using AtomsBase
+using SpecialFunctions: erf
 
-export initialize_ewald
+export initialize_ewald, compute_ewald
 
 function cell_lengths(mat::AbstractMatrix)
     a, b, c = eachcol(mat)
@@ -19,7 +20,73 @@ function cell_angles(mat::AbstractMatrix)
 end
 
 nint(x) = ifelse(x>=0.0, x+0.5, x-0.5)
-complexofpoint(x) = begin (s,c) = sincos(x); Complex{Float64}(c, s) end
+complexofpoint(x) = begin (s,c) = sincos(x); ComplexF64(c, s) end
+
+
+function setup_Eik(systems, numsites, kx, ky, kz, invmat)
+    Eikx = Vector{ComplexF64}(undef, (kx+1)*numsites)
+    Eiky = OffsetArray(Vector{ComplexF64}(undef, (2ky+1)*numsites), 1-ky*numsites:(ky+1)*numsites)
+    Eikz = OffsetArray(Vector{ComplexF64}(undef, (2kz+1)*numsites), 1-kz*numsites:(kz+1)*numsites)
+
+    i = 0
+    for syst in systems
+        for j in 1:length(syst)
+            i += 1
+            Eikx[i] = 1.0
+            Eiky[i] = 1.0
+            Eikz[i] = 1.0
+            i₊ = numsites+i
+            i₋ = -numsites+i
+            px, py, pz = invmat * (position(syst, j) ./ (ANG_UNIT/(2π)))
+            Eikx[i₊] = complexofpoint(px)
+            tmp = Eiky[i₊] = complexofpoint(py)
+            Eiky[i₋] = conj(tmp)
+            tmp = Eikz[i₊] = complexofpoint(pz)
+            Eikz[i₋] = conj(tmp)
+        end
+    end
+
+    for j in 2:kx, i in 1:numsites
+        Eikx[j*numsites+i] = Eikx[(j-1)*numsites+i]*Eikx[numsites+i]
+    end
+    for j in 2:ky, i in 1:numsites
+        tmp = Eiky[j*numsites+i] = Eiky[(j-1)*numsites+i]*Eiky[numsites+i]
+        Eiky[-j*numsites+i] = conj(tmp)
+    end
+    for j in 2:kz, i in 1:numsites
+        tmp = Eikz[j*numsites+i] = Eikz[(j-1)*numsites+i]*Eikz[numsites+i]
+        Eikz[-j*numsites+i] = conj(tmp)
+    end
+
+    return Eikx, Eiky, Eikz
+end
+
+function ewald_main_loop(allcharges, numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz)
+    idx = 0
+    sums = zeros(ComplexF64, num_kvecs)
+    Eikr_xy = Vector{ComplexF64}(undef, numsites)
+    @inbounds for jx in 0:kx, jy in -ky:ky
+        for i in 1:numsites
+            Eikr_xy[i] = Eikx[jx*numsites+i]*Eiky[jy*numsites+i]
+        end
+        for jz in -kz:kz
+            r2 = jx^2 + jy^2 + jz^2
+            ((r2 == 0) | (r2 >= recip_cutoff2)) && continue
+            idx += 1
+            ofs = jz*numsites
+            i = 0
+            for charges in allcharges
+                m = length(charges)
+                for c in 1:m
+                    Eikr = Eikr_xy[i+c]*Eikz[ofs+i+c]
+                    sums[idx] += charges[c] * Eikr
+                end
+                i += m
+            end
+        end
+    end
+    sums
+end
 
 """
     initialize_ewald(syst::AbstractSystem{3}, precision=1e-6)
@@ -58,7 +125,7 @@ function initialize_ewald(syst::AbstractSystem{3}, precision=1e-6)
     volume_factor = COULOMBIC_CONVERSION_FACTOR*π/volume
     α_factor = -0.25/α^2
 
-    kvecs = Vector{SVector{3,Float64}}(undef, num_kvecs)
+    # kvecs = Vector{SVector{3,Float64}}(undef, num_kvecs)
     kfactors = Vector{Float64}(undef, num_kvecs)
 
     idx_b = 0
@@ -77,78 +144,75 @@ function initialize_ewald(syst::AbstractSystem{3}, precision=1e-6)
                 rkx = 2π*(rk1x + k*il_az)
                 rky = 2π*(rk1y + k*il_bz)
                 rkz = 2π*(rk1z + k*il_cz)
-                kvecs[idx_b] = SVector{3,Float64}(rkx, rky, rkz)
+                # kvecs[idx_b] = SVector{3,Float64}(rkx, rky, rkz)
                 rksqr = rkx^2 + rky^2 + rkz^2
                 kfactors[idx_b] = volume_factor*(2.0+2.0*(i!=0))*exp(α_factor*rksqr)/rksqr
             end
         end
     end
 
-    poss = position(syst)
-    numsites = length(poss)
+    numsites = length(syst)
 
     UIon = COULOMBIC_CONVERSION_FACTOR*α/sqrt(π) - sum(kfactors)
-
-    Eikx = OffsetArray(Vector{Complex{Float64}}(undef, (kx+1)*numsites), 0:(kx+1)*numsites-1)
-    Eiky = OffsetArray(Vector{Complex{Float64}}(undef, (2ky+1)*numsites), -ky*numsites:(ky+1)*numsites-1)
-    Eikz = OffsetArray(Vector{Complex{Float64}}(undef, (2kz+1)*numsites), -kz*numsites:(kz+1)*numsites-1)
-
-    for i in 0:(numsites-1)
-        Eikx[i] = 1.0
-        Eiky[i] = 1.0
-        Eikz[i] = 1.0
-        i₊ = numsites+i
-        i₋ = -numsites+i
-        px, py, pz = invmat * (poss[i+1] ./ (ANG_UNIT/(2π)))
-        Eikx[i₊] = complexofpoint(px)
-        tmp = Eiky[i₊] = complexofpoint(py)
-        Eiky[i₋] = conj(tmp)
-        tmp = Eikz[i₊] = complexofpoint(pz)
-        Eikz[i₋] = conj(tmp)
-    end
-
-    for j in 2:kx, i in 0:(numsites-1)
-        Eikx[j*numsites+i] = Eikx[(j-1)*numsites+i]*Eikx[numsites+i]
-    end
-    for j in 2:ky, i in 0:(numsites-1)
-        tmp = Eiky[j*numsites+i] = Eiky[(j-1)*numsites+i]*Eiky[numsites+i]
-        Eiky[-j*numsites+i] = conj(tmp)
-    end
-    for j in 2:kz, i in 0:(numsites-1)
-        tmp = Eikz[j*numsites+i] = Eikz[(j-1)*numsites+i]*Eikz[numsites+i]
-        Eikz[-j*numsites+i] = conj(tmp)
-    end
-
     charges::Vector{Float64} = syst[:,:atomic_charge] ./ CHARGE_UNIT
+    energy_framework_self = sum(abs2, charges)*(COULOMBIC_CONVERSION_FACTOR/sqrt(π))*α
 
-    Eikr_xy = Vector{Complex{Float64}}(undef, numsites)
-    Eikr = Vector{Complex{Float64}}(undef, numsites)
-    StoreRigidChargeFramework = zeros(Complex{Float64}, num_kvecs)
-    UChargeChargeFrameworkRigid = 0.0
-    idx = 0
-    for jx in 0:kx, jy in -ky:ky
-        for i in 0:(numsites-1)
-            Eikr_xy[i+1] = Eikx[jx*numsites+i]*Eiky[jy*numsites+i]
-        end
-        for jz in -kz:kz
-            r2 = jx^2 + jy^2 + jz^2
-            ((r2 == 0) | (r2 >= recip_cutoff2)) && continue
-            idx += 1
-            # rk = kvecs[idx] # only useful with dipoles?
-            for i in 1:numsites
-                Eikr[i] = Eikr_xy[i]*Eikz[jz*numsites+i-1]
-                StoreRigidChargeFramework[idx] += charges[i] * Eikr[i]
-            end
-            UChargeChargeFrameworkRigid += kfactors[idx]*abs2(StoreRigidChargeFramework[idx])
-        end
-    end
+    Eikx, Eiky, Eikz = setup_Eik((syst,), numsites, kx, ky, kz, invmat)
+    StoreRigidChargeFramework = ewald_main_loop((charges,), numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz)
+    # UChargeChargeFrameworkRigid = 0.0
+    # for idx in 1:num_kvecs
+    #     UChargeChargeFrameworkRigid += kfactors[idx]*abs2(StoreRigidChargeFramework[idx])
+    # end
+    # UChargeChargeFrameworkRigid += UIon*sum(charges)^2
+    net_charges_framework = sum(charges)
 
-    UChargeChargeFrameworkRigid += UIon*sum(charges)^2
-
-    return α, kx, ky, kz, recip_cutoff2, volume_factor, Eikx, Eiky, Eikz, kvecs, kfactors, UIon, StoreRigidChargeFramework, UChargeChargeFrameworkRigid
+    return α, kx, ky, kz, invmat, recip_cutoff2, num_kvecs, volume_factor, energy_framework_self, kfactors, UIon, StoreRigidChargeFramework, net_charges_framework
 end
 
 
 
+function compute_ewald((α, kx, ky, kz, invmat, recip_cutoff2, num_kvecs, volume_factor, energy_framework_self, kfactors, UIon, StoreRigidChargeFramework, net_charges_framework),
+                       systems)
+    numsites = sum(length, systems)
+    allcharges::Vector{Vector{Float64}} = [syst[:,:atomic_charge] ./ CHARGE_UNIT for syst in systems]
+    chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*α
+    energy_adsorbate_self = sum(sum(abs2, charges)*chargefactor for charges in allcharges)
+    net_charges = sum(sum(charges) for charges in allcharges)
 
+    Eikx, Eiky, Eikz = setup_Eik(systems, numsites, kx, ky, kz, invmat)
+    StoreTotalChargeAdsorbates = ewald_main_loop(allcharges, numsites, kx, ky, kz, recip_cutoff2, num_kvecs, Eikx, Eiky, Eikz)
+    energy_framework_adsorbate = 0.0
+    energy_adsorbate_adsorbate = 0.0
+    for idx in 1:num_kvecs
+        temp = kfactors[idx]
+        _re_f, _im_f = reim(StoreRigidChargeFramework[idx])
+        _re_a, _im_a = reim(StoreTotalChargeAdsorbates[idx])
+        energy_framework_adsorbate += temp*(_re_f*_re_a + _im_f*_im_a)
+        energy_adsorbate_adsorbate += temp*abs2(StoreTotalChargeAdsorbates[idx])
+    end
 
+    UHostAdsorbateChargeChargeFourier = 2*(energy_framework_adsorbate + UIon*net_charges_framework*net_charges)
+
+    m = length(systems)
+    energy_adsorbate_excluded = 0.0
+    for i in 1:m
+        syst = systems[i]
+        charges = allcharges[i]
+        n = length(syst)
+        for atomA in 1:n
+            chargeA = charges[atomA]
+            posA = position(syst, atomA) ./ ANG_UNIT
+            for atomB in (atomA+1):n
+                chargeB = charges[atomB]
+                posB = position(syst, atomB) ./ ANG_UNIT
+                r = norm(posB .- posA)
+                energy_adsorbate_excluded += erf(α*r)*chargeA*chargeB/r
+            end
+        end
+    end
+    energy_adsorbate_excluded *= COULOMBIC_CONVERSION_FACTOR
+
+    UAdsorbateAdsorbateChargeChargeFourier = energy_adsorbate_adsorbate - energy_adsorbate_self - energy_adsorbate_excluded + UIon*net_charges^2
+
+    UHostAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN, UAdsorbateAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN
+end
