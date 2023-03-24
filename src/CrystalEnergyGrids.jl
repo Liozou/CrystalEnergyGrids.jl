@@ -5,6 +5,7 @@ using LinearAlgebra: norm, det
 using StaticArrays
 using OffsetArrays
 using AtomsBase
+using Rotations
 
 export CrystalEnergyGrid, parse_grid, interpolate_grid
 export CrystalEnergySetup
@@ -12,6 +13,7 @@ export energy_point, energy_grid
 # other exports in files
 
 include("constants.jl")
+include("ChangePositionSystems.jl")
 include("raspa.jl")
 include("ewald.jl")
 
@@ -84,10 +86,18 @@ function parse_grid(file, iscoulomb, mat)
     end
 end
 
+function wrap_atom(point, mat, invmat)
+    abc = invmat * (point isa SVector ? point : SVector{3,Float64}(point))
+    return mat * (abc .- floor.(abc))
+end
+
+function offsetpoint(point, mat, invmat, shift, size, dims)
+    newpoint = wrap_atom(point, mat, invmat)
+    @. (newpoint - shift)/size*dims + 1
+end
+
 function interpolate_grid(g::CrystalEnergyGrid, point)
-    abc = g.invmat * (point isa SVector ? point : SVector{3,Float64}(point))
-    newpoint = g.mat * (abc .- floor.(abc))
-    shifted = @. (newpoint - g.shift)/g.size*g.dims + 1
+    shifted = offsetpoint(point, g.mat, g.invmat, g.shift, g.size, g.dims)
     p0 = floor.(Int, shifted)
     p1 = p0 .+ 1
     r = shifted .- p0
@@ -129,6 +139,54 @@ struct CrystalEnergySetup{TFramework,TMolecule}
     grids::Vector{CrystalEnergyGrid}
     atomsidx::Vector{Int} # index of the grid corresponding to the atom
     ewald::Tuple{Float64,Int,Int,Int,SMatrix{3,3,Float64,9},Float64,Int,Float64,Float64,Vector{Float64},Float64,Vector{ComplexF64},Float64}
+end
+
+function energy_point(setup::CrystalEnergySetup, positions)
+    num_atoms = length(setup.atomsidx)
+    pos_strip::SVector{3,SVector{3,Float64}} = positions ./ ANG_UNIT
+    vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], pos_strip[i]) for i in 1:num_atoms)
+    coulomb_direct = sum(((setup.molecule[i,:atomic_charge]/CHARGE_UNIT)::Float64)*interpolate_grid(setup.coulomb, pos_strip[i]) for i in 1:num_atoms)
+    newmolecule = ChangePositionSystem(setup.molecule, positions)
+    host_adsorbate_reciprocal, adsorbate_adsorbate_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
+    return (vdw, coulomb_direct + host_adsorbate_reciprocal + adsorbate_adsorbate_reciprocal)
+end
+
+__switch_x(p) = SVector{3}(-p[1], p[2], p[3])
+__switch_y(p) = SVector{3}(p[1], -p[2], p[3])
+__switch_z(p) = SVector{3}(p[1], p[2], -p[3])
+__switch_xy(p) = SVector{3}(p[2], p[1], p[3])
+__switch_xz(p) = SVector{3}(p[3], p[2], p[1])
+__switch_yz(p) = SVector{3}(p[1], p[3], p[2])
+
+function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
+    axeA, axeB, axeC = bounding_box(setup.framework)
+    numA = floor(Int, axeA[1] / step) + 1
+    numB = floor(Int, axeB[2] / step) + 1
+    numC = floor(Int, axeC[3] / step) + 1
+    grid = Array{Float64}(undef, numA, numB, numC)
+    stepA = axeA * step / ANG_UNIT
+    stepB = axeB * step / ANG_UNIT
+    stepC = axeC * step / ANG_UNIT
+    mat = setup.coulomb.mat
+    invmat = setup.coulomb.invmat
+    __pos = position(setup.molecule) ./ ANG_UNIT
+    rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == -1
+        [__pos, __switch_yz.(__pos), __switch_xz.(__pos)]
+    elseif num_rotate == 0
+        [__pos]
+    else
+        [(r = rand(RotMatrix3); [SVector{3}(r * p) for p in __pos]) for _ in 1:num_rotate]
+    end
+    Base.Threads.@threads for idx in CartesianIndices((numA, numB, numC))
+        iA, iB, iC = Tuple(idx)
+        ofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
+        vals = 0.0
+        for pos in rotpos
+            vals += sum(energy_point(setup, SVector{3}(wrap_atom((ofs./ANG_UNIT) + p, mat, invmat)*ANG_UNIT for p in pos)))
+        end
+        grid[iA,iB,iC] = vals / length(rotpos)
+    end
+    grid
 end
 
 end
