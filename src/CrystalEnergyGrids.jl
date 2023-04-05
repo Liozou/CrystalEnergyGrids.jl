@@ -1,7 +1,7 @@
 module CrystalEnergyGrids
 
 using StaticArrays
-using LinearAlgebra: norm, det
+using LinearAlgebra: norm, det, cross, dot
 using StaticArrays
 using OffsetArrays
 using AtomsBase
@@ -13,6 +13,7 @@ export energy_point, energy_grid
 # other exports in files
 
 include("constants.jl")
+include("utils.jl")
 include("ChangePositionSystems.jl")
 include("raspa.jl")
 include("ewald.jl")
@@ -86,16 +87,6 @@ function parse_grid(file, iscoulomb, mat)
     end
 end
 
-function wrap_atom(point, mat, invmat)
-    abc = invmat * (point isa SVector ? point : SVector{3,Float64}(point))
-    return mat * (abc .- floor.(abc))
-end
-
-function offsetpoint(point, mat, invmat, shift, size, dims)
-    newpoint = wrap_atom(point, mat, invmat)
-    @. (newpoint - shift)/size*dims + 1
-end
-
 function interpolate_grid(g::CrystalEnergyGrid, point)
     shifted = offsetpoint(point, g.mat, g.invmat, g.shift, g.size, g.dims)
     p0 = floor.(Int, shifted)
@@ -139,6 +130,7 @@ struct CrystalEnergySetup{TFramework,TMolecule}
     grids::Vector{CrystalEnergyGrid}
     atomsidx::Vector{Int} # index of the grid corresponding to the atom
     ewald::Tuple{Float64,Int,Int,Int,SMatrix{3,3,Float64,9},Float64,Int,Float64,Float64,Vector{Float64},Float64,Vector{ComplexF64},Float64}
+    block::Union{Nothing, BitArray{3}}
 end
 
 function energy_point(setup::CrystalEnergySetup, positions)
@@ -151,42 +143,79 @@ function energy_point(setup::CrystalEnergySetup, positions)
     return (vdw, coulomb_direct + host_adsorbate_reciprocal + adsorbate_adsorbate_reciprocal)
 end
 
-__switch_x(p) = SVector{3}(-p[1], p[2], p[3])
-__switch_y(p) = SVector{3}(p[1], -p[2], p[3])
-__switch_z(p) = SVector{3}(p[1], p[2], -p[3])
-__switch_xy(p) = SVector{3}(p[2], p[1], p[3])
-__switch_xz(p) = SVector{3}(p[3], p[2], p[1])
-__switch_yz(p) = SVector{3}(p[1], p[3], p[2])
+# __switch_x(p) = SVector{3}(-p[1], p[2], p[3])
+# __switch_y(p) = SVector{3}(p[1], -p[2], p[3])
+# __switch_z(p) = SVector{3}(p[1], p[2], -p[3])
+# __switch_xy(p) = SVector{3}(p[2], p[1], p[3])
+# __switch_xz(p) = SVector{3}(p[3], p[2], p[1])
+# __switch_yz(p) = SVector{3}(p[1], p[3], p[2])
 
 function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
     axeA, axeB, axeC = bounding_box(setup.framework)
-    numA = floor(Int, axeA[1] / step) + 1
-    numB = floor(Int, axeB[2] / step) + 1
-    numC = floor(Int, axeC[3] / step) + 1
-    grid = Array{Float64}(undef, numA, numB, numC)
-    stepA = axeA * step / ANG_UNIT
-    stepB = axeB * step / ANG_UNIT
-    stepC = axeC * step / ANG_UNIT
+    numA = floor(Int, norm(axeA) / step) + 1
+    numB = floor(Int, norm(axeB) / step) + 1
+    numC = floor(Int, norm(axeC) / step) + 1
+    # grid = Array{Float64}(undef, numA, numB, numC)
+    # mingrid = Array{Float64}(undef, numA, numB, numC)
+    stepA = (axeA / norm(axeA)) * step
+    stepB = (axeB / norm(axeB)) * step
+    stepC = (axeC / norm(axeC)) * step
     mat = setup.coulomb.mat
     invmat = setup.coulomb.invmat
     __pos = position(setup.molecule) ./ ANG_UNIT
-    rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == -1
-        [__pos, __switch_yz.(__pos), __switch_xz.(__pos)]
-    elseif num_rotate == 0
+    rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == 0
         [__pos]
+    # elseif num_rotate == -1
+        # [__pos, __switch_yz.(__pos), __switch_xz.(__pos)]
     else
-        [(r = rand(RotMatrix3); [SVector{3}(r * p) for p in __pos]) for _ in 1:num_rotate]
+        [(r = rand(RotMatrix3); [SVector{3}(r * p) for p in __pos]) for _ in 1:abs(num_rotate)]
     end
+    allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
     Base.Threads.@threads for idx in CartesianIndices((numA, numB, numC))
         iA, iB, iC = Tuple(idx)
         ofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
-        vals = 0.0
-        for pos in rotpos
-            vals += sum(energy_point(setup, SVector{3}(wrap_atom((ofs./ANG_UNIT) + p, mat, invmat)*ANG_UNIT for p in pos)))
+        if setup.block isa BitArray && num_rotate >= 0
+            a0, b0, c0 = floor.(Int, offsetpoint(ofs./ANG_UNIT, mat, invmat, setup.coulomb.shift, setup.coulomb.size, setup.coulomb.dims))
+            a1 = a0 + 1; b1 = b0 + 1; c1 = c0 + 1;
+            if setup.block[a0,b0,c0]+setup.block[a1,b0,c0]+setup.block[a0,b1,c0]+setup.block[a1,b1,c0]+setup.block[a0,b0,c1]+setup.block[a1,b0,c1]+setup.block[a0,b1,c1]+setup.block[a1,b1,c1] > 3
+                # grid[iA,iB,iC] = Inf
+                allvals[:,iA,iB,iC] .= Inf
+                continue
+            end
         end
-        grid[iA,iB,iC] = vals / length(rotpos)
+        # vals = 0.0
+        # minval = Inf
+        for (k, pos) in enumerate(rotpos)
+            if num_rotate < 0
+                ofs = rand()*numA*stepA + rand()*numB*stepB + rand()*numC*stepC
+            end
+            newval = sum(energy_point(setup, SVector{3}(wrap_atom((ofs./ANG_UNIT) + p, mat, invmat)*ANG_UNIT for p in pos)))
+            # vals += newval
+            # vals == Inf && break
+            # minval = min(minval, newval)
+            allvals[k,iA,iB,iC] = newval
+        end
+        # grid[iA,iB,iC] = vals / length(rotpos)
+        # mingrid[iA,iB,iC] = minval
     end
-    grid
+    allvals
+end
+
+function meanBoltzmann(A, T)
+    B = Array{Float64}(undef, size(A)[2:end]...)
+    n = size(A, 1)
+    for i in eachindex(IndexCartesian(), B)
+        val = zero(BigFloat)
+        tot = zero(BigFloat)
+        for j in 1:n
+            x = big(A[j,i])
+            τ = exp(-x/T)
+            val += x*τ
+            tot += τ
+        end
+        B[i] = Float64(val / tot)
+    end
+    B
 end
 
 end

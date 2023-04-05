@@ -220,5 +220,14 @@ function compute_ewald((α, kx, ky, kz, invmat, recip_cutoff2, num_kvecs, volume
 
     UAdsorbateAdsorbateChargeChargeFourier = energy_adsorbate_adsorbate - energy_adsorbate_self - energy_adsorbate_excluded + UIon*net_charges^2
 
+    # @show UIon
+    # @show energy_framework_adsorbate
+    # @show energy_adsorbate_adsorbate
+    # @show energy_adsorbate_self
+    # @show energy_adsorbate_excluded
+
+    # @show UHostAdsorbateChargeChargeFourier
+    # @show UAdsorbateAdsorbateChargeChargeFourier
+
     UHostAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN, UAdsorbateAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN
 end

@@ -254,17 +254,41 @@ function load_RASPA_molecule(name, forcefield, framework_forcefield, framework_s
     RaspaSystem(bbox, positions, symbols, atom_numbers, mass, charges)
 end
 
+function parse_blockfile(file, gridref)
+    lines = readlines(file)
+    num = parse(Int, popfirst!(lines))
+    a, b, c = gridref.dims .+ 1
+    block = falses(a, b, c)
+    buffer, ortho, safemin = prepare_periodic_distance_computations(gridref.mat)
+    for (i, l) in enumerate(lines)
+        i > num && ((@assert all(isspace, l)); continue)
+        sl = split(l)
+        radius = parse(Float64, pop!(sl))
+        center = parse.(Float64, sl)
+        for i in 1:a, j in 1:b, k in 1:c
+            block[i,j,k] && continue
+            buffer .= center .- inverse_abc_offsetpoint(SVector{3,Float64}(i,j,k), gridref.invmat, gridref.shift, gridref.size, gridref.dims)
+            if periodic_distance!(buffer, gridref.mat, ortho, safemin) < radius
+                block[i,j,k] = true
+            end
+        end
+    end
+    block
+end
 
 """
-    raspa_setup(framework, forcefield_framework, molecule, forcefield_molecule, gridstep=0.15, supercell=(1,1,1))
+    raspa_setup(framework, forcefield_framework, molecule, forcefield_molecule, gridstep=0.15, supercell=(1,1,1), blockfile=first(split(framework), '_'))
 
 Return a [`CrystalEnergySetup`](@ref) for studying `molecule` (with its forcefield) in
 `framework` (with its forcefield), extracted from existing RASPA grids and completed with
 Ewald sums precomputations.
 
 `gridsteps` and `supercell` should match that used when creating the grids.
+`blockfile` can be set to `nothing` to allow the molecule to go everywhere in the framework,
+or should be the radical (excluding the ".block" extension) of the block file in the raspa
+directory.
 """
-function raspa_setup(framework, forcefield_framework, molecule, forcefield_molecule, gridstep=0.15, supercell=(1,1,1))
+function raspa_setup(framework, forcefield_framework, molecule, forcefield_molecule, gridstep=0.15, supercell=(1,1,1), blockfile=first(split(framework, '_')))
     raspa::String = get_raspadir()
     syst_framework = load_RASPA_framework(framework, forcefield_framework)
     gridstep_name = @sprintf "%.6f" gridstep
@@ -289,5 +313,7 @@ function raspa_setup(framework, forcefield_framework, molecule, forcefield_molec
 
     ewald = initialize_ewald(syst_framework, supercell)
 
-    return CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald)
+    block = isnothing(blockfile) ? nothing : parse_blockfile(joinpath(raspa, "structures", "block", blockfile)*".block", coulomb)
+
+    CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald, block)
 end
