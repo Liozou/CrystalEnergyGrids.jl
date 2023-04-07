@@ -72,3 +72,75 @@ function fraction_sites(egrid)
     bins ./= s
     bins
 end
+
+function is_zaxis_linear_symmetric(system)
+    poss = position(system) ./ ANG_UNIT
+    n = length(poss)
+    zpos = Vector{Float64}(undef, n)
+    xpos = poss[1][1]; ypos = poss[1][2]
+    for (i, pos) in enumerate(poss)
+        pos[1] ≈ xpos || return false
+        pos[2] ≈ ypos || return false
+        zpos[i] = pos[3]
+    end
+    I = sortperm(zpos)
+    for i in 1:cld(n, 2)
+        fwd = I[i]
+        bwd = I[end-i+1]
+        zpos[fwd] ≈ -zpos[bwd] || return false
+        atomic_number(system, fwd) == atomic_number(system, bwd) || return false
+    end
+    xpos == 0 && ypos == 0 || @warn "Molecule linear along axis z should not be offset with respect to that axis (current offset: ($xpos, $ypos))."
+    return true
+end
+
+function zaxis_rotate(x2=rand(), x3=rand())
+    s = sqrt(x3)
+    v = SVector{3,Float64}(cospi(2*x2)*s, sinpi(2*x2)*s, sqrt(1-x3))
+    2*v*v'-LinearAlgebra.I
+end
+
+function sphere_sample()
+    v = randn(SVector{3,Float64})
+    v ./ norm(v)
+end
+
+function add_big!(acc::BigFloat, x::BigFloat)
+    @ccall Base.MPFR.libmpfr.mpfr_add(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+end
+function div_big!(acc::BigFloat, x::BigFloat)
+    @ccall Base.MPFR.libmpfr.mpfr_div(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+end
+function muld_big!(acc::BigFloat, x::Cdouble)
+    @ccall Base.MPFR.libmpfr.mpfr_mul_d(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Cdouble, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+end
+function set_big!(acc::BigFloat, x::Cdouble)
+    @ccall Base.MPFR.libmpfr.mpfr_set_d(acc::Ref{BigFloat}, x::Cdouble, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+end
+function exp_big!(acc::BigFloat, x::BigFloat)
+    @ccall Base.MPFR.libmpfr.mpfr_exp(acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+end
+
+
+function meanBoltzmann(A, T)
+    B = Array{Float64}(undef, size(A)[2:end]...)
+    n = size(A, 1)
+    # xs = Array{Float64}(undef, n)
+    # τs = Array{BigFloat}(undef, n)
+    Base.Threads.@threads for i in eachindex(IndexCartesian(), B)
+        tmp = BigFloat()
+        val = zero(BigFloat)
+        tot = zero(BigFloat)
+        for j in 1:n
+            x = A[j,i]
+            set_big!(tmp, -x/T)
+            exp_big!(tmp, tmp)
+            add_big!(tot, tmp)
+            muld_big!(tmp, x)
+            add_big!(val, tmp)
+        end
+        div_big!(val, tot)
+        B[i] = Float64(val)
+    end
+    B
+end

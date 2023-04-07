@@ -1,7 +1,7 @@
 module CrystalEnergyGrids
 
 using StaticArrays
-using LinearAlgebra: norm, det, cross, dot
+using LinearAlgebra: LinearAlgebra, norm, det, cross, dot
 using StaticArrays
 using OffsetArrays
 using AtomsBase
@@ -167,10 +167,21 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
         [__pos]
     # elseif num_rotate == -1
         # [__pos, __switch_yz.(__pos), __switch_xz.(__pos)]
+    elseif is_zaxis_linear_symmetric(setup.molecule)
+        _rotpos = Vector{SVector{3,Float64}}[]
+        while length(_rotpos) < num_rotate
+            __v = sphere_sample()
+            __v[1] >= 0 || continue # the molecule is symmetric
+            push!(_rotpos, [SVector{3}(p[3]*__v) for p in __pos])
+        end
+        _rotpos
     else
         [(r = rand(RotMatrix3); [SVector{3}(r * p) for p in __pos]) for _ in 1:abs(num_rotate)]
     end
+    @show rotpos
+    error("!")
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
+    allvals .= NaN
     Base.Threads.@threads for idx in CartesianIndices((numA, numB, numC))
         iA, iB, iC = Tuple(idx)
         ofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
@@ -189,11 +200,17 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
             if num_rotate < 0
                 ofs = rand()*numA*stepA + rand()*numB*stepB + rand()*numC*stepC
             end
-            newval = sum(energy_point(setup, SVector{3}(wrap_atom((ofs./ANG_UNIT) + p, mat, invmat)*ANG_UNIT for p in pos)))
+            newval = sum(energy_point(setup, SVector{3}((ofs + p*ANG_UNIT for p in pos))))
             # vals += newval
             # vals == Inf && break
             # minval = min(minval, newval)
             allvals[k,iA,iB,iC] = newval
+            # if newval < -10000
+            #     @show iA, iB, iC
+            #     @show ofs
+            #     @show SVector{3}(wrap_atom((ofs./ANG_UNIT) + p, mat, invmat)*ANG_UNIT for p in pos)
+            #     throw("!")
+            # end
         end
         # grid[iA,iB,iC] = vals / length(rotpos)
         # mingrid[iA,iB,iC] = minval
@@ -201,21 +218,5 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
     allvals
 end
 
-function meanBoltzmann(A, T)
-    B = Array{Float64}(undef, size(A)[2:end]...)
-    n = size(A, 1)
-    for i in eachindex(IndexCartesian(), B)
-        val = zero(BigFloat)
-        tot = zero(BigFloat)
-        for j in 1:n
-            x = big(A[j,i])
-            τ = exp(-x/T)
-            val += x*τ
-            tot += τ
-        end
-        B[i] = Float64(val / tot)
-    end
-    B
-end
 
 end
