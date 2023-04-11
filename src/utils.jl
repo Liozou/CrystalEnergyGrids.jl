@@ -73,14 +73,24 @@ function fraction_sites(egrid)
     bins
 end
 
-function is_zaxis_linear_symmetric(system)
+function is_zaxis_linear(system)
     poss = position(system) ./ ANG_UNIT
     n = length(poss)
-    zpos = Vector{Float64}(undef, n)
     xpos = poss[1][1]; ypos = poss[1][2]
     for (i, pos) in enumerate(poss)
         pos[1] ≈ xpos || return false
         pos[2] ≈ ypos || return false
+    end
+    xpos == 0 && ypos == 0 || @warn "Molecule linear along axis z should not be offset with respect to that axis (current offset: ($xpos, $ypos))."
+    return true
+end
+
+function is_zaxis_linear_symmetric(system, islin)
+    islin || return false
+    poss = position(system) ./ ANG_UNIT
+    n = length(poss)
+    zpos = Vector{Float64}(undef, n)
+    for (i, pos) in enumerate(poss)
         zpos[i] = pos[3]
     end
     I = sortperm(zpos)
@@ -90,7 +100,6 @@ function is_zaxis_linear_symmetric(system)
         zpos[fwd] ≈ -zpos[bwd] || return false
         atomic_number(system, fwd) == atomic_number(system, bwd) || return false
     end
-    xpos == 0 && ypos == 0 || @warn "Molecule linear along axis z should not be offset with respect to that axis (current offset: ($xpos, $ypos))."
     return true
 end
 

@@ -5,7 +5,6 @@ using LinearAlgebra: LinearAlgebra, norm, det, cross, dot
 using StaticArrays
 using OffsetArrays
 using AtomsBase
-using Rotations
 
 export CrystalEnergyGrid, parse_grid, interpolate_grid
 export CrystalEnergySetup
@@ -13,6 +12,7 @@ export energy_point, energy_grid
 # other exports in files
 
 include("constants.jl")
+include("lebedev.jl")
 include("utils.jl")
 include("ChangePositionSystems.jl")
 include("raspa.jl")
@@ -167,19 +167,18 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
         [__pos]
     # elseif num_rotate == -1
         # [__pos, __switch_yz.(__pos), __switch_xz.(__pos)]
-    elseif is_zaxis_linear_symmetric(setup.molecule)
+    else
+        islin = is_zaxis_linear(setup.molecule)
+        issym = is_zaxis_linear_symmetric(setup.molecule, islin)
+        lebedev = get_lebedev(islin ? num_rotate : div(num_rotate, 5), issym)
+        zrots = [SMatrix{3,3,Float64,9}([cospi(2i/5) -sinpi(2i/5) 0; sinpi(2i/5) cospi(2i/5) 0; 0 0 1]) for i in 0:(4-4islin)]
         _rotpos = Vector{SVector{3,Float64}}[]
-        while length(_rotpos) < num_rotate
-            __v = sphere_sample()
-            __v[1] >= 0 || continue # the molecule is symmetric
-            push!(_rotpos, [SVector{3}(p[3]*__v) for p in __pos])
+        for zrot in zrots, point in lebedev.points
+            mat = SMatrix{3,3,Float64,9}(hcat([1, 0, 0], [0, 1, 0], point))*zrot
+            push!(_rotpos, [SVector{3}(mat*p) for p in __pos])
         end
         _rotpos
-    else
-        [(r = rand(RotMatrix3); [SVector{3}(r * p) for p in __pos]) for _ in 1:abs(num_rotate)]
     end
-    @show rotpos
-    error("!")
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
     allvals .= NaN
     Base.Threads.@threads for idx in CartesianIndices((numA, numB, numC))
