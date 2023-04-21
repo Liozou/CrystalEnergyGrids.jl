@@ -214,11 +214,11 @@ function load_RASPA_framework(name, forcefield)
     mass  = Vector{typeof(ATOMMASS_UNIT)}(undef, length(system))
     charges = Vector{typeof(CHARGE_UNIT)}(undef, length(system))
     for (i, atom) in enumerate(system)
-        pseudo::PseudoAtomInfo = pseudoatoms[atomic_symbol(atom)]
+        pseudo::PseudoAtomInfo = pseudoatoms[AtomsBase.atomic_symbol(atom)]
         mass[i]    = pseudo.mass*ATOMMASS_UNIT
         charges[i] = pseudo.charge*CHARGE_UNIT
     end
-    RaspaSystem(bounding_box(system), position(system), atomic_symbol(system), atomic_number(system), mass, charges)
+    RaspaSystem(AtomsBase.bounding_box(system), AtomsBase.position(system), AtomsBase.atomic_symbol(system), AtomsBase.atomic_number(system), mass, charges)
 end
 
 """

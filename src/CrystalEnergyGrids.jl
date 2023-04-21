@@ -17,6 +17,7 @@ include("utils.jl")
 include("ChangePositionSystems.jl")
 include("raspa.jl")
 include("ewald.jl")
+include("rdf.jl")
 
 # const BUFFERS = [(Vector{Cdouble}(undef, 64),Vector{Cdouble}(undef, 64)) for _ in 1:Base.Threads.nthreads()]
 # const GLOBAL_LOCK = Base.Threads.ReentrantLock()

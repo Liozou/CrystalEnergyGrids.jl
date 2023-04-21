@@ -61,6 +61,41 @@ function periodic_distance!(buffer, mat, ortho, safemin)
     return ref
 end
 
+"""
+    periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
+
+Equivalent to `periodic_distance!` but also sets the corresponding integer offset in `ofs`.
+
+If `buffer == inv(mat)*(pA - pB)` where `pA` and `pB` are the positions of two atoms A and
+B, then the resulting periodic distance will be equal to `norm(pA - (pB + mat*ofs))`, i.e.
+the (aperiodic) distance between atom A in cell (0,0,0) and the image of B in cell `ofs`.
+"""
+function periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
+    @simd for i in 1:3
+        diff = buffer[i] + 0.5
+        buffer[i] = diff - begin ofs[i] = floor(Int, diff) end - 0.5
+    end
+    ref = norm(mat*buffer)
+    (ortho || ref ≤ safemin) && return ref
+    @inbounds for i in 1:3
+        buffer[i] += 1
+        newnorm = norm(mat*buffer)
+        if newnorm < ref
+            ofs[i] -= 1
+            return newnorm # in a reduced lattice, there should be at most one
+        end
+        buffer[i] -= 2
+        ofs[i] += 2
+        newnorm = norm(mat*buffer)
+        if newnorm < ref
+            ofs[i] += 1
+            return newnorm # in a reduced lattice, there should be at most one
+        end
+        buffer[i] += 1
+    end
+    return ref
+end
+
 function fraction_sites(egrid)
     bins = zeros(100)
     for val in egrid
@@ -98,7 +133,7 @@ function is_zaxis_linear_symmetric(system, islin)
         fwd = I[i]
         bwd = I[end-i+1]
         zpos[fwd] ≈ -zpos[bwd] || return false
-        atomic_number(system, fwd) == atomic_number(system, bwd) || return false
+        AtomsBase.atomic_number(system, fwd) == AtomsBase.atomic_number(system, bwd) || return false
     end
     return true
 end
@@ -114,42 +149,61 @@ function sphere_sample()
     v ./ norm(v)
 end
 
-function add_big!(acc::BigFloat, x::BigFloat)
-    @ccall Base.MPFR.libmpfr.mpfr_add(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
-end
-function div_big!(acc::BigFloat, x::BigFloat)
-    @ccall Base.MPFR.libmpfr.mpfr_div(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
-end
-function muld_big!(acc::BigFloat, x::Cdouble)
-    @ccall Base.MPFR.libmpfr.mpfr_mul_d(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Cdouble, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
-end
-function set_big!(acc::BigFloat, x::Cdouble)
-    @ccall Base.MPFR.libmpfr.mpfr_set_d(acc::Ref{BigFloat}, x::Cdouble, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
-end
-function exp_big!(acc::BigFloat, x::BigFloat)
-    @ccall Base.MPFR.libmpfr.mpfr_exp(acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
-end
+# function add_big!(acc::BigFloat, x::BigFloat)
+#     @ccall Base.MPFR.libmpfr.mpfr_add(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+# end
+# function div_big!(acc::BigFloat, x::BigFloat)
+#     @ccall Base.MPFR.libmpfr.mpfr_div(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+# end
+# function muld_big!(acc::BigFloat, x::Cdouble)
+#     @ccall Base.MPFR.libmpfr.mpfr_mul_d(acc::Ref{BigFloat}, acc::Ref{BigFloat}, x::Cdouble, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+# end
+# function set_big!(acc::BigFloat, x::Cdouble)
+#     @ccall Base.MPFR.libmpfr.mpfr_set_d(acc::Ref{BigFloat}, x::Cdouble, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+# end
+# function exp_big!(acc::BigFloat, x::BigFloat)
+#     @ccall Base.MPFR.libmpfr.mpfr_exp(acc::Ref{BigFloat}, x::Ref{BigFloat}, Base.MPFR.ROUNDING_MODE[]::Base.MPFR.MPFRRoundingMode)::Int32
+# end
 
+
+# function meanBoltzmannBig(A, T)
+#     B = Array{Float64}(undef, size(A)[2:end]...)
+#     n = size(A, 1)
+#     # xs = Array{Float64}(undef, n)
+#     # τs = Array{BigFloat}(undef, n)
+#     Base.Threads.@threads for i in eachindex(IndexCartesian(), B)
+#         tmp = BigFloat()
+#         val = zero(BigFloat)
+#         tot = zero(BigFloat)
+#         for j in 1:n
+#             x = A[j,i]
+#             set_big!(tmp, -x/T)
+#             exp_big!(tmp, tmp)
+#             add_big!(tot, tmp)
+#             muld_big!(tmp, x)
+#             add_big!(val, tmp)
+#         end
+#         div_big!(val, tot)
+#         B[i] = Float64(val)
+#     end
+#     B
+# end
 
 function meanBoltzmann(A, T)
     B = Array{Float64}(undef, size(A)[2:end]...)
     n = size(A, 1)
-    # xs = Array{Float64}(undef, n)
-    # τs = Array{BigFloat}(undef, n)
     Base.Threads.@threads for i in eachindex(IndexCartesian(), B)
         tmp = BigFloat()
-        val = zero(BigFloat)
-        tot = zero(BigFloat)
+        factors = 0.0
+        total = 0.0
+        m = minimum(view(A, 1:n, i)) - 30.0*T # exp(30.0) ≈ 1e13
         for j in 1:n
             x = A[j,i]
-            set_big!(tmp, -x/T)
-            exp_big!(tmp, tmp)
-            add_big!(tot, tmp)
-            muld_big!(tmp, x)
-            add_big!(val, tmp)
+            factor = exp((m-x)/T)
+            factors += factor
+            total += factor*x
         end
-        div_big!(val, tot)
-        B[i] = Float64(val)
+        B[i] = total / factors
     end
     B
 end
