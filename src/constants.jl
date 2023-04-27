@@ -89,6 +89,26 @@ const ANG_UNIT = 1.0AtomsBase.Unitful.Å
 const CHARGE_UNIT = 1.0AtomsBase.UnitfulAtomic.e_au
 const ATOMMASS_UNIT = 1.0AtomsBase.Unitful.u
 
+# Van der Waals state equation coefficients (from the Handbook (?))
+const VDW_COEFF = Dict{String,Tuple{Float64,Float64}}(
+    "H2"    => (0.2476, 0.02661),
+    "CH4"   => (2.283, 0.04278),
+    "CH3OH" => (9.649, 0.06702),
+    "CO"    => (1.505, 0.03985),
+    "CO2"   => (3.640, 0.04267),
+    "H2O"   => (5.536, 0.03049),
+    "N2"    => (1.408, 0.03913),
+    "NO"    => (1.358, 0.02789),
+    "NO2"   => (5.354, 0.04424),
+    "O2"    => (1.378, 0.03183),
+    "SiH4"  => (4.377, 0.05786),
+    "SO2"   => (6.803, 0.05636),
+    "He"    => (0.03457, 0.0237),
+    "Ne"    => (0.2135, 0.01709),
+    "Ar"    => (1.363, 0.03219),
+    "Kr"    => (2.349, 0.03978),
+    "Xe"    => (4.25, 0.05105),
+)
 
 # other utils
 nint(x) = floor(Int, ifelse(x>=0.0, x+0.5, x-0.5))
