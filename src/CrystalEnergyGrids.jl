@@ -18,6 +18,7 @@ include("ChangePositionSystems.jl")
 include("raspa.jl")
 include("ewald.jl")
 include("rdf.jl")
+include("mdft.jl")
 
 # const BUFFERS = [(Vector{Cdouble}(undef, 64),Vector{Cdouble}(undef, 64)) for _ in 1:Base.Threads.nthreads()]
 # const GLOBAL_LOCK = Base.Threads.ReentrantLock()
@@ -136,7 +137,7 @@ end
 
 function energy_point(setup::CrystalEnergySetup, positions)
     num_atoms = length(setup.atomsidx)
-    pos_strip::SVector{3,SVector{3,Float64}} = positions ./ ANG_UNIT
+    pos_strip::Vector{SVector{3,Float64}} = positions ./ ANG_UNIT
     vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], pos_strip[i]) for i in 1:num_atoms)
     coulomb_direct = sum(((setup.molecule[i,:atomic_charge]/CHARGE_UNIT)::Float64)*interpolate_grid(setup.coulomb, pos_strip[i]) for i in 1:num_atoms)
     newmolecule = ChangePositionSystem(setup.molecule, positions)
@@ -165,7 +166,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
     invmat = setup.coulomb.invmat
     __pos = position(setup.molecule) ./ ANG_UNIT
     rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == 0
-        [__pos]
+        [[SVector{3}(p) for p in __pos]]
     # elseif num_rotate == -1
         # [__pos, __switch_yz.(__pos), __switch_xz.(__pos)]
     else
@@ -200,7 +201,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
             if num_rotate < 0
                 ofs = rand()*numA*stepA + rand()*numB*stepB + rand()*numC*stepC
             end
-            newval = sum(energy_point(setup, SVector{3}((ofs + p*ANG_UNIT for p in pos))))
+            newval = sum(energy_point(setup, [SVector{3}(ofs + p*ANG_UNIT) for p in pos]))
             # vals += newval
             # vals == Inf && break
             # minval = min(minval, newval)
