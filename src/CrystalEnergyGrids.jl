@@ -17,6 +17,7 @@ include("utils.jl")
 include("ChangePositionSystems.jl")
 include("raspa.jl")
 include("ewald.jl")
+include("lammpstrj_parser.jl")
 include("rdf.jl")
 include("mdft.jl")
 
