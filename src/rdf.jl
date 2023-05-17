@@ -1,8 +1,6 @@
-using Chemfiles
 using Base.Threads
-using LinearAlgebra: isdiag
-
-const CHEMFILES_LOCK = ReentrantLock()
+using LinearAlgebra: isdiag, det
+import Chemfiles
 
 
 function compute_angle(posA, posB)
@@ -22,7 +20,7 @@ end
 """
     get_molecules(frame, mat; skipmolid)
 
-Given a `Chemfiles.frame` and the corresponding matrix `mat` of the unit cell, returns:
+Given a `frame` and the corresponding matrix `mat` of the unit cell, returns:
 - moleculepos: the list of position of the geometric centre of each molecule (in fractional
   coordinates);
 - moleculeangle: the list of orientations (θ, ϕ) of each molecule (in radians, assuming the
@@ -35,8 +33,7 @@ Given a `Chemfiles.frame` and the corresponding matrix `mat` of the unit cell, r
 """
 function get_molecules(frame, mat; skipmolid)
     invmat = inv(mat)
-    orig_poss = [SVector{3,Cdouble}(p) for p in eachcol(positions(frame))]
-    poss = [invmat*x for x in orig_poss]
+    poss = [invmat*x for x in frame]
     buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
     n = length(poss)
     groupmap = collect(1:n) # groupmap[i] is the id of the group to which atom i belongs
@@ -47,7 +44,7 @@ function get_molecules(frame, mat; skipmolid)
         buffer .= poss[i] .- poss[j]
         d = periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
         @assert d > 0.7
-        if 0.7 < d < 1.5
+        if 0.7 < d < 1.3
             ki = groupmap[i]
             kj = groupmap[j]
             ofs .+= offsets[i]
@@ -79,10 +76,10 @@ function get_molecules(frame, mat; skipmolid)
         resize!(key, numatoms)
         for (j, atom) in enumerate(mol)
             pos .+= poss[atom]
-            key[j] = skipmolid ? 0 : Chemfiles.atomic_number(view(frame, j))
+            key[j] = skipmolid ? 0 : frame.atoms[j][1]
         end
         moleculepos[i] = SVector{3,Float64}(pos ./ numatoms)
-        θ, ϕ = noangle ? (0.0,0.0) : compute_angle(orig_poss[mol[1]], orig_poss[mol[2]]) # TODO: only works for linear symmetric molecules
+        θ, ϕ = noangle ? (0.0,0.0) : compute_angle(frame[mol[1]], frame[mol[2]]) # TODO: only works for linear symmetric molecules
         if ϕ > π
             ϕ -= π
             θ = π - θ
@@ -96,16 +93,72 @@ function get_molecules(frame, mat; skipmolid)
     moleculepos, moleculeangle, moleculesID, IDmap, groups
 end
 
-function parse_rdf(file, maxdist=20.0, nbins=10000; skipmolid=true)
-    trajectories = [Trajectory(file) for _ in 1:nthreads()]
-    threadbins = zeros(nthreads(), nbins)
-    mat = SMatrix{3,3,Cdouble,9}(matrix(UnitCell(read_step(trajectories[1], 0))))
+function normalize_bins(intbins, maxdist, nbins, volume, natoms)
     ϵ = maxdist / nbins
+    factor = 3/(4π*ϵ^3) * (2*volume)/natoms^2
+    bins = Vector{Float64}(undef, nbins)
+    for i in 1:nbins
+        bins[i] = (intbins[i] / (3i^2-3i+1)) * factor # δV between sphere of radius i*ϵ and (i-1)*ϵ
+    end
+    bins, natoms/volume
+end
+
+function Frame(f::Chemfiles.Frame, mat, skipmolid)
+    p = Chemfiles.positions(f)
+    n = size(p, 2)
+    atoms = Vector{Tuple{Int,SVector{3,Float64}}}(undef, n)
+    for i in 1:n
+        id = skipmolid ? 0 : Chemfiles.atomic_number(view(f, i-1))
+        atoms[i] = (id, SVector{3,Float64}(@view p[:,i]))
+    end
+    Frame(atoms, mat)
+end
+
+function parse_rdf_chemfiles(file, maxdist=30.0, nbins=1000; skipmolid=true)
+    skipmolid || @warn "Using skipmolid=false with chemfiles may be very slow"
+    trajectories = [Chemfiles.Trajectory(file) for _ in 1:nthreads()]
+    threadbins = zeros(Int, nthreads(), nbins)
+    ϵ = maxdist / nbins
+    Ns = zeros(Int, nthreads())
+    volumes = zeros(Float64, nthreads())
     m = Int(length(trajectories[1]))
     @threads :static for i_frame in 1:m
         trajectory = trajectories[threadid()]
+        cframe = Chemfiles.read_step(trajectory, i_frame-1)
+        mat = SMatrix{3,3,Cdouble,9}(Chemfiles.matrix(Chemfiles.UnitCell(cframe)))
         buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
-        frame = read_step(trajectory, i_frame-1)
+        frame = Frame(cframe, mat, skipmolid)
+        moleculepos, moleculeangle, moleculesID, IDmap, groups = get_molecules(frame, mat; skipmolid)
+        n = length(moleculepos)
+        for i in 1:n, j in (i+1):n
+            buffer .= moleculepos[i] .- moleculepos[j]
+            idx = 1 + floor(Int, periodic_distance!(buffer, mat, ortho, safemin)/ϵ)
+            idx == 69 && (@show(i_frame, i, j, groups[i], groups[j]); throw(""))
+            idx > nbins && continue
+            threadbins[threadid(), idx] += 1
+        end
+        Ns[threadid()] += n
+        volumes[threadid()] += det(mat)
+    end
+    foreach(close, trajectories)
+    intbins = dropdims(sum(threadbins; dims=1); dims=1)
+    normalize_bins(intbins, maxdist, nbins, sum(volumes), sum(Ns))
+end
+
+function parse_rdf(file, maxdist=30.0, nbins=1000; skipmolid=true)
+    trajectory = LAMMPStrj(file)
+    threadbins = zeros(Int, nthreads(), nbins)
+    m = length(trajectory)
+    Ns = zeros(Int, nthreads())
+    volumes = zeros(Float64, nthreads())
+    ϵ = maxdist / nbins
+    @threads for i_frame in 1:m
+        frame = trajectory[i_frame]
+        mat = SMatrix{3,3,Cdouble,9}(frame.unitcell)
+        if maxdist > max(mat[1,1], mat[2,2], mat[3,3])/2
+            error(lazy"maxdist=$maxdist should be lower than half cell lengths $(mat[1,1]), $(mat[2,2]) and $(mat[3,3])")
+        end
+        buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
         moleculepos, moleculeangle, moleculesID, IDmap, groups = get_molecules(frame, mat; skipmolid)
         n = length(moleculepos)
         for i in 1:n, j in (i+1):n
@@ -114,39 +167,11 @@ function parse_rdf(file, maxdist=20.0, nbins=10000; skipmolid=true)
             idx > nbins && continue
             threadbins[threadid(), idx] += 1
         end
+        Ns[threadid()] += n
+        volumes[threadid()] += det(mat)
     end
-    foreach(close, trajectories)
-    bins = dropdims(sum(threadbins; dims=1); dims=1)
-    for i in 1:nbins
-        bins[i] = bins[i] / (4π*((i*ϵ)*(1 + i*ϵ))) # δV between sphere of radius i*ϵ and (i+1)*ϵ
-    end
-    bins
+    intbins = dropdims(sum(threadbins; dims=1); dims=1)
+    normalize_bins(intbins, maxdist, nbins, sum(volumes), sum(Ns))
 end
 
-rdf2tcf(rdf) = rdf ./ rdf[end] .- 1
-
-function parse_3Drdf(file, maxdist=15.0, nbins=200; skipmolid=true)
-    trajectories = [Trajectory(file) for _ in 1:nthreads()]
-    threadbins = zeros(nthreads(), nbins, nbins, nbins)
-    mat = SMatrix{3,3,Cdouble,9}(matrix(UnitCell(read_step(trajectories[1], 0))))
-    m = Int(length(trajectories[1]))
-    @assert isdiag(mat)
-    ϵ = maxdist / (mat[1,1]*nbins)
-    @threads :static for i_frame in 1:m
-        trajectory = trajectories[threadid()]
-        buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
-        frame = @lock CHEMFILES_LOCK read_step(trajectory, i_frame-1)
-        moleculepos, moleculeangle, moleculesID, IDmap, groups = get_molecules(frame, mat; skipmolid)
-        n = length(moleculepos)
-        for i in 1:n, j in (i+1):n
-            buffer .= moleculepos[i] .- moleculepos[j]
-            periodic_distance!(buffer, mat, ortho, safemin)
-            buffer .= floor.(1 .+ abs.(buffer) ./ ϵ)
-            (buffer[1] > nbins || buffer[2] > nbins || buffer[3] > nbins) && continue
-            threadbins[threadid(), Int(buffer[1]), Int(buffer[2]), Int(buffer[3])] += 1
-        end
-    end
-    foreach(close, trajectories)
-    bins = dropdims(sum(threadbins; dims=1); dims=1)
-    bins
-end
+rdf2tcf(rdf) = rdf ./ mean(rdf[end-div(length(rdf), 10):end]) .- 1
