@@ -1,5 +1,6 @@
 using Base.Threads
 using LinearAlgebra: isdiag, det
+using Statistics: mean
 import Chemfiles
 
 

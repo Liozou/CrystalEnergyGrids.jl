@@ -1,6 +1,6 @@
 import Optim
 using FFTW, Hankel
-import BasicInterpolators: CubicSplineInterpolator, NoBoundaries
+import BasicInterpolators: CubicSplineInterpolator, NoBoundaries, WeakBoundaries
 import LinearAlgebra: norm
 
 export IdealGasProblem, MonoAtomic
@@ -58,9 +58,11 @@ end
 
 function compute_dcf1D(tcf1D, R, ρ)
     n = length(tcf1D)
-    qdht = QDHT{0,1}(R, n)
-    hr = CubicSplineInterpolator(LinRange(0, qdht.R, n), tcf1D)
-    hk = qdht * hr.(qdht.r)
+    qdht = QDHT{0,2}(R, n)
+    hr = CubicSplineInterpolator([0; LinRange(0, qdht.R, n+1)[1:end-1] .+ (qdht.R/(2*n))],
+                                 [-1.0; tcf1D], WeakBoundaries())
+    hk = ((2π)^(3/2)) .* (qdht * hr.(qdht.r))
+    # error("Missing normalization (≈ 15.5 ?)")
     ck = hk ./ (1 .+ ρ .* hk)
     qdht, ck
     # return qdht \ ck
