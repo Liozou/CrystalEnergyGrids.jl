@@ -62,6 +62,11 @@ function periodic_distance!(buffer, mat, ortho, safemin)
     return ref
 end
 
+function periodic_distance(buffer, mat)
+    _, ortho, safemin = prepare_periodic_distance_computations(mat)
+    periodic_distance!(buffer, mat, ortho, safemin)
+end
+
 """
     periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
 
