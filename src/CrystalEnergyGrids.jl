@@ -177,8 +177,8 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
         zrots = [SMatrix{3,3,Float64,9}([cospi(2i/5) -sinpi(2i/5) 0; sinpi(2i/5) cospi(2i/5) 0; 0 0 1]) for i in 0:(4-4islin)]
         _rotpos = Vector{SVector{3,Float64}}[]
         for zrot in zrots, point in lebedev.points
-            mat = SMatrix{3,3,Float64,9}(hcat([1, 0, 0], [0, 1, 0], point))*zrot
-            push!(_rotpos, [SVector{3}(mat*p) for p in __pos])
+            rmat = SMatrix{3,3,Float64,9}(hcat([1, 0, 0], [0, 1, 0], point))*zrot
+            push!(_rotpos, [SVector{3}(rmat*p) for p in __pos])
         end
         _rotpos
     end
@@ -186,9 +186,9 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
     allvals .= NaN
     Base.Threads.@threads for idx in CartesianIndices((numA, numB, numC))
         iA, iB, iC = Tuple(idx)
-        ofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
+        thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         if setup.block isa BitArray && num_rotate >= 0
-            a0, b0, c0 = floor.(Int, offsetpoint(ofs./ANG_UNIT, mat, invmat, setup.coulomb.shift, setup.coulomb.size, setup.coulomb.dims))
+            a0, b0, c0 = floor.(Int, offsetpoint(thisofs./ANG_UNIT, mat, invmat, setup.coulomb.shift, setup.coulomb.size, setup.coulomb.dims))
             a1 = a0 + 1; b1 = b0 + 1; c1 = c0 + 1;
             if setup.block[a0,b0,c0]+setup.block[a1,b0,c0]+setup.block[a0,b1,c0]+setup.block[a1,b1,c0]+setup.block[a0,b0,c1]+setup.block[a1,b0,c1]+setup.block[a0,b1,c1]+setup.block[a1,b1,c1] > 3
                 # grid[iA,iB,iC] = Inf
@@ -199,8 +199,10 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
         # vals = 0.0
         # minval = Inf
         for (k, pos) in enumerate(rotpos)
-            if num_rotate < 0
-                ofs = rand()*numA*stepA + rand()*numB*stepB + rand()*numC*stepC
+            ofs = if num_rotate < 0
+                rand()*numA*stepA + rand()*numB*stepB + rand()*numC*stepC
+            else
+                thisofs
             end
             newval = sum(energy_point(setup, [SVector{3}(ofs + p*ANG_UNIT) for p in pos]))
             # vals += newval
