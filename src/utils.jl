@@ -102,6 +102,24 @@ function periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
     return ref
 end
 
+# Root mean-square deviation i.e. √[(∑(xᵢ-yᵢ)²)/n]
+function rmsd(a::AbstractVector{T}, b::AbstractVector{T}) where T
+    ret = zero(T)
+    n = length(a)
+    @assert eachindex(a) == eachindex(b)
+    for (x, y) in zip(a, b)
+        # if !isfinite(x)
+        #     isfinite(y) && return abs(x)
+        #     continue
+        # elseif !isfinite(y)
+        #     isfinite(x) && return abs(y)
+        #     continue
+        # end
+        ret += (x - y)^2
+    end
+    sqrt(ret / n)
+end
+
 function fraction_sites(egrid)
     bins = zeros(100)
     for val in egrid
@@ -213,3 +231,29 @@ function meanBoltzmann(A, T)
     end
     B
 end
+
+struct LennardJones
+    ε::Float64 # in K⁻¹
+    σ::Float64 # in Å
+end
+function (lj::LennardJones)(d)
+    x = lj.σ/d
+    x3 = x*x*x
+    x6 = x3*x3
+    4*lj.ε*x6*(x6 - 1)
+end
+# lj_Ar = CrystalEnergyGrids.LennardJones(124.07, 3.38)
+
+function downsize(X::Array{T,3}, n1, n2, n3) where {T}
+    [mean(@view X[1+(i1-1)*n1:i1*n1, 1+(i2-1)*n2:i2*n2, 1+(i3-1)*n3:i3*n3])
+     for i1 in 1:(size(X,1)÷n1), i2 in 1:(size(X,2)÷n2), i3 in 1:(size(X,3)÷n3)]
+end
+downsize(X::Array{T,3}, n) where {T} = downsize(X, n, n, n)
+
+
+# Accurately Computing log(1 − exp(− |a|)) Assessed by the Rmpfr package by Martin Mächler
+log1pexp(x::Float64) = x <= -36.7368005696771 ? exp(x) : x < 18.021826694558577 ? log1p(exp(x)) : x < 33.23111882352963 ? x + exp(-x) : x
+# log1mexp(x) = x < log(2) ? log(-expm1(-x)) : log1p(-exp(-x))
+# LogExpFunctions.jl for coefficient fine-tuning
+logexpm1(x::Float64) = x < 18.021826694558577 ? log(expm1(x)) : x < 33.23111882352963 ? x - exp(-x) : x
+logistic(x::Float64) = x < -744.4400719213812 ? 0.0 : x < 36.7368005696771 ? (e = exp(x); e/(1.0 + e)) : 1.0
