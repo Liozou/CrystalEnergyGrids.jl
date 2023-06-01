@@ -28,7 +28,7 @@ Takes the interaction potential `v` between two particles on a regularly spaced 
 between distances `0` and `R` excluded, i.e. on the points given by
 `LinRange(0, R, length(v)+2)[2:end-1]`, expressed in Kelvin.
 
-Returns the pair `(c, h)` where `c` is the direct correlation function and `h` is the total
+Returns the pair `(c, γ)` where `c` is the direct correlation function and `c+γ` is the total
 correlation function. Both functions are computed on the same points, under the
 hypernetted chain approximation, at temperature `T` and density ρ, with precision `ε`.
 
@@ -132,13 +132,12 @@ function hnc(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,length(v
         ldiv!(γ_verif, qdht, γk_verif); γ_verif ./= Ϡ
         η = rmsd(γ, γ_verif)
     end
-    h .= γ .+ c
-    c, h
+    c, γ
 end
 
 
-function hnc_picard(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,length(v))) where {S}
-    γ = zeros(S, length(v))
+function hnc_picard(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,length(v)), γ0=zeros(S,length(v))) where {S}
+    γ = copy(γ0)
     γk = zeros(S, length(v))
 
     @assert qdht.r ≈ LinRange(0, R, length(v)+2)[2:end-1]
@@ -146,8 +145,10 @@ function hnc_picard(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,l
 
     c = @. expm1(-v/T + γ) - γ
     ck = qdht*c; ck .*= Ϡ
-    γk_verif = similar(γ)
-    γ_verif = similar(γ)
+    γk_verif = @. ck/(1 - ρ*ck) - ck
+    γ_verif = qdht\γk_verif; γ_verif ./= Ϡ
+    η = rmsd(γ, γ_verif)
+
 
     expvtm1 = similar(γ)
     f1 = similar(γ)
@@ -162,31 +163,48 @@ function hnc_picard(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,l
     old_δγ = similar(γ)
     old_δc = similar(γ)
 
-    η = 1.0
+    outer_iter = 0
     while η > ε
+        outer_iter += 1
+
         @. expvtm1 = expm1(-v/T + γ)
         @. f1 = expvtm1 - c - γ
         @. ργpck = ρ*(γk + ck)
         @. f2 = ργpck*ck - γk
         @. mρck = 1 - ρ*ck
-        @. δγ = 0
+
+        # @. γk_verif = ck/(1 - ρ*ck) - ck
+        # ldiv!(γ_verif, qdht, γk_verif); γ_verif ./= Ϡ
+        # @. δγ = γ - γ_verif
+        @. δγ = 0.0
 
         nδ = 1.0
-        while nδ > ε
+        nδ_min = Inf
+        inner_iter = 0
+        while nδ > ε && isfinite(nδ)
+            inner_iter += 1
             old_δγ .= δγ
             old_δc .= δc
+            # τ = 1 - inv(inner_iter+1)
+            τ = 1
 
-            @. δc = expvtm1*δγ + f1
+            @. δc = old_δc*$(1-τ) + (expvtm1*δγ + f1)*τ
             mul!(δck, qdht, δc); δck .*= Ϡ
             @. δγk = (f2 + ργpck*δck + ρ*ck*δck)/mρck
             ldiv!(δγ, qdht, δγk); δγ ./= Ϡ
             nδ = rmsd(δγ, old_δγ) + rmsd(δc, old_δc)
-            if !isfinite(nδ)
-                δγ .= old_δγ
-                δc .= old_δc
+            nδ_min = min(nδ, nδ_min)
+            if !isfinite(nδ) || nδ > 1000*nδ_min
+                # @. c = (c + expm1(-v/T + γ) - γ)*$(1 - 1/outer_iter)
+                # mul!(ck, qdht, c); ck .*= Ϡ
+                # @. γk_verif = ck/(1 - ρ*ck) - ck
+                # ldiv!(γ_verif, qdht, γk_verif); γ_verif ./= Ϡ
+                # @. δγ = (γk_verif - γ)*$(1 - 1/outer_iter)
+                # δc .= 0.0
+                error("Inner loop failed to converge")
             end
 
-            # @show nδ
+            @show nδ
         end
 
         γ .+= δγ
@@ -200,5 +218,5 @@ function hnc_picard(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,l
 
         # @show η
     end
-    c, γ .+ c
+    c, γ
 end
