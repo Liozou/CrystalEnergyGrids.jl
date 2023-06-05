@@ -232,17 +232,6 @@ function meanBoltzmann(A, T)
     B
 end
 
-struct LennardJones
-    ε::Float64 # in K⁻¹
-    σ::Float64 # in Å
-end
-function (lj::LennardJones)(d)
-    x = lj.σ/d
-    x3 = x*x*x
-    x6 = x3*x3
-    4*lj.ε*x6*(x6 - 1)
-end
-# lj_Ar = CrystalEnergyGrids.LennardJones(124.07, 3.38)
 
 function downsize(X::Array{T,3}, n1, n2, n3) where {T}
     [mean(@view X[1+(i1-1)*n1:i1*n1, 1+(i2-1)*n2:i2*n2, 1+(i3-1)*n3:i3*n3])
@@ -257,3 +246,5 @@ log1pexp(x::Float64) = x <= -36.7368005696771 ? exp(x) : x < 18.021826694558577 
 # LogExpFunctions.jl for coefficient fine-tuning
 logexpm1(x::Float64) = x < 18.021826694558577 ? log(expm1(x)) : x < 33.23111882352963 ? x - exp(-x) : x
 logistic(x::Float64) = x < -744.4400719213812 ? 0.0 : x < 36.7368005696771 ? (e = exp(x); e/(1.0 + e)) : 1.0
+
+linreg(x, y) = hcat(fill!(similar(x), 1), x) \ y
