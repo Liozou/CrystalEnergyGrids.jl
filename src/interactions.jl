@@ -113,6 +113,68 @@ module FF
     Attempting to combine it with an other [`InteractionKind`](@ref) through an
     [`InteractionRuleSum`](@ref) will result in an error
     """
+    NoInteraction
+
+
+    """
+        MixingRule
+
+    Mixing rule used when building a [`ForceField`](@ref).
+
+    Current list:
+    [`LorentzBerthelot`](@ref),
+    [`WaldmanHagler`](@ref),
+    [`Geometric`](@ref),
+    [`IgnoreInteraction`](@ref),
+    [`ErrorOnMix`](@ref)
+    """
+    @enum MixingRule begin
+        LorentzBerthelot
+        WaldmanHagler
+        Geometric
+        IgnoreInteraction
+        ErrorOnMix
+    end
+
+    """
+        LorentzBerthelot
+
+    Lorentz-Berthelot mixing rule between two [`LennardJones`](@ref) (or in general two [`Mie`](@ref))
+    interaction potentials, defined by `σᵢⱼ = (σᵢ + σⱼ)/2` and `εᵢⱼ = √(εᵢ εⱼ)`
+    """
+    LorentzBerthelot
+
+    """
+        WaldmanHagler
+
+    Waldman-Hagler mixing rule between two [`LennardJones`](@ref) interaction potentials,
+    defined by `σᵢⱼ = ((σᵢ⁶ + σⱼ⁶)/2)^(1/6)` and `εᵢⱼ = √(εᵢ εⱼ) × 2σᵢ³σⱼ³/(σᵢ⁶ + σⱼ⁶)`
+    """
+    WaldmanHagler
+
+    """
+        Geometric
+
+    Good-Hope / Jorgensen mixing rule between two [`LennardJones`](@ref) (or in general two
+    [`Mie`](@ref)) potentials, defined by `σᵢⱼ = √(σᵢσⱼ)` and `εᵢⱼ = √(εᵢ εⱼ)`
+    """
+    Geometric
+
+    """
+        IgnoreInteraction
+
+    Using this mixing rule specifies that any pair of species lacking an explicit
+    interaction will be attributed a [`NoInteraction`](@ref) rule.
+    """
+    IgnoreInteraction
+
+    """
+        ErrorOnMix
+
+    Using this mixing rule specifies that all species pair should be explicity given an
+    interaction rule. Failing this condition will result in an expected error.
+    """
+    ErrorOnMix
 end
 
 """
