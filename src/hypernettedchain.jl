@@ -1,7 +1,88 @@
 using Hankel: QDHT
-using FFTW: plan_rfft
 using LinearAlgebra: norm, mul!, ldiv!
 
+
+"""
+    hnc(v::AbstractVector{<:AbstractFloat}, R, T, ρ, ε=1e-8; qdht=QDHT{0,2}(R,length(v)), γ0=nothing)
+
+Takes the interaction potential `v` between two particles on a regularly spaced line
+between distances `0` and `R` excluded, i.e. on the points given by
+`LinRange(0, R, length(v)+2)[2:end-1]`, expressed in Kelvin.
+
+Returns the pair `(c, γ)` where `c` is the direct correlation function and `c+γ` is the total
+correlation function. Both functions are computed on the same points, under the
+hypernetted chain approximation, at temperature `T` and density `ρ`, with precision `ε`.
+
+A Hankel transform plan `qdht` may be optionally provided to avoid recomputing it each time.
+An estimate `γ0` may also be provided for the initial value of `γ`.
+
+Implements Picard's strategy with a custom adaptative step size.
+"""
+function hnc(v::AbstractVector{S}, R, T, ρ, ε=1e-8; qdht=QDHT{0,2}(R,length(v)), γ0=nothing) where {S}
+    Ϡ = ((2π)^(3/2))
+    γ = if γ0 isa Nothing
+        zeros(S, length(v))
+    else
+        copy(γ0)
+    end
+    γ_min = copy(γ)
+
+    @assert qdht.r ≈ LinRange(0, R, length(v)+2)[2:end-1]
+    τ = 1.0
+
+    c = @. expm1(-v/T + γ) - γ
+    ck = qdht*c; ck .*= Ϡ
+    γ2k = @. ρ*ck*ck/(1 - ρ*ck)
+    γ2 = qdht\γ2k; γ2 ./= Ϡ
+    η = rmsd(γ, γ2)
+    η_min = η
+    !(η ≤ ε) && isfinite(η) && (γ .= γ2)
+
+    retries = 0
+    global_iter = 0
+    outer_iter = floor(Int, max(0, -log(η))*73)
+    iter_since_min = 0
+    while !(η ≤ ε) # does not stop on NaN
+        iter_since_min += 1
+        global_iter += 1
+
+        c = @. expm1(-v/T + γ) - γ
+        mul!(ck, qdht, c); ck .*= Ϡ
+        γ2k = @. ρ*ck*ck/(1 - ρ*ck)
+        ldiv!(γ2, qdht, γ2k); γ2 ./= Ϡ
+        η = rmsd(γ, γ2)
+        if η < η_min
+            γ_min .= γ
+            η_min = η
+            iter_since_min = 0
+            outer_iter += 1
+            τ = min(1.0, τ*(1+1/outer_iter))
+        elseif iter_since_min > 300 || !(η < 20*η_min) # accepts if η == NaN or η == η_min == Inf
+            γ .= γ_min
+            iter_since_min = -1
+            τ = (1 - 1/(2+sqrt(outer_iter*(1+retries) + max(0.0, -log(η_min)))))*τ
+            if τ < 0.05
+                if retries >= 2
+                    error("Failed to find appropriate τ")
+                else
+                    retries += 1
+                    τ = 1.0
+                end
+            end
+            continue
+        end
+        λ = (1 - 1/(1+iter_since_min))*τ
+        @. γ = λ*γ2 + $(1-λ)*γ
+
+        # global_iter % 300 == 0 && @show η, τ, outer_iter
+        # @show η
+    end
+    # @show global_iter
+    c, γ
+end
+
+
+#=
 function scalenorm(x::Vector, R)
     ret = 0.0
     l = LinRange(0, R, length(x)+2)[2:end-1]
@@ -21,21 +102,9 @@ function scaledot(x::Vector, y::Vector, R)
     ret*step(l)
 end
 
-"""
-    hnc(v::AbstractVector{<:AbstractFloat}, R, T, ρ, ε=1e-12)
-
-Takes the interaction potential `v` between two particles on a regularly spaced line
-between distances `0` and `R` excluded, i.e. on the points given by
-`LinRange(0, R, length(v)+2)[2:end-1]`, expressed in Kelvin.
-
-Returns the pair `(c, γ)` where `c` is the direct correlation function and `c+γ` is the total
-correlation function. Both functions are computed on the same points, under the
-hypernetted chain approximation, at temperature `T` and density ρ, with precision `ε`.
-
-Implements the strategy of [Luc Belloni, J. Chem. Phys., 98 (10), 1993](https://doi.org/10.1063/1.464564),
-paragraph II. B., see [Gilles Zerah, J. Comp. Phys., 61 (2), 1985](https://doi.org/10.1016/0021-9991(85)90087-7).
-"""
-function hnc(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,length(v))) where {S}
+# Implements the strategy of [Luc Belloni, J. Chem. Phys., 98 (10), 1993](https://doi.org/10.1063/1.464564),
+# paragraph II. B., see [Gilles Zerah, J. Comp. Phys., 61 (2), 1985](https://doi.org/10.1016/0021-9991(85)90087-7).
+function hnc_newton(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,length(v))) where {S}
     n = length(v)
     γ = zeros(S, n)
     h = similar(γ)
@@ -134,9 +203,10 @@ function hnc(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,length(v
     end
     c, γ
 end
+=#
 
-
-function hnc_picard(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,length(v)), γ0=zeros(S,length(v))) where {S}
+#=
+function hnc_naive_newton(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,length(v)), γ0=.-ones(S,length(v))) where {S}
     γ = copy(γ0)
     γk = zeros(S, length(v))
 
@@ -216,7 +286,8 @@ function hnc_picard(v::AbstractVector{S}, R, T, ρ, ε=1e-12; qdht=QDHT{0,2}(R,l
         ldiv!(γ_verif, qdht, γk_verif); γ_verif ./= Ϡ
         η = rmsd(γ, γ_verif)
 
-        # @show η
+        @show η
     end
     c, γ
 end
+=#
