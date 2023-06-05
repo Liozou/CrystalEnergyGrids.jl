@@ -1,14 +1,42 @@
 export FF, InteractionRule, InteractionRuleSum
 
 module FF
+    """
+        InteractionKind
+
+    Nature of interaction that can be computed between two species.
+
+    See also [`InteractionRule`](@ref).
+
+    Current list:
+    [`LennardJones`](@ref),
+    [`Coulomb`](@ref),
+    [`HardSphere`](@ref),
+    [`Buckingham`](@ref),
+    [`NoInteraction`](@ref),
+    [`Monomial`](@ref),
+    [`Exponential`](@ref)
+    """
     @enum InteractionKind begin
+        LennardJones
         Coulomb
         HardSphere
-        LennardJones
         Buckingham
+        NoInteraction
         Monomial
         Exponential
     end
+
+    """
+        LennardJones
+
+    Lennard-Jones `InteractionKind` between two bodies. Equals `4ε((r/σ)^12 - (r/σ)^6)`
+
+    ## Parameters
+    - `ε` in K
+    - `σ` in Å
+    """
+    LennardJones
 
     """
         Coulomb
@@ -31,17 +59,6 @@ module FF
     - `R` in Å
     """
     HardSphere
-
-    """
-        LennardJones
-
-    Lennard-Jones `InteractionKind` between two bodies. Equals `4ε((r/σ)^12 - (r/σ)^6)`
-
-    ## Parameters
-    - `ε` in K
-    - `σ` in Å
-    """
-    LennardJones
 
     """
         Buckingham
@@ -87,6 +104,15 @@ module FF
         like [`Buckingham`](@ref) as those will have better performance.
     """
     Exponential
+
+    """
+        NoInteraction
+
+    Represents an explicit absence of interaction between two species.
+
+    Attempting to combine it with an other [`InteractionKind`](@ref) through an
+    [`InteractionRuleSum`](@ref) will result in an error
+    """
 end
 
 """
@@ -126,6 +152,7 @@ function Base.show(io::IO, ik::InteractionRule)
     join(io, ik.params, ", ")
     print(io, ')')
 end
+Base.:(==)(a::InteractionRule, b::InteractionRule) = a.kind == b.kind && a.params == b.params
 
 struct InvalidParameterNumber <: Exception
     ik::FF.InteractionKind
@@ -140,7 +167,10 @@ end
 
 function (ik::FF.InteractionKind)(args...)
     n = length(args)
-    if ik === FF.Coulomb
+    if ik === FF.LennardJones || ik === FF.Monomial || ik === FF.Exponential
+        n == 2 || throw(InvalidParameterNumber(ik, n, [2]))
+        InteractionRule(ik, [Float64(x) for x in args])
+    elseif ik === FF.Coulomb
         if n == 2
             InteractionRule(FF.Coulomb, [Float64(x) for x in args])
         elseif n == 1
@@ -151,61 +181,30 @@ function (ik::FF.InteractionKind)(args...)
     elseif ik === FF.HardSphere
         n == 1 || throw(InvalidParameterNumber(ik, n, [1]))
         InteractionRule(ik, [Float64(args[1])])
-    elseif ik === FF.LennardJones || ik === FF.Monomial || ik === FF.Exponential
-        n == 2 || throw(InvalidParameterNumber(ik, n, [2]))
-        InteractionRule(ik, [Float64(x) for x in args])
-    elseif ik == FF.Buckingham
+    elseif ik === FF.Buckingham
         n == 3 || throw(InvalidParameterNumber(ik, n, [3]))
         InteractionRule(ik, [Float64(x) for x in args])
+    elseif ik === FF.NoInteraction
+        n == 0 || throw(InvalidParameterNumber(ik, n, [0]))
+        InteractionRule(ik, Float64[])
     else
         @assert false # logically impossible
     end
 end
 
-# (ik::FF.InteractionKind)(args...) = complete_rule(ik, [Float64(x) for x in args])
-# """
-#     complete_rule(::Val{ik}, args::Vector{Float64}) where {ik}
-
-# !!! warn
-#     This function should only be extended with a new method if you intend to add a new
-#     [`InteractionKind`](@ref FF.InteractionKind)
-
-# Called when constructing an [`InteractionRule`](@ref): given `ik`, an `InteractionKind` and a
-# list of parameters converted to `Float64`, should return an `InteractionRule` with the same
-# `InteractionKind` and the appropriate parameters. In practise, this serves as an extendable
-# way of handling optional arguments.
-
-# ## Example
-
-# ```julia
-# julia> cation = FF.Coulomb(1) # coulomb interaction between charges of +1 e
-# FF.Coulomb(1.0, 1.0)
-
-# julia> cation === complete_rule(Val(FF.Coulomb), [1.0])
-# true
-# ```
-# """
-# complete_rule(::Val{ik}, args::Vector{Float64}) where {ik} = InteractionRule(ik, args)
-# function complete_rule(::Val{FF.Coulomb}, args::Vector{Float64})
-#     if length(args) == 2
-#         InteractionRule(FF.Coulomb, args)
-#     elseif length(args) == 1
-#         InteractionRule(FF.Coulomb, [args[1], args[1]])
-#     else
-#         error(lazy"Inappropriate number of arguments when constructing a Coulomb interaction ($(length(args)), expected 1 or 2)")
-#     end
-# end
 
 function (rule::InteractionRule)(r)
-    if rule.kind === FF.Coulomb
+    if rule.kind === FF.LennardJones
+        x6lj = (rule.params[2]/r)^6
+        4*rule.params[1]*x6lj*(x6lj - 1)
+    elseif rule.kind === FF.Coulomb
         (COULOMBIC_CONVERSION_FACTOR*ENERGY_TO_KELVIN)*rule.params[1]*rule.params[2]/r
     elseif rule.kind === FF.HardSphere
         ifelse(r < rule.params[1], Inf, 0.0)
-    elseif rule.kind === FF.LennardJones
-        x6lj = (rule.params[2]/r)^6
-        4*rule.params[1]*x6lj*(x6lj - 1)
     elseif rule.kind === FF.Buckingham
         rule.params[1]*exp(-rule.params[2]*r) - rule.params[3]/(r^6)
+    elseif rule.kind === FF.NoInteraction
+        0.0
     elseif rule.kind === FF.Monomial
         rule.params[1]/r^rule.params[2]
     elseif rule.kind === FF.Exponential
@@ -220,6 +219,11 @@ end
     InteractionRuleSum
 
 Represents the sum of multiple interactions between the same pair of species.
+
+!!! note
+    Attempting to sum any interaction with a [`NoInteraction`](@ref) will yield in an error.
+    It is also forbidden to put a single `InteractionRule` in the argument list of an
+    [`InteractionRuleSum`](@ref).
 
 ## Example
 ```jldoctest
@@ -244,6 +248,13 @@ Inf
 """
 struct InteractionRuleSum
     rules::Vector{InteractionRule}
+
+    function InteractionRuleSum(rules::Vector{InteractionRule})
+        isempty(rules) && error("`InteractionRuleSum(InteractionRule[])` is ill-defined. Use `FF.NoInteraction` if need be.")
+        length(rules) == 1 && error("Defining `InteractionRuleSum([rule]) is forbidden. Directly use `rule` instead.")
+        any(==(FF.NoInteraction()), rules) && error("Summing any rule with a `FF.NoInteraction` is forbidden. Sum the other rules instead.")
+        new(rules)
+    end
 end
 function Base.show(io::IO, f::InteractionRuleSum)
     print(io, typeof(f), '(', '[')
