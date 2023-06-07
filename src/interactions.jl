@@ -1,3 +1,4 @@
+## Definition of pair interactions and mixing rules
 export FF, InteractionRule, InteractionRuleSum
 
 module FF
@@ -18,13 +19,14 @@ module FF
     [`Exponential`](@ref)
     """
     @enum InteractionKind begin
-        LennardJones
-        Coulomb
         HardSphere
+        Coulomb
+        LennardJones
         Buckingham
-        NoInteraction
         Monomial
         Exponential
+        UndefinedInteraction
+        NoInteraction
     end
 
     """
@@ -53,10 +55,11 @@ module FF
     """
         HardSphere
 
-    Hard sphere interaction between two bodies. Equals `+∞` if `r < R`, `0` else
+    Hard sphere interaction between two bodies. Equals `+∞` if `r < R₁ + R₂`, `0` else
 
     ## Parameter
-    - `R` in Å
+    - `R₁` in Å
+    - `R₂` in Å (if unspecified, defaults to `R₂`)
     """
     HardSphere
 
@@ -84,8 +87,8 @@ module FF
 
     !!! warn
         Check that you are not constructing an interaction rule which is already provided
-        like [`LennardJones`](@ref) or [`Buckingham`](@ref) as those will have better
-        performance.
+        like [`LennardJones`](@ref) or [`Buckingham`](@ref) to ensure appropriate mixing
+        rules behaviour.
     """
     Monomial
 
@@ -101,7 +104,7 @@ module FF
 
     !!! warn
         Check that you are not constructing an interaction rule which is already provided
-        like [`Buckingham`](@ref) as those will have better performance.
+        like [`Buckingham`](@ref) to ensure appropriate mixing rules behaviour.
     """
     Exponential
 
@@ -140,7 +143,7 @@ module FF
         LorentzBerthelot
 
     Lorentz-Berthelot mixing rule between two [`LennardJones`](@ref) (or in general two [`Mie`](@ref))
-    interaction potentials, defined by `σᵢⱼ = (σᵢ + σⱼ)/2` and `εᵢⱼ = √(εᵢ εⱼ)`
+    interaction potentials, defined by `εᵢⱼ = √(εᵢ εⱼ)` and `σᵢⱼ = (σᵢ + σⱼ)/2`
     """
     LorentzBerthelot
 
@@ -148,7 +151,7 @@ module FF
         WaldmanHagler
 
     Waldman-Hagler mixing rule between two [`LennardJones`](@ref) interaction potentials,
-    defined by `σᵢⱼ = ((σᵢ⁶ + σⱼ⁶)/2)^(1/6)` and `εᵢⱼ = √(εᵢ εⱼ) × 2σᵢ³σⱼ³/(σᵢ⁶ + σⱼ⁶)`
+    defined by `εᵢⱼ = √(εᵢ εⱼ) × 2σᵢ³σⱼ³/(σᵢ⁶ + σⱼ⁶)` and `σᵢⱼ = ((σᵢ⁶ + σⱼ⁶)/2)^(1/6)`
     """
     WaldmanHagler
 
@@ -156,7 +159,7 @@ module FF
         Geometric
 
     Good-Hope / Jorgensen mixing rule between two [`LennardJones`](@ref) (or in general two
-    [`Mie`](@ref)) potentials, defined by `σᵢⱼ = √(σᵢσⱼ)` and `εᵢⱼ = √(εᵢ εⱼ)`
+    [`Mie`](@ref)) potentials, defined by `εᵢⱼ = √(εᵢ εⱼ)` and `σᵢⱼ = √(σᵢσⱼ)`
     """
     Geometric
 
@@ -193,28 +196,43 @@ Multiple interaction rules can be combined to form more complex rules through an
 
 ## Example
 ```jldoctest
-julia> σ = 124.07; ε = 3.38 # Argon LJ parameters in K and Å from doi:10.1021/jp803753h
+julia> σ = 124.07u"K"; ε = 0.338u"nm" # Argon LJ parameters from doi:10.1021/jp803753h
 
 julia> lj_argon = FF.LennardJones(σ, ε)
 LennardJones(124.07, 3.38)
 
+julia> lj_argon == FF.LennardJones(124.07, 3.38) # default units are documented: here K and Å
+true
+
 julia> typeof(lj_argon)
 InteractionRule
 
-julia> lj_argon(4.5) # energy in K
+julia> lj_argon(4.5u"Å) # energy in K
 -73.11312068282488
 ```
 """
 struct InteractionRule
     kind::FF.InteractionKind
-    params::Vector{Float64}
+    params::Vector{Float64} # units are documented for each interaction kind
+    shift::Float64
+    tailcorrection::Bool
 end
+InteractionRule(kind::FF.InteractionKind, params::Vector{Float64}) = InteractionRule(kind, params, 0.0, true)
 function Base.show(io::IO, ik::InteractionRule)
     print(io, ik.kind, '(')
     join(io, ik.params, ", ")
     print(io, ')')
+    if get(io, :inforcefield, false)
+        if ik.tailcorrection
+            print(io, 'ᵀ')
+        end
+        if ik.shift != 0.0
+            print(io, 'ₛ')
+        end
+    end
 end
 Base.:(==)(a::InteractionRule, b::InteractionRule) = a.kind == b.kind && a.params == b.params
+Base.isless(a::InteractionRule, b::InteractionRule) = isless(a.kind, b.kind) || (a.kind === b.kind && isless(a.params, b.params))
 
 struct InvalidParameterNumber <: Exception
     ik::FF.InteractionKind
@@ -226,27 +244,60 @@ function Base.showerror(io::IO, x::InvalidParameterNumber)
     join(io, x.expected, ", ", " or ")
     print(io, " parameters.")
 end
+struct UndefinedInteractionError <: Exception end
+Base.showerror(io::IO, ::UndefinedInteractionError) = print(io, "Undefined interaction")
+
+macro convertifnotfloat(unit, x)
+    val = esc(x)
+    quote
+        Float64($val isa Unitful.AbstractQuantity ? uconvert(NoUnits, $val/$unit) : $val)
+    end
+end
 
 function (ik::FF.InteractionKind)(args...)
     n = length(args)
-    if ik === FF.LennardJones || ik === FF.Monomial || ik === FF.Exponential
+    if ik === FF.LennardJones
+        n == 2 || throw(InvalidParameterNumber(ik, n, [2]))
+        ε = @convertifnotfloat u"K" args[1]
+        σ = @convertifnotfloat u"Å" args[2]
+        InteractionRule(ik, [ε, σ])
+    elseif ik === FF.Monomial
         n == 2 || throw(InvalidParameterNumber(ik, n, [2]))
         InteractionRule(ik, [Float64(x) for x in args])
+    elseif ik === FF.Exponential
+        n == 2 || throw(InvalidParameterNumber(ik, n, [2]))
+        Aexp = @convertifnotfloat u"K" args[1]
+        Bexp = @convertifnotfloat u"Å^-1" args[2]
+        InteractionRule(ik, [Aexp, Bexp])
     elseif ik === FF.Coulomb
         if n == 2
-            InteractionRule(FF.Coulomb, [Float64(x) for x in args])
+            q1 = @convertifnotfloat u"e_au" args[1]
+            q2 = @convertifnotfloat u"e_au" args[2]
+            InteractionRule(ik, [q1, q2])
         elseif n == 1
-            InteractionRule(FF.Coulomb, [args[1], args[1]])
+            q1only = @convertifnotfloat u"e_au" args[1]
+            InteractionRule(ik, [q1only, q1only])
         else
             throw(InvalidParameterNumber(ik, n, [1, 2]))
         end
     elseif ik === FF.HardSphere
-        n == 1 || throw(InvalidParameterNumber(ik, n, [1]))
-        InteractionRule(ik, [Float64(args[1])])
+        if n == 2
+            r1 = @convertifnotfloat u"Å" args[1]
+            r2 = @convertifnotfloat u"Å" args[2]
+            InteractionRule(ik, [r1, r2])
+        elseif n == 1
+            r1only = @convertifnotfloat u"Å" args[1]
+            InteractionRule(ik, [r1only, r1only])
+        else
+            throw(InvalidParameterNumber(ik, n, [1, 2]))
+        end
     elseif ik === FF.Buckingham
         n == 3 || throw(InvalidParameterNumber(ik, n, [3]))
-        InteractionRule(ik, [Float64(x) for x in args])
-    elseif ik === FF.NoInteraction
+        Abuck = @convertifnotfloat u"K" args[1]
+        Bbuck = @convertifnotfloat u"Å^-1" args[2]
+        Cbuck = @convertifnotfloat u"Å^6*K" args[3]
+        InteractionRule(ik, [Abuck, Bbuck, Cbuck])
+    elseif ik === FF.NoInteraction || ik === FF.UndefinedInteraction
         n == 0 || throw(InvalidParameterNumber(ik, n, [0]))
         InteractionRule(ik, Float64[])
     else
@@ -255,14 +306,15 @@ function (ik::FF.InteractionKind)(args...)
 end
 
 
-function (rule::InteractionRule)(r)
-    if rule.kind === FF.LennardJones
+function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋,U} where {T,U})
+    r = uconvert(NoUnits, input/u"Å")
+    (if rule.kind === FF.LennardJones
         x6lj = (rule.params[2]/r)^6
         4*rule.params[1]*x6lj*(x6lj - 1)
     elseif rule.kind === FF.Coulomb
-        (COULOMBIC_CONVERSION_FACTOR*ENERGY_TO_KELVIN)*rule.params[1]*rule.params[2]/r
+        (COULOMBIC_CONVERSION_FACTOR*ENERGY_TO_KELVIN/u"K")*rule.params[1]*rule.params[2]/r
     elseif rule.kind === FF.HardSphere
-        ifelse(r < rule.params[1], Inf, 0.0)
+        ifelse(r < rule.params[1] + rule.params[2], Inf, 0.0)
     elseif rule.kind === FF.Buckingham
         rule.params[1]*exp(-rule.params[2]*r) - rule.params[3]/(r^6)
     elseif rule.kind === FF.NoInteraction
@@ -271,9 +323,57 @@ function (rule::InteractionRule)(r)
         rule.params[1]/r^rule.params[2]
     elseif rule.kind === FF.Exponential
         rule.params[1]*exp(-rule.params[2]*r)
+    elseif rule.kind === FF.UndefinedInteraction
+        throw(UndefinedInteractionError())
     else
         @assert false # logically impossible
-    end
+    end - rule.shift)*u"K"
+end
+
+function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋^2,U} where {T,U})
+    r2 = uconvert(NoUnits, input/u"Å^2")
+    (if rule.kind === FF.LennardJones
+        σ2 = rule.params[2]^2
+        x6lj = (σ2/r2)^3
+        4*rule.params[1]*x6lj*(x6lj - 1)
+    elseif rule.kind === FF.HardSphere
+        ifelse(r < (rule.params[1] + rule.params[2])^2, Inf, 0.0)
+    elseif rule.kind === FF.NoInteraction
+        0.0
+    elseif rule.kind === FF.Monomial
+        rule.params[1]/r2^(rule.params[2]/2)
+    else
+        return rule(sqrt(r2))
+    end - rule.shift)*u"K"
+end
+
+function tailcorrection(rule::InteractionRule, cutoff::Float64)
+    (if !rule.tailcorrection || rule.kind === FF.NoInteraction || rule.kind === FF.HardSphere
+        0.0
+    elseif rule.kind === FF.LennardJones
+        ε, σ = rule.params
+        xlj3 = (σ/cutoff)^3
+        xlj9 = xlj3^3
+        (4/3)*ε*σ^3*(xlj9/3 - xlj3)
+    elseif rule.kind === FF.Buckingham
+        A, B, C = rule.params
+        A*exp(-B*cutoff)*((2.0 + B*cutoff*(2.0 + B*cutoff))/B^3 - C/(3*cutoff^3))
+    elseif rule.kind === FF.Coulomb
+        error("Coulomb direct pair interaction cannot have a tail correction: use Ewald sum.")
+    elseif rule.kind === FF.UndefinedInteraction
+        throw(UndefinedInteractionError())
+    else
+        @assert false
+    end)*u"K"
+end
+
+struct RepeatedRuleKind <: Exception
+    x::InteractionRule
+    y::InteractionRule
+end
+function Base.showerror(io::IO, e::RepeatedRuleKind)
+    print(io, "Defining an `InteractionRuleSum` of two rules with the same kind is forbidden: attempted to sum ",
+              e.x, " with ", e.y)
 end
 
 
@@ -299,7 +399,7 @@ julia> buck(0.85) # Unphysical attraction of the Buckingham potential at short d
 -544139.1256276625
 
 julia> inter = InteractionRuleSum([FF.HardSphere(1.5), buck])
-InteractionRuleSum([HardSphere(1.3), Buckingham(5.581e7, 3.985, 916700.0))
+InteractionRuleSum([HardSphere(0.6), Buckingham(5.581e7, 3.985, 916700.0))
 
 julia> inter(2.6) # Buckingham interaction in the physical part
 -1201.4909774834446
@@ -312,10 +412,25 @@ struct InteractionRuleSum
     rules::Vector{InteractionRule}
 
     function InteractionRuleSum(rules::Vector{InteractionRule})
-        isempty(rules) && error("`InteractionRuleSum(InteractionRule[])` is ill-defined. Use `FF.NoInteraction` if need be.")
+        isempty(rules) && error("`InteractionRuleSum(InteractionRule[])` is ill-defined. Use `FF.NoInteraction` or `FF.UndefinedInteraction` if need be.")
         length(rules) == 1 && error("Defining `InteractionRuleSum([rule]) is forbidden. Directly use `rule` instead.")
-        any(==(FF.NoInteraction()), rules) && error("Summing any rule with a `FF.NoInteraction` is forbidden. Sum the other rules instead.")
-        new(rules)
+        srules = sort(rules)
+        srules[end].kind == FF.NoInteraction && error("Summing any rule with a `FF.NoInteraction` is forbidden. Sum the other rules instead.")
+        srules[end].kind == FF.UndefinedInteraction && error("Attempting to sum a rule with a `FF.UndefinedInteraction`.")
+        kinds = [rule.kind for rule in srules]
+        unique!(kinds)
+        if length(kinds) != length(srules)
+            @assert length(kinds) < length(srules)
+            idx = length(srules)
+            for (i, (kind, rule)) in enumerate(zip(kinds, srules))
+                if kind != rule.kind
+                    idx = i
+                    break
+                end
+            end
+            throw(RepeatedRuleKind(srules[idx-1], srules[idx]))
+        end
+        new(srules)
     end
 end
 function Base.show(io::IO, f::InteractionRuleSum)
@@ -324,9 +439,51 @@ function Base.show(io::IO, f::InteractionRuleSum)
     print(io, ')')
 end
 function (f::InteractionRuleSum)(r)
-    ret = 0.0
+    ret = 0.0u"K"
     for x in f.rules
         ret += x(r)
+    end
+    ret
+end
+
+function sum_one_rule(l::Vector{InteractionRule}, r::InteractionRule)
+    if r.kind === FF.NoInteraction
+        l
+    elseif r.kind === FF.UndefinedInteraction
+        [r]
+    else
+        vcat(l, r)
+    end
+end
+function sum_rules(r1, r2)
+    if r1 isa InteractionRuleSum
+        if r2 isa InteractionRuleSum
+            InteractionRuleSum(vcat(r1.rules, r2.rules))
+        else
+            InteractionRuleSum(sum_one_rule(r1.rules, r2))
+        end
+    elseif r2 isa InteractionRuleSum
+        InteractionRuleSum(sum_one_rule(r2.rules, r1))
+    else
+        if r1.kind === FF.NoInteraction
+            r2
+        elseif r1.kind === FF.UndefinedInteraction
+            r1
+        else
+            l = sum_one_rule([r1], r2)
+            if length(l) == 1
+                l[1]
+            else
+                InteractionRuleSum(l)
+            end
+        end
+    end
+end
+
+function tailcorrection(f::InteractionRuleSum, cutoff::Float64)
+    ret = 0.0u"K"
+    for x in f.rules
+        ret += tailcorrection(x, cutoff)
     end
     ret
 end
