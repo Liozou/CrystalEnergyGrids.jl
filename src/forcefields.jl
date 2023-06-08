@@ -271,3 +271,18 @@ function Base.show(io::IO, ::MIME"text/plain", ff::ForceField)
         end
     end
 end
+
+Base.getindex(ff::ForceField, i::Integer, j::Integer) = ff.interactions[i,j]
+Base.getindex(ff::ForceField, a::Symbol, b::Symbol) = ff[ff.sdict[a], ff.sdict[b]]
+
+function (ff::ForceField)(i::Integer, j::Integer, distance)
+    if distance isa (Quantity{T,Unitful.𝐋^2,U} where {T,U})
+        NoUnits(distance/u"Å^2") >= ff.cutoff^2 && return 0.0u"K"
+    elseif distance isa (Quantity{T,Unitful.𝐋,U} where {T,U})
+        NoUnits(distance/u"Å") >= ff.cutoff && return 0.0u"K"
+    else
+        distance > ff.cutoff && return 0.0u"K"
+    end
+    return ff[i,j](distance)
+end
+(ff::ForceField)(a::Symbol, b::Symbol, distance) = ff(ff.sdict[a], ff.sdict[b], distance)
