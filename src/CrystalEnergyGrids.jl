@@ -17,6 +17,7 @@ include("utils.jl")
 include("ChangePositionSystems.jl")
 include("interactions.jl")
 include("forcefields.jl")
+include("energy.jl")
 include("raspa.jl")
 include("ewald.jl")
 include("lammpstrj_parser.jl")
@@ -88,7 +89,7 @@ function parse_grid(file, iscoulomb, mat)
         ε_Ewald = iscoulomb ? read(io, Cdouble) : Inf
         grid = Array{Cfloat, 4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
         read!(io, grid)
-        grid .*= ENERGY_TO_KELVIN
+        grid .*= NoUnits(ENERGY_TO_KELVIN/u"K")
         CrystalEnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, mat, invmat, grid)
     end
 end
@@ -141,9 +142,9 @@ end
 
 function energy_point(setup::CrystalEnergySetup, positions)
     num_atoms = length(setup.atomsidx)
-    pos_strip::Vector{SVector{3,Float64}} = positions ./ ANG_UNIT
+    pos_strip::Vector{SVector{3,Float64}} = positions / u"Å"
     vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], pos_strip[i]) for i in 1:num_atoms)
-    coulomb_direct = sum(((setup.molecule[i,:atomic_charge]/CHARGE_UNIT)::Float64)*interpolate_grid(setup.coulomb, pos_strip[i]) for i in 1:num_atoms)
+    coulomb_direct = sum((NoUnits(setup.molecule[i,:atomic_charge]/u"e_au"))*interpolate_grid(setup.coulomb, pos_strip[i]) for i in 1:num_atoms)
     newmolecule = ChangePositionSystem(setup.molecule, positions)
     host_adsorbate_reciprocal, adsorbate_adsorbate_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
     return (vdw, coulomb_direct + host_adsorbate_reciprocal + adsorbate_adsorbate_reciprocal)
@@ -168,7 +169,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
     stepC = (axeC / norm(axeC)) * step
     mat = setup.coulomb.mat
     invmat = setup.coulomb.invmat
-    __pos = position(setup.molecule) ./ ANG_UNIT
+    __pos = position(setup.molecule) / u"Å"
     rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == 0
         [[SVector{3}(p) for p in __pos]]
     # elseif num_rotate == -1
@@ -191,7 +192,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
         iA, iB, iC = Tuple(idx)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         if setup.block isa BitArray && num_rotate >= 0
-            a0, b0, c0 = floor.(Int, offsetpoint(thisofs./ANG_UNIT, mat, invmat, setup.coulomb.shift, setup.coulomb.size, setup.coulomb.dims))
+            a0, b0, c0 = floor.(Int, offsetpoint(NoUnits(thisofs/u"Å"), mat, invmat, setup.coulomb.shift, setup.coulomb.size, setup.coulomb.dims))
             a1 = a0 + 1; b1 = b0 + 1; c1 = c0 + 1;
             if setup.block[a0,b0,c0]+setup.block[a1,b0,c0]+setup.block[a0,b1,c0]+setup.block[a1,b1,c0]+setup.block[a0,b0,c1]+setup.block[a1,b0,c1]+setup.block[a0,b1,c1]+setup.block[a1,b1,c1] > 3
                 # grid[iA,iB,iC] = Inf
@@ -207,7 +208,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
             else
                 thisofs
             end
-            newval = sum(energy_point(setup, [SVector{3}(ofs + p*ANG_UNIT) for p in pos]))
+            newval = sum(energy_point(setup, [SVector{3}(ofs + p*u"Å") for p in pos]))
             # vals += newval
             # vals == Inf && break
             # minval = min(minval, newval)
@@ -215,7 +216,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
             # if newval < -10000
             #     @show iA, iB, iC
             #     @show ofs
-            #     @show SVector{3}(wrap_atom((ofs./ANG_UNIT) + p, mat, invmat)*ANG_UNIT for p in pos)
+            #     @show SVector{3}(wrap_atom(NoUnits.(ofs/u"Å") + p, mat, invmat)*u"Å" for p in pos)
             #     throw("!")
             # end
         end
