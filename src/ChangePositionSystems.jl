@@ -1,9 +1,11 @@
 # forwards calls to the underlying system, except for the positions which are fixed
-struct ChangePositionSystem{T<:AbstractSystem{3}} <: AbstractSystem{3}
+using Unitful
+
+struct ChangePositionSystem{N,T<:AbstractSystem{N}} <: AbstractSystem{N}
     system::T
-    positions::Vector{SVector{3,typeof(ANG_UNIT)}}
+    positions::Vector{SVector{N,typeof(1.0u"Å")}}
 end
-ChangePositionSystem(s::AbstractSystem{3}, poss) = ChangePositionSystem{typeof(s)}(s, [SVector{3,typeof(ANG_UNIT)}(p) for p in poss])
+ChangePositionSystem(s::AbstractSystem{N}, poss) where {N} = ChangePositionSystem{N,typeof(s)}(s, [SVector{N,typeof(1.0u"Å")}(p) for p in poss])
 ChangePositionSystem(s::ChangePositionSystem, poss) = ChangePositionSystem(s.system, poss)
 
 for f in (:boundary_conditions,
@@ -39,8 +41,8 @@ function Base.getindex(sys::ChangePositionSystem, i, s::Symbol)
     end
 end
 
-struct ChangePositionAtom{T<:AbstractSystem{3}}
-    cps::ChangePositionSystem{T}
+struct ChangePositionAtom{N,T<:AbstractSystem{N}}
+    cps::ChangePositionSystem{N,T}
     idx::Int
 end
 AtomsBase.position(cpa::ChangePositionAtom)      = AtomsBase.position(cpa.cps, cpa.idx)
@@ -62,5 +64,5 @@ Base.keys(v::ChangePositionSystem) = AtomsBase.atomkeys(v.cps)
 Base.pairs(at::ChangePositionSystem) = (k => at[k] for k in keys(at))
 
 
-AtomsBase.species_type(::ChangePositionSystem{T}) where {T} = ChangePositionAtom{T}
+AtomsBase.species_type(::ChangePositionSystem{N,T}) where {N,T} = ChangePositionAtom{N,T}
 Base.getindex(sys::ChangePositionSystem, i::Integer)  = ChangePositionAtom(sys, i)

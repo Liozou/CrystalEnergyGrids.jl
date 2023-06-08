@@ -133,10 +133,9 @@ function fraction_sites(egrid)
 end
 
 function is_zaxis_linear(system)
-    poss = position(system) ./ ANG_UNIT
-    n = length(poss)
+    poss = position(system) / u"Å"
     xpos = poss[1][1]; ypos = poss[1][2]
-    for (i, pos) in enumerate(poss)
+    for pos in poss
         pos[1] ≈ xpos || return false
         pos[2] ≈ ypos || return false
     end
@@ -146,7 +145,7 @@ end
 
 function is_zaxis_linear_symmetric(system, islin)
     islin || return false
-    poss = position(system) ./ ANG_UNIT
+    poss = position(system) / u"Å"
     n = length(poss)
     zpos = Vector{Float64}(undef, n)
     for (i, pos) in enumerate(poss)

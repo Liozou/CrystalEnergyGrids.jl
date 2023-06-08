@@ -250,7 +250,7 @@ Base.showerror(io::IO, ::UndefinedInteractionError) = print(io, "Undefined inter
 macro convertifnotfloat(unit, x)
     val = esc(x)
     quote
-        Float64($val isa Unitful.AbstractQuantity ? uconvert(NoUnits, $val/$unit) : $val)
+        Float64($val isa Unitful.AbstractQuantity ? NoUnits($val/$unit) : $val)
     end
 end
 
@@ -270,7 +270,7 @@ function (ik::FF.InteractionKind)(args...)
         Bexp = @convertifnotfloat u"Å^-1" args[2]
         InteractionRule(ik, [Aexp, Bexp])
     elseif ik === FF.Coulomb
-        if n == 2
+        rcoulomb = if n == 2
             q1 = @convertifnotfloat u"e_au" args[1]
             q2 = @convertifnotfloat u"e_au" args[2]
             InteractionRule(ik, [q1, q2])
@@ -279,6 +279,11 @@ function (ik::FF.InteractionKind)(args...)
             InteractionRule(ik, [q1only, q1only])
         else
             throw(InvalidParameterNumber(ik, n, [1, 2]))
+        end
+        if rcoulomb.params[1] == 0.0 || rcoulomb.params[2] == 0.0
+            InteractionRule(FF.NoInteraction, Float64[])
+        else
+            rcoulomb
         end
     elseif ik === FF.HardSphere
         if n == 2
@@ -305,14 +310,12 @@ function (ik::FF.InteractionKind)(args...)
     end
 end
 
-
-function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋,U} where {T,U})
-    r = uconvert(NoUnits, input/u"Å")
-    (if rule.kind === FF.LennardJones
+function (rule::InteractionRule)(r)
+    if rule.kind === FF.LennardJones
         x6lj = (rule.params[2]/r)^6
         4*rule.params[1]*x6lj*(x6lj - 1)
     elseif rule.kind === FF.Coulomb
-        (COULOMBIC_CONVERSION_FACTOR*ENERGY_TO_KELVIN/u"K")*rule.params[1]*rule.params[2]/r
+        NoUnits(COULOMBIC_CONVERSION_FACTOR*ENERGY_TO_KELVIN/u"K")*rule.params[1]*rule.params[2]/r
     elseif rule.kind === FF.HardSphere
         ifelse(r < rule.params[1] + rule.params[2], Inf, 0.0)
     elseif rule.kind === FF.Buckingham
@@ -327,11 +330,13 @@ function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋,U} where {T,U})
         throw(UndefinedInteractionError())
     else
         @assert false # logically impossible
-    end - rule.shift)*u"K"
+    end - rule.shift
 end
 
+(rule::InteractionRule)(input::Quantity{T,Unitful.𝐋,U} where {T,U}) = rule(NoUnits(input/u"Å"))*u"K"
+
 function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋^2,U} where {T,U})
-    r2 = uconvert(NoUnits, input/u"Å^2")
+    r2 = NoUnits(input/u"Å^2")
     (if rule.kind === FF.LennardJones
         σ2 = rule.params[2]^2
         x6lj = (σ2/r2)^3
@@ -343,12 +348,12 @@ function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋^2,U} where {T,U}
     elseif rule.kind === FF.Monomial
         rule.params[1]/r2^(rule.params[2]/2)
     else
-        return rule(sqrt(r2))
+        return rule(sqrt(r2))*u"K"
     end - rule.shift)*u"K"
 end
 
 function tailcorrection(rule::InteractionRule, cutoff::Float64)
-    (if !rule.tailcorrection || rule.kind === FF.NoInteraction || rule.kind === FF.HardSphere
+    (if !rule.tailcorrection || rule.kind === FF.NoInteraction || rule.kind === FF.HardSphere || isinf(cutoff)
         0.0
     elseif rule.kind === FF.LennardJones
         ε, σ = rule.params
@@ -359,7 +364,7 @@ function tailcorrection(rule::InteractionRule, cutoff::Float64)
         A, B, C = rule.params
         A*exp(-B*cutoff)*((2.0 + B*cutoff*(2.0 + B*cutoff))/B^3 - C/(3*cutoff^3))
     elseif rule.kind === FF.Coulomb
-        error("Coulomb direct pair interaction cannot have a tail correction: use Ewald sum.")
+        error("Coulomb direct pair interaction cannot have a tail correction: use Ewald summation.")
     elseif rule.kind === FF.UndefinedInteraction
         throw(UndefinedInteractionError())
     else
@@ -439,7 +444,7 @@ function Base.show(io::IO, f::InteractionRuleSum)
     print(io, ')')
 end
 function (f::InteractionRuleSum)(r)
-    ret = 0.0u"K"
+    ret = r isa Quantity ? 0.0u"K" : 0.0
     for x in f.rules
         ret += x(r)
     end

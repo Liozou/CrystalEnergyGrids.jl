@@ -2,6 +2,7 @@
 
 using DoubleArrayTries: DoubleArrayTrie, CommonPrefixSearch, lookup
 using AtomsIO
+using Unitful, UnitfulAtomic
 using Printf
 
 export setdir_RASPA!, getdir_RASPA
@@ -155,15 +156,15 @@ function parse_molecule_RASPA(file)
     @assert num_groups == 1
     @assert num_atoms == parse(Int, lines[7])
     @assert num_atoms == 1 || strip(lines[6]) == "rigid"
-    positions = Vector{SVector{3,typeof(ANG_UNIT)}}(undef, num_atoms)
+    positions = Vector{SVector{3,typeof(1.0u"Å")}}(undef, num_atoms)
     symbols = Vector{Symbol}(undef, num_atoms)
     for i in 1:num_atoms
         l = split(lines[7+i])
         symbols[i] = Symbol(l[2])
         positions[i] = if num_atoms == 1
-            zero(SVector{3,Float64})*ANG_UNIT
+            zero(SVector{3,Float64})*u"Å"
         else
-            SVector{3,Float64}(parse(Float64, l[3]), parse(Float64, l[4]), parse(Float64, l[5]))*ANG_UNIT
+            SVector{3,Float64}(parse(Float64, l[3]), parse(Float64, l[4]), parse(Float64, l[5]))*u"Å"
         end
     end
     (symbols, positions)
@@ -177,12 +178,12 @@ end
 Use `load_framework_RASPA`[@ref] or `load_molecule_RASPA`[@ref] to create one.
 """
 struct RASPASystem <: AbstractSystem{3}
-    bounding_box::SVector{3,SVector{3,typeof(ANG_UNIT)}}
-    position::Vector{SVector{3,typeof(ANG_UNIT)}}
+    bounding_box::SVector{3,SVector{3,typeof(1.0u"Å")}}
+    position::Vector{SVector{3,typeof(1.0u"Å")}}
     atomic_symbol::Vector{Symbol}
     atomic_number::Vector{Int}
-    atomic_mass::Vector{typeof(ATOMMASS_UNIT)}
-    atomic_charge::Vector{typeof(CHARGE_UNIT)}
+    atomic_mass::Vector{typeof(1.0u"u")}
+    atomic_charge::Vector{typeof(1.0u"e_au")}
 end
 AtomsBase.bounding_box(sys::RASPASystem)     = sys.bounding_box
 AtomsBase.boundary_conditions(sys::RASPASystem) = SVector{3,BoundaryCondition}(ntuple(Returns(ifelse(isinf(bounding_box(sys)[1][1]), DirichletZero(), Periodic())), 3))
@@ -219,12 +220,12 @@ function load_framework_RASPA(name::AbstractString, forcefield::AbstractString)
     cif = joinpath(raspa, "structures", "cif", splitext(name)[2] == ".cif" ? name : name*".cif")
     system = load_system(AtomsIO.ChemfilesParser(), cif)
     pseudoatoms = parse_pseudoatoms_RASPA(joinpath(raspa, "forcefield", forcefield, "pseudo_atoms.def"))
-    mass  = Vector{typeof(ATOMMASS_UNIT)}(undef, length(system))
-    charges = Vector{typeof(CHARGE_UNIT)}(undef, length(system))
+    mass  = Vector{typeof(1.0u"u")}(undef, length(system))
+    charges = Vector{typeof(1.0u"e_au")}(undef, length(system))
     for (i, atom) in enumerate(system)
         pseudo::PseudoAtomInfo = pseudoatoms[AtomsBase.atomic_symbol(atom)]
-        mass[i]    = pseudo.mass*ATOMMASS_UNIT
-        charges[i] = pseudo.charge*CHARGE_UNIT
+        mass[i]    = pseudo.mass*u"u"
+        charges[i] = pseudo.charge*u"e_au"
     end
     RASPASystem(AtomsBase.bounding_box(system), AtomsBase.position(system), AtomsBase.atomic_symbol(system), AtomsBase.atomic_number(system), mass, charges)
 end
@@ -245,19 +246,19 @@ function load_molecule_RASPA(name::AbstractString, forcefield::AbstractString, f
     raspa::String = getdir_RASPA()
     symbols, positions = parse_molecule_RASPA(joinpath(raspa, "molecules", forcefield, splitext(name)[2] == ".def" ? name : name*".def"))
     pseudoatoms = parse_pseudoatoms_RASPA(joinpath(raspa, "forcefield", framework_forcefield, "pseudo_atoms.def"))
-    mass  = Vector{typeof(ATOMMASS_UNIT)}(undef, length(symbols))
-    charges = Vector{typeof(CHARGE_UNIT)}(undef, length(symbols))
+    mass  = Vector{typeof(1.0u"u")}(undef, length(symbols))
+    charges = Vector{typeof(1.0u"e_au")}(undef, length(symbols))
     atom_numbers = Vector{Int}(undef, length(symbols))
     for (i, atom) in enumerate(symbols)
         pseudo::PseudoAtomInfo = pseudoatoms[atom]
-        mass[i]    = pseudo.mass*ATOMMASS_UNIT
-        charges[i] = pseudo.charge*CHARGE_UNIT
+        mass[i]    = pseudo.mass*1.0u"u"
+        charges[i] = pseudo.charge*1.0u"e_au"
         atom_numbers[i] = AtomsBase.element(pseudo.symbol).number
     end
     bbox = if framework_system !== nothing
         bounding_box(framework_system)
     else
-        SVector{3,SVector{3,typeof(ANG_UNIT)}}([[Inf, 0.0, 0.0]*ANG_UNIT, [0.0, Inf, 0.0]*ANG_UNIT, [0.0, 0.0, Inf]*ANG_UNIT])
+        SVector{3,SVector{3,typeof(1.0u"Å")}}([[Inf, 0.0, 0.0]*u"Å", [0.0, Inf, 0.0]*u"Å", [0.0, 0.0, Inf]*u"Å"])
     end
     RASPASystem(bbox, positions, symbols, atom_numbers, mass, charges)
 end
@@ -303,7 +304,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
     supercell_name = join(supercell, 'x')
     grid_dir = joinpath(raspa, "grids", forcefield_framework, framework, gridstep_name)
 
-    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst_framework)) ./ ANG_UNIT))
+    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst_framework)) / u"Å"))
     coulomb = parse_grid(joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid"), true, mat)
 
     syst_mol = load_molecule_RASPA(molecule, forcefield_molecule, forcefield_framework, syst_framework)
@@ -327,10 +328,10 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
 end
 
 
-function parse_interaction_RASPA(l, mixingrules::Bool, pseudoatoms::PseudoAtomListing)
+function parse_interaction_RASPA(l, mixingrules::Bool, pseudoatoms::PseudoAtomListing, shift::Bool, tailcorrection::Bool)
     splits = split(l)
     for (i, x) in enumerate(splits)
-        if x[1] == '#'
+        if x[1] == '#' || (length(x)>1 && x[1] == '/' && x[2] == '/')
             resize!(splits, i-1)
             break
         end
@@ -339,13 +340,14 @@ function parse_interaction_RASPA(l, mixingrules::Bool, pseudoatoms::PseudoAtomLi
     b = pseudoatoms[splits[2-mixingrules]].type
     kind = lowercase(splits[3-mixingrules])
     (a, b) => if kind == "lennard-jones"
-        InteractionRule(FF.LennardJones, parse.(Float64, splits[(4-mixingrules):end]))
+        InteractionRule(FF.LennardJones, parse.(Float64, splits[(4-mixingrules):end]), shift, tailcorrection)
     elseif kind == "none"
         FF.NoInteraction()
     elseif kind == "buckingham"
-        InteractionRule(FF.Buckingham, parse.(Float64, splits[(4-mixingrules):end]))
+        InteractionRule(FF.Buckingham, parse.(Float64, splits[(4-mixingrules):end]), shift, tailcorrection)
     elseif kind == "buckingham2"
-        InteractionRuleSum([InteractionRule(FF.Buckingham, parse.(Float64, splits[(4-mixingrules):(6-mixingrules)])), FF.HardSphere(parse(Float64, splits[(7-mixingrules)])/2)])
+        InteractionRuleSum([InteractionRule(FF.Buckingham, parse.(Float64, splits[(4-mixingrules):(6-mixingrules)]), shift, tailcorrection),
+                            InteractionRule(FF.HardSphere, [parse(Float64, splits[(7-mixingrules)]), 0.0], shift, tailcorrection)])
     else
         error(lazy"$kind interaction potential not implemented")
     end
@@ -388,16 +390,19 @@ function next_noncomment_line(lines, i)
 end
 
 """
-    parse_forcefield_RASPA(name, [pseudoatoms::PseudoAtomListing]; ewald=true)
+    parse_forcefield_RASPA(name, [pseudoatoms::PseudoAtomListing]; cutoff=12.0u"Å", ewald=!isinf(cutoff))
 
 Return a [`ForceField`](@ref) parsed from that called `name` in the RASPA directory. If
 separately precomputed, the [`PseudoAtomListing`] can be provided.
 
+`cutoff` specifies the interaction cutoff.
+
 If `ewald` is unset, the returned force field will include direct [`Coulomb`](@ref) pair
-interactions between all charged species. By default, `ewald` is set, which means that
-coulombic interactions are not computed directly, but through Ewald summation technique.
+interactions between all charged species. By default, `ewald` is set (unless there is no
+cutoff), which means that coulombic interactions are not computed directly, but through
+Ewald summation technique.
 """
-function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseudoatoms_RASPA(joinpath(RASPADIR[], "forcefield", name, "pseudo_atoms.def")); ewald=true)
+function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseudoatoms_RASPA(joinpath(RASPADIR[], "forcefield", name, "pseudo_atoms.def")); cutoff=12.0u"Å", ewald=!isinf(cutoff))
     input = Pair{Tuple{Symbol,Symbol},Union{InteractionRule,InteractionRuleSum}}[]
     general_mixingrule = FF.ErrorOnMix
     shift = true
@@ -414,14 +419,15 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         num_interactions_ffmr = parse(Int, lines_ffmr[idx])
         for i in 1:num_interactions_ffmr
             idx = next_noncomment_line(lines_ffmr, idx)
-            interaction = parse_interaction_RASPA(lines_ffmr[idx], true, pseudoatoms)
+            interaction = parse_interaction_RASPA(lines_ffmr[idx], true, pseudoatoms, shift, tailcorrection)
             sdict[interaction[1][1]] = i
             push!(input, interaction)
         end
         idx = next_noncomment_line(lines_ffmr, idx)
         general_mixingrule = parse_mixingrule_RASPA(lines_ffmr[idx])
     end
-    ff = ForceField(input, general_mixingrule, 12.0, shift, tailcorrection, sdict)
+    nounitscutoff = @convertifnotfloat u"Å" cutoff
+    ff = ForceField(input, general_mixingrule, nounitscutoff, shift, tailcorrection, sdict)
     ff_def = joinpath(RASPADIR[], "forcefield", name, "force_field.def")
     if isfile(ff_def)
         lines_ff = readlines(ff_def)
@@ -435,7 +441,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         numnewinteractions = parse(Int, lines_ff[jdx])
         for _ in 1:numnewinteractions
             jdx = next_noncomment_line(lines_ff, jdx)
-            (x1, y1), newinteraction = parse_interaction_RASPA(lines_ff[jdx], false, pseudoatoms)
+            (x1, y1), newinteraction = parse_interaction_RASPA(lines_ff[jdx], false, pseudoatoms, shift, tailcorrection)
             i1, j1 = forcefield_indices(x1, y1, sdict)
             ff.interactions[i1,j1] = ff.interactions[j1,i1] = newinteraction
         end
@@ -458,15 +464,17 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
             newtailcorrection = parse_yesno(_newtailcorrection)
             i3, j3 = forcefield_indices(x3, y3, sdict)
             ff.interactions[i3,j3] = ff.interactions[j3,i3] = map_rule(ff.interactions[i3,j3]) do r
-                InteractionRule(r.kind, r.params, newshift ? InteractionRule(r.kind, r.params, 0.0)(12.0) : 0.0, newtailcorrection)
+                InteractionRule(r.kind, r.params, newshift ? InteractionRule(r.kind, r.params, 0.0, false)(nounitscutoff) : 0.0, newtailcorrection)
             end
         end
     end
     if !ewald
         for (ati4, i4) in sdict
             chargei = pseudoatoms[ati4].charge
+            chargei == 0.0 && continue
             for (atj4, j4) in sdict
                 chargej = pseudoatoms[atj4].charge
+                chargej == 0.0 && continue
                 ff.interactions[i4,j4] = sum_rules(ff.interactions[i4,j4], InteractionRule(FF.Coulomb, [chargei, chargej], 0.0, false))
             end
         end

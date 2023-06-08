@@ -37,7 +37,7 @@ function setup_Eik(systems, numsites, kx, ky, kz, invmat, (superA, superB, super
                 Eikz[i] = 1.0
                 i₊ = numsites+i
                 i₋ = -numsites+i
-                px, py, pz = invmat * (position(syst, j) ./ ANG_UNIT)
+                px, py, pz = invmat * (NoUnits.(position(syst, j)/u"Å"))
                 px = 2π*(px + sA/superA)
                 py = 2π*(py + sB/superB)
                 pz = 2π*(pz + sC/superC)
@@ -110,7 +110,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
     α = sqrt(abs(log(ε*tol)))/cutoff_coulomb
     tol1 = sqrt(-log(ε*4.0*(tol*α)^2))
 
-    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst) .* supercell) ./ ANG_UNIT))
+    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst) .* supercell) / u"Å"))
     len_a, len_b, len_c = cell_lengths(mat)
     volume = abs(det(mat))
     __α = α*tol1/π
@@ -160,7 +160,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
     numsites = length(syst)*Π
 
     UIon = COULOMBIC_CONVERSION_FACTOR*α/sqrt(π) - sum(kfactors)
-    charges::Vector{Float64} = syst[:,:atomic_charge] ./ CHARGE_UNIT
+    charges::Vector{Float64} = Float64.(syst[:,:atomic_charge]/u"e_au")
     energy_framework_self = sum(abs2, charges)*(COULOMBIC_CONVERSION_FACTOR/sqrt(π))*α
 
     Eikx, Eiky, Eikz = setup_Eik((syst,), numsites, kx, ky, kz, invmat, supercell)
@@ -180,7 +180,7 @@ end
 function compute_ewald((α, kx, ky, kz, invmat, recip_cutoff2, num_kvecs, volume_factor, energy_framework_self, kfactors, UIon, StoreRigidChargeFramework, net_charges_framework),
                        systems)
     numsites = sum(length, systems)
-    allcharges::Vector{Vector{Float64}} = [syst[:,:atomic_charge] ./ CHARGE_UNIT for syst in systems]
+    allcharges::Vector{Vector{Float64}} = [Float64.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*α
     energy_adsorbate_self = sum(sum(abs2, charges)*chargefactor for charges in allcharges)
     net_charges = sum(sum(charges) for charges in allcharges)
@@ -207,10 +207,10 @@ function compute_ewald((α, kx, ky, kz, invmat, recip_cutoff2, num_kvecs, volume
         n = length(syst)
         for atomA in 1:n
             chargeA = charges[atomA]
-            posA = position(syst, atomA) ./ ANG_UNIT
+            posA = Float64.(position(syst, atomA)/u"Å")
             for atomB in (atomA+1):n
                 chargeB = charges[atomB]
-                posB = position(syst, atomB) ./ ANG_UNIT
+                posB = Float64.(position(syst, atomB)/u"Å")
                 r = norm(posB .- posA)
                 energy_adsorbate_excluded += erf(α*r)*chargeA*chargeB/r
             end

@@ -90,11 +90,6 @@ const COEFF = Float64.(
     8 -8 -8 8 -8 8 8 -8 4 4 -4 -4 -4 -4 4 4 4 -4 4 -4 -4 4 -4 4 4 -4 -4 4 4 -4 -4 4 2 2 2 2 -2 -2 -2 -2 2 2 -2 -2 2 2 -2 -2 2 -2 2 -2 2 -2 2 -2 1 1 1 1 1 1 1 1]
 )
 
-# definitions from Unitful
-const ANG_UNIT = 1.0u"Å"
-const CHARGE_UNIT = 1.0u"e_au"
-const ATOMMASS_UNIT = 1.0u"u"
-
 # Van der Waals state equation coefficients (from the Handbook (?))
 const VDW_COEFF = Dict{String,Tuple{Float64,Float64}}(
     "H2"    => (0.2476, 0.02661),
