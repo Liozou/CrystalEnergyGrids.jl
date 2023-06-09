@@ -247,3 +247,60 @@ logexpm1(x::Float64) = x < 18.021826694558577 ? log(expm1(x)) : x < 33.231118823
 logistic(x::Float64) = x < -744.4400719213812 ? 0.0 : x < 36.7368005696771 ? (e = exp(x); e/(1.0 + e)) : 1.0
 
 linreg(x, y) = hcat(fill!(similar(x), 1), x) \ y
+
+const ALLATOMS = Set(["D", "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og", "Uue"])
+
+function identify_atom(symb)
+    s = titlecase(split(String(symb), x -> x === 'w' || !isletter(x); limit=2)[1]; strict=true)
+    while s != "" && s ∉ ALLATOMS
+        s = s[1:prevind(s, end)]
+    end
+    s
+end
+
+"""
+    identify_molecule(atomsymbols)
+
+Given `atomsymbols`, a list of `Symbol`s corresponding to atoms of a molecule, attempts to
+retrieve the name of the molecule.
+
+Examples:
+```jldoctest
+julia> CrystalEnergyGrids.identify_molecule([:Oa, :C_co2, :Ob])
+"CO2"
+
+julia> CrystalEnergyGris.identify_molecule([:Hw, :O5, :Hz])
+"H2O"
+```
+"""
+function identify_molecule(atomsymbols)
+    symbs = unique!(sort(atomsymbols))
+    atoms = identify_atom.(symbs)
+    I = sortperm(atoms)
+    n = length(symbs)
+    vmap = Vector{Int}(undef, n)
+    last_symbol = Symbol("")
+    m = 0
+    for i in 1:n
+        j = I[i]
+        if atoms[j] != last_symbol
+            last_symbol = atoms[j]
+            m += 1
+        end
+        vmap[j] = m
+    end
+    unique!(atoms)
+    dict = Dict(s => vmap[i] for (i,s) in enumerate(symbs))
+    nums = [0 for _ in 1:m]
+    for s in atomsymbols
+        nums[dict[s]] += 1
+    end
+    parts = String[]
+    for i in 1:m
+        push!(parts, atoms[i])
+        if nums[i] > 1
+            push!(parts, string(nums[i]))
+        end
+    end
+    join(parts)
+end
