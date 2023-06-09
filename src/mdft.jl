@@ -7,7 +7,7 @@ using Base.Threads
 
 FFTW.set_num_threads(nthreads()÷2)
 
-export IdealGasProblem, MonoAtomic
+export isotherm_hnc, IdealGasProblem, MonoAtomic
 
 abstract type MDFTProblem <: Function end
 
@@ -30,6 +30,11 @@ function IdealGasProblem(gasname::String, T::Float64, P::Float64, externalV::Arr
     # inv(x) is ρ₀ in mol/L
     ρ₀ = inv(x) * 6.02214076e-4 # Nₐ×1e-27
     IdealGasProblem(T, P, ρ₀, externalV, δv)
+end
+function IdealGasProblem(gasname::String, T::Float64, P::Float64, externalV::Array{Float64,3}, mat::AbstractMatrix)
+    a1, a2, a3 = size(externalV)
+    δv = det(mat)/(a1*a2*a3)
+    IdealGasProblem(gasname, T, P, externalV, δv)
 end
 
 
@@ -166,4 +171,18 @@ function finaldensity(ma::MonoAtomic, opt)
     ψ = Optim.minimizer(opt)
     ρ = ma.igp.ρ₀ .* ψ.^2
     sum(ρ)*ma.igp.δv
+end
+
+function isotherm_hnc(ff::ForceField, mol::AbstractSystem, egrid, temperature, pressures, mat;
+                      molname=identify_molecule(atomic_symbol(mol)), qdht=QDHT{0,2}(100, 1000))
+    potential = compute_average_self_potential(mol, ff, qdht.r)
+    isotherm = Vector{Float64}(undef, length(pressures))
+    for (i, P) in enumerate(pressures)
+        @show P
+        igp = IdealGasProblem(molname, temperature, P, egrid, mat)
+        c, _ = hnc(potential, qdht.R, temperature, igp.ρ₀; qdht);
+        ma = MonoAtomic(molname, temperature, P, egrid, qdht, qdht * c, mat)
+        isotherm[i] = finaldensity(ma, mdft(ma))
+    end
+    isotherm
 end
