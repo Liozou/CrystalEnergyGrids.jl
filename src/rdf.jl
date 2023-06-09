@@ -134,7 +134,7 @@ function parse_rdf_chemfiles(file, maxdist=30.0, nbins=1000; skipmolid=true)
         for i in 1:n, j in (i+1):n
             buffer .= moleculepos[i] .- moleculepos[j]
             idx = 1 + floor(Int, periodic_distance!(buffer, mat, ortho, safemin)/ϵ)
-            idx == 69 && (@show(i_frame, i, j, groups[i], groups[j]); throw(""))
+            # idx == 69 && (@show(i_frame, i, j, groups[i], groups[j]); throw(""))
             idx > nbins && continue
             threadbins[threadid(), idx] += 1
         end
@@ -176,3 +176,45 @@ function parse_rdf(file, maxdist=30.0, nbins=1000; skipmolid=true)
 end
 
 rdf2tcf(rdf) = rdf ./ mean(rdf[end-div(length(rdf), 10):end]) .- 1
+
+
+function compute_average_self_potential(mol::AbstractSystem, ff::ForceField, range, numrot_hint=30)
+    rots, weights = get_rotation_matrices(mol, numrot_hint)
+    numrot = length(rots)
+    @assert numrot == length(weights)
+    n = length(range)
+    rs = eltype(range) isa Quantity ? range : range * u"Å"
+    T = eltype(rs)
+    poss0 = position(mol)
+    molposs = [[SVector{3}(r*p) for p in poss0] for r in rots]
+    model = SimulationStep(ff, [mol], [[poss0, copy(poss0)]])
+    vs = Matrix{Float64}(undef, numrot, n)
+    v = dropdims(mean(vs; dims=1); dims=1)
+    Base.Threads.@threads for i in 1:n
+        offset = SVector{3,T}(zero(T), zero(T), rs[i])
+        Base.Threads.@threads for j in 1:numrot
+            tot = 0.0u"K"
+            system = unalias_position(update_position(model, (1,1), molposs[j]), (1,2))
+            for (k, weight) in enumerate(weights)
+                update_position!(system, (1,2), molposs[k] .+ (offset,))
+                tot += weight*energy_nocutoff(system)
+            end
+            vs[j,i] = NoUnits(tot/u"K")
+        end
+        tot2 = 0.0
+        for (j, weight) in enumerate(weights)
+            tot2 += weight*vs[j,i]
+        end
+        v[i] = tot2/(4π)^2
+    end
+    flag = false
+    for i in n:-1:1 # fill the unphysical part close to 0 with value 1e8
+        if !flag && v[i] > 1e8
+            flag = true
+        end
+        if flag
+            v[i] = 1e8
+        end
+    end
+    eltype(range) isa Quantity ? v*u"K" : v
+end

@@ -75,7 +75,6 @@ function hnc(v::AbstractVector{S}, R, T, ρ, ε=1e-8; qdht=QDHT{0,2}(R,length(v)
         @. γ = λ*γ2 + $(1-λ)*γ
 
         # global_iter % 300 == 0 && @show η, τ, outer_iter
-        # @show η
     end
     # @show global_iter
     c, γ
