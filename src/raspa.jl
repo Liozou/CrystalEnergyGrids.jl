@@ -202,7 +202,8 @@ function Base.getindex(system::RASPASystem, x::Symbol)
     x === :boundary_conditions && return boundary_conditions(system)
     throw(KeyError("Key $x not found"))
 end
-Base.keys(::RASPASystem)          = (:bounding_box, :boundary_conditions)
+Base.keys(::RASPASystem) = (:bounding_box, :boundary_conditions)
+Base.haskey(::RASPASystem, x::Symbol) = (x === :bounding_box) | (x === :boundary_conditions)
 AtomsBase.atomkeys(::RASPASystem) = (:position, :atomic_symbol, :atomic_number, :atomic_mass, :atomic_charge)
 AtomsBase.hasatomkey(system::RASPASystem, x::Symbol)      = x in atomkeys(system)
 Base.getindex(system::RASPASystem, i::Integer, x::Symbol) = getfield(system, x)[i]
@@ -328,7 +329,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
 end
 
 
-function parse_interaction_RASPA(l, mixingrules::Bool, pseudoatoms::PseudoAtomListing, shift::Bool, tailcorrection::Bool)
+function parse_interaction_RASPA(l, mixingrules::Bool, pseudoatoms::PseudoAtomListing, shift::Bool, cutoff, tailcorrection::Bool)
     splits = split(l)
     for (i, x) in enumerate(splits)
         if x[1] == '#' || (length(x)>1 && x[1] == '/' && x[2] == '/')
@@ -340,14 +341,14 @@ function parse_interaction_RASPA(l, mixingrules::Bool, pseudoatoms::PseudoAtomLi
     b = pseudoatoms[splits[2-mixingrules]].type
     kind = lowercase(splits[3-mixingrules])
     (a, b) => if kind == "lennard-jones"
-        InteractionRule(FF.LennardJones, parse.(Float64, splits[(4-mixingrules):end]), shift, tailcorrection)
+        InteractionRule(FF.LennardJones, parse.(Float64, splits[(4-mixingrules):end]), shift, cutoff, tailcorrection)
     elseif kind == "none"
         FF.NoInteraction()
     elseif kind == "buckingham"
-        InteractionRule(FF.Buckingham, parse.(Float64, splits[(4-mixingrules):end]), shift, tailcorrection)
+        InteractionRule(FF.Buckingham, parse.(Float64, splits[(4-mixingrules):end]), shift, cutoff, tailcorrection)
     elseif kind == "buckingham2"
-        InteractionRuleSum([InteractionRule(FF.Buckingham, parse.(Float64, splits[(4-mixingrules):(6-mixingrules)]), shift, tailcorrection),
-                            InteractionRule(FF.HardSphere, [parse(Float64, splits[(7-mixingrules)]), 0.0], shift, tailcorrection)])
+        InteractionRuleSum([InteractionRule(FF.Buckingham, parse.(Float64, splits[(4-mixingrules):(6-mixingrules)]), shift, cutoff, tailcorrection),
+                            InteractionRule(FF.HardSphere, [parse(Float64, splits[(7-mixingrules)]), 0.0], shift, cutoff, tailcorrection)])
     else
         error(lazy"$kind interaction potential not implemented")
     end
@@ -419,15 +420,14 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         num_interactions_ffmr = parse(Int, lines_ffmr[idx])
         for i in 1:num_interactions_ffmr
             idx = next_noncomment_line(lines_ffmr, idx)
-            interaction = parse_interaction_RASPA(lines_ffmr[idx], true, pseudoatoms, shift, tailcorrection)
+            interaction = parse_interaction_RASPA(lines_ffmr[idx], true, pseudoatoms, shift, cutoff, tailcorrection)
             sdict[interaction[1][1]] = i
             push!(input, interaction)
         end
         idx = next_noncomment_line(lines_ffmr, idx)
         general_mixingrule = parse_mixingrule_RASPA(lines_ffmr[idx])
     end
-    nounitscutoff = @convertifnotfloat u"Å" cutoff
-    ff = ForceField(input, general_mixingrule, nounitscutoff, shift, tailcorrection, sdict)
+    ff = ForceField(input, general_mixingrule, cutoff, shift, tailcorrection, sdict)
     ff_def = joinpath(RASPADIR[], "forcefield", name, "force_field.def")
     if isfile(ff_def)
         lines_ff = readlines(ff_def)
@@ -441,7 +441,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         numnewinteractions = parse(Int, lines_ff[jdx])
         for _ in 1:numnewinteractions
             jdx = next_noncomment_line(lines_ff, jdx)
-            (x1, y1), newinteraction = parse_interaction_RASPA(lines_ff[jdx], false, pseudoatoms, shift, tailcorrection)
+            (x1, y1), newinteraction = parse_interaction_RASPA(lines_ff[jdx], false, pseudoatoms, shift, cutoff, tailcorrection)
             i1, j1 = forcefield_indices(x1, y1, sdict)
             ff.interactions[i1,j1] = ff.interactions[j1,i1] = newinteraction
         end
@@ -464,7 +464,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
             newtailcorrection = parse_yesno(_newtailcorrection)
             i3, j3 = forcefield_indices(x3, y3, sdict)
             ff.interactions[i3,j3] = ff.interactions[j3,i3] = map_rule(ff.interactions[i3,j3]) do r
-                InteractionRule(r.kind, r.params, newshift ? InteractionRule(r.kind, r.params, 0.0, false)(nounitscutoff) : 0.0, newtailcorrection)
+                InteractionRule(r.kind, r.params, newshift, cutoff, newtailcorrection)
             end
         end
     end
@@ -479,5 +479,5 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
             end
         end
     end
-    ff
+    ForceField(ff.interactions, ff.sdict, ff.cutoff)
 end

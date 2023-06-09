@@ -5,7 +5,7 @@ export ForceField
 struct ForceField
     interactions::Matrix{Union{InteractionRule,InteractionRuleSum}}
     sdict::IdDict{Symbol,Int}
-    cutoff::Float64
+    cutoff::typeof(1.0u"Å")
 end
 
 # struct MissingInteractionRule <: Exception
@@ -176,8 +176,9 @@ function map_rule(f, rule)
     end
 end
 
+
 """
-    ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff::Float64=12.0, shift::Bool=true, tailcorrection::Bool=!shift, sdict::Union{Nothing,IdDict{Symbol,Int}}=nothing)
+    ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å", shift::Bool=true, tailcorrection::Bool=!shift, sdict::Union{Nothing,IdDict{Symbol,Int}}=nothing)
 
 Build a force field from a description of the pairwise interactions.
 
@@ -199,7 +200,7 @@ If `shift` is set, the pair potentials are shifted to equal zero at the cutoff.
 If provided, `sdict` should be an `IdDict{Symbol,Int}` linking each species symbol to its
 unique identifier. Identifiers populate the range `1:n` (where `n == length(sdict)`).
 """
-function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff::Float64=12.0, shift::Bool=true, tailcorrection::Bool=!shift, sdict::Union{Nothing,IdDict{Symbol,Int}}=nothing)
+function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å", shift::Bool=true, tailcorrection::Bool=!shift, sdict::Union{Nothing,IdDict{Symbol,Int}}=nothing)
     smap::IdDict{Symbol,Int} = if sdict isa Nothing
         allatoms = Vector{Symbol}(undef, 2*length(input))
         for (i, ((a, b), _)) in enumerate(input)
@@ -249,8 +250,7 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff::Float64=
     if shift
         for i in 1:n, j in (i+1):n
             interactions[i,j] = interactions[j,i] = map_rule(interactions[i,j]) do r
-                r0 = r.shift == 0.0 ? r : InteractionRule(r.kind, r.params, 0.0)
-                InteractionRule(r.kind, r.params, r0(cutoff), tailcorrection)
+                ShiftedInteractionRule(r, cutoff)
             end
         end
     end

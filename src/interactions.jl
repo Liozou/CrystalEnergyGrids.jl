@@ -214,7 +214,7 @@ julia> lj_argon(4.5u"Å) # energy in K
 struct InteractionRule
     kind::FF.InteractionKind
     params::Vector{Float64} # units are documented for each interaction kind
-    shift::Float64
+    shift::Float64 # in K
     tailcorrection::Bool
 end
 InteractionRule(kind::FF.InteractionKind, params::Vector{Float64}) = InteractionRule(kind, params, 0.0, true)
@@ -310,6 +310,23 @@ function (ik::FF.InteractionKind)(args...)
     end
 end
 
+struct ShiftedInteractionRule end
+function ShiftedInteractionRule(kind::FF.InteractionKind, params::Vector{Float64}, cutoff, tailcorrection::Bool=false)
+    cut = @convertifnotfloat u"Å" cutoff
+    rule = InteractionRule(kind, params, 0.0, false)
+    InteractionRule(kind, params, rule(cut), tailcorrection)
+end
+function ShiftedInteractionRule(rule::InteractionRule, cutoff)
+    ShiftedInteractionRule(rule.kind, rule.params, cutoff, rule.tailcorrection)
+end
+function InteractionRule(kind::FF.InteractionKind, params::Vector{Float64}, shift::Bool, cutoff, tailcorrection::Bool=!shift)
+    if shift
+        ShiftedInteractionRule(kind, params, cutoff, tailcorrection)
+    else
+        InteractionRule(kind, params, 0.0, tailcorrection)
+    end
+end
+
 function (rule::InteractionRule)(r)
     if rule.kind === FF.LennardJones
         x6lj = (rule.params[2]/r)^6
@@ -333,7 +350,7 @@ function (rule::InteractionRule)(r)
     end - rule.shift
 end
 
-(rule::InteractionRule)(input::Quantity{T,Unitful.𝐋,U} where {T,U}) = rule(NoUnits(input/u"Å"))*u"K"
+(rule::InteractionRule)(input::Quantity{T,Unitful.𝐋,U} where {T,U}) = ((@show input, rule); rule(NoUnits(input/u"Å"))*u"K")
 
 function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋^2,U} where {T,U})
     r2 = NoUnits(input/u"Å^2")
@@ -352,17 +369,18 @@ function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋^2,U} where {T,U}
     end - rule.shift)*u"K"
 end
 
-function tailcorrection(rule::InteractionRule, cutoff::Float64)
+function tailcorrection(rule::InteractionRule, cutoff)
+    cut = @convertifnotfloat u"Å" cutoff
     (if !rule.tailcorrection || rule.kind === FF.NoInteraction || rule.kind === FF.HardSphere || isinf(cutoff)
         0.0
     elseif rule.kind === FF.LennardJones
         ε, σ = rule.params
-        xlj3 = (σ/cutoff)^3
+        xlj3 = (σ/cut)^3
         xlj9 = xlj3^3
         (4/3)*ε*σ^3*(xlj9/3 - xlj3)
     elseif rule.kind === FF.Buckingham
         A, B, C = rule.params
-        A*exp(-B*cutoff)*((2.0 + B*cutoff*(2.0 + B*cutoff))/B^3 - C/(3*cutoff^3))
+        A*exp(-B*cut)*((2.0 + B*cut*(2.0 + B*cut))/B^3 - C/(3*cut^3))
     elseif rule.kind === FF.Coulomb
         error("Coulomb direct pair interaction cannot have a tail correction: use Ewald summation.")
     elseif rule.kind === FF.UndefinedInteraction
@@ -485,7 +503,7 @@ function sum_rules(r1, r2)
     end
 end
 
-function tailcorrection(f::InteractionRuleSum, cutoff::Float64)
+function tailcorrection(f::InteractionRuleSum, cutoff)
     ret = 0.0u"K"
     for x in f.rules
         ret += tailcorrection(x, cutoff)
