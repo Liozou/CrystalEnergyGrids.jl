@@ -6,6 +6,8 @@ const _rotmatrix = SMatrix{3,3,Float64,9}([-0.17963068200890037 -0.2195382735260
 const lebedev_path = artifact"lebedev"
 const lebedev_sizes = sort!([parse(Int, i) for i in readdir(lebedev_path)])
 
+export get_rotation_matrices
+
 struct LebedevGrid
     size::Int32
     degree::Int32
@@ -47,4 +49,33 @@ function get_lebedev(size, islinearsymmetric)
     ret = read_lebedev_grid(joinpath(lebedev_path, string(kept)), islinearsymmetric)
     # ret.size != size && @info "Using a Lebedev grid of size $(ret.size)"
     ret
+end
+
+"""
+    get_rotation_matrices(mol::AbstractSystem, num)
+
+Return a tuple `(rots, weights)` where:
+- `rots` is a list of 3×3 rotation matrices
+- `weights` is the list of their corresponding weight
+
+With these, it is possible to approximate ``∫f(θ,ϕ,ψ) dθ dϕ dψ``, where `f` is a function
+of the orientation of system `mol` along the three Euler angles `θ`, `φ` and `ψ`, by:
+```julia
+sum(weight * f(ChangePositionSystem(mol, (rot,) .* position(mol))) for (rot, weight) in zip(rots, weights))
+```
+
+!!! note
+    In order to compute the average of `f`, the result should be divided by 4π since
+    `sum(weights) == 4π`
+"""
+function get_rotation_matrices(mol::AbstractSystem, num)
+    islin = is_zaxis_linear(mol)
+    issym = is_zaxis_linear_symmetric(mol, islin)
+    lebedev = get_lebedev(islin ? num : div(num, 5), issym)
+    zrots = [SMatrix{3,3,Float64,9}([cospi(2i/5) -sinpi(2i/5) 0; sinpi(2i/5) cospi(2i/5) 0; 0 0 1]) for i in 0:(4-4islin)]
+    rots = SMatrix{3,3,Float64,9}[]
+    for zrot in zrots, point in lebedev.points
+        push!(rots, SMatrix{3,3,Float64,9}(hcat([1, 0, 0], [0, 1, 0], point))*zrot)
+    end
+    rots, (islin ? lebedev.weights : repeat(lebedev.weights, 5)./5)
 end

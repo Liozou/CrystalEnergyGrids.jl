@@ -175,16 +175,8 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=30)
     # elseif num_rotate == -1
         # [__pos, __switch_yz.(__pos), __switch_xz.(__pos)]
     else
-        islin = is_zaxis_linear(setup.molecule)
-        issym = is_zaxis_linear_symmetric(setup.molecule, islin)
-        lebedev = get_lebedev(islin ? num_rotate : div(num_rotate, 5), issym)
-        zrots = [SMatrix{3,3,Float64,9}([cospi(2i/5) -sinpi(2i/5) 0; sinpi(2i/5) cospi(2i/5) 0; 0 0 1]) for i in 0:(4-4islin)]
-        _rotpos = Vector{SVector{3,Float64}}[]
-        for zrot in zrots, point in lebedev.points
-            rmat = SMatrix{3,3,Float64,9}(hcat([1, 0, 0], [0, 1, 0], point))*zrot
-            push!(_rotpos, [SVector{3}(rmat*p) for p in __pos])
-        end
-        _rotpos
+        rots, _ = get_rotation_matrices(setup.molecule, num_rotate)
+        [[SVector{3}(r*p) for p in __pos] for r in rots]
     end
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
     allvals .= NaN
