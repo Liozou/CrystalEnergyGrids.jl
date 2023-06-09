@@ -26,7 +26,7 @@ for f in (:atomic_mass,
           :velocity,
          )
     @eval AtomsBase.$f(m::ChangePositionSystem) = AtomsBase.$f(m.system)
-    @eval AtomsBase.$f(m::ChangePositionSystem, i) = atomsBase.$f(m.system, i)
+    @eval AtomsBase.$f(m::ChangePositionSystem, i) = AtomsBase.$f(m.system, i)
 end
 AtomsBase.hasatomkey(m::ChangePositionSystem, x::Symbol) = AtomsBase.hasatomkey(m.system, x)
 
@@ -41,27 +41,48 @@ function Base.getindex(sys::ChangePositionSystem, i, s::Symbol)
     end
 end
 
+Base.haskey(v::ChangePositionSystem, x::Symbol) = x === :position || haskey(v.system, x)
+function Base.get(v::ChangePositionSystem, x::Symbol, default)
+    x === :position ? v.positions : get(v.system, x, default)
+end
+function Base.getindex(v::ChangePositionSystem, x::Symbol)
+    x === :position ? v.positions : getindex(v.system, x)
+end
+function Base.keys(v::ChangePositionSystem)
+    if haskey(v.system, :position)
+        keys(v.system)
+    else
+        (:position, keys(v.system)...)
+    end
+end
+
+
 struct ChangePositionAtom{N,T<:AbstractSystem{N}}
     cps::ChangePositionSystem{N,T}
     idx::Int
 end
 AtomsBase.position(cpa::ChangePositionAtom)      = AtomsBase.position(cpa.cps, cpa.idx)
-AtomsBase.atomic_mass(cpa::ChangePositionAtom)   = AtomsBase.atomic_mass(cpa.cps, cpa.idx)
-AtomsBase.atomic_symbol(cpa::ChangePositionAtom) = AtomsBase.atomic_symbol(cpa.cps, cpa.idx)
-AtomsBase.atomic_number(cpa::ChangePositionAtom) = AtomsBase.atomic_number(cpa.cps, cpa.idx)
+
+for f in (:atomic_mass,
+    :atomic_number,
+    :atomic_symbol,
+    :velocity,
+)
+@eval AtomsBase.$f(m::ChangePositionAtom) = AtomsBase.$f(m.cps, m.idx)
+end
 AtomsBase.n_dimensions(cpa::ChangePositionAtom)  = AtomsBase.n_dimensions(cpa.cps)
 AtomsBase.element(cpa::ChangePositionAtom)       = AtomsBase.element(AtomsBase.atomic_number(cpa))
 
 Base.show(io::IO, at::ChangePositionAtom) = AtomsBase.show_atom(io, at)
 Base.show(io::IO, mime::MIME"text/plain", at::ChangePositionAtom) = AtomsBase.show_atom(io, mime, at)
 
-Base.getindex(v::ChangePositionSystem, x::Symbol) = getindex(v.cps, v.idx, x)
-Base.haskey(v::ChangePositionSystem, x::Symbol)   = hasatomkey(v.cps, x)
-function Base.get(v::ChangePositionSystem, x::Symbol, default)
+Base.getindex(v::ChangePositionAtom, x::Symbol) = getindex(v.cps, v.idx, x)
+Base.haskey(v::ChangePositionAtom, x::Symbol)   = hasatomkey(v.cps, x)
+function Base.get(v::ChangePositionAtom, x::Symbol, default)
     AtomsBase.hasatomkey(v.cps, x) ? v[x] : default
 end
-Base.keys(v::ChangePositionSystem) = AtomsBase.atomkeys(v.cps)
-Base.pairs(at::ChangePositionSystem) = (k => at[k] for k in keys(at))
+Base.keys(v::ChangePositionAtom) = AtomsBase.atomkeys(v.cps)
+Base.pairs(at::ChangePositionAtom) = (k => at[k] for k in keys(at))
 
 
 AtomsBase.species_type(::ChangePositionSystem{N,T}) where {N,T} = ChangePositionAtom{N,T}
