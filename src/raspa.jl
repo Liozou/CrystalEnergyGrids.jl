@@ -427,7 +427,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         idx = next_noncomment_line(lines_ffmr, idx)
         general_mixingrule = parse_mixingrule_RASPA(lines_ffmr[idx])
     end
-    ff = ForceField(input, general_mixingrule, cutoff, shift, tailcorrection, sdict)
+    ff = ForceField(input, general_mixingrule, cutoff, shift, tailcorrection; sdict, name)
     ff_def = joinpath(RASPADIR[], "forcefield", name, "force_field.def")
     if isfile(ff_def)
         lines_ff = readlines(ff_def)
@@ -479,5 +479,5 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
             end
         end
     end
-    ForceField(ff.interactions, ff.sdict, ff.cutoff)
+    ForceField(ff.interactions, ff.sdict, ff.cutoff, name)
 end

@@ -222,7 +222,7 @@ function Base.show(io::IO, ik::InteractionRule)
     print(io, ik.kind, '(')
     join(io, ik.params, ", ")
     print(io, ')')
-    if get(io, :inforcefield, false)
+    if ik.kind !== FF.NoInteraction && ik.kind !== FF.UndefinedInteraction && get(io, :inforcefield, false)
         if ik.tailcorrection
             print(io, 'ᵀ')
         end

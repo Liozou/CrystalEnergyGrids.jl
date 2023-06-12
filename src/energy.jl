@@ -132,6 +132,7 @@ See also [`update_position!`](@ref) to modify `step` in-place.
 function update_position(step::SimulationStep, (i,j), args...)
     newpositions = copy(step.positions)
     newpositions[i] = copy(step.positions[i])
+    length(args) == 2 && (newpositions[i][j] = copy(newpositions[i][j]))
     x = SimulationStep(step.ff, step.systemkinds, newpositions, step.isrigid, step.idx)
     update_position!(x, (i,j), args...)
     x
@@ -143,7 +144,7 @@ end
 Return a new `SimulationStep` where the system of index `idx` has a new position
 `op.(p, arg)` where `p` is the current position.
 
-See also [`update_position!`](@ref)
+See also [`update_position!`](@ref), [`unalias_position`](@ref)
 """
 update_position
 

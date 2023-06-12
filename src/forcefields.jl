@@ -6,25 +6,8 @@ struct ForceField
     interactions::Matrix{Union{InteractionRule,InteractionRuleSum}}
     sdict::IdDict{Symbol,Int}
     cutoff::typeof(1.0u"Å")
+    name::String
 end
-
-# struct MissingInteractionRule <: Exception
-#     i::Int
-#     j::Int
-#     smap::IdDict{Symbol,Int}
-# end
-# function Base.showerror(io::IO, mi::MissingInteractionRule)
-#     a = Symbol("")
-#     b = Symbol("")
-#     for (s, k) in mi.smap
-#         if k == mi.i
-#             a = s
-#         elseif k == mi.j
-#             b = s
-#         end
-#     end
-#     print(io, "Missing interaction rule between species ", a, " and ", b)
-# end
 
 struct DoubleDefinedInteractionRule <: Exception
     a::Symbol
@@ -200,8 +183,11 @@ If `shift` is set, the pair potentials are shifted to equal zero at the cutoff.
 If provided, `sdict` should be an `IdDict{Symbol,Int}` linking each species symbol to its
 unique identifier. Identifiers populate the range `1:n` (where `n == length(sdict)`).
 """
-function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å", shift::Bool=true, tailcorrection::Bool=!shift, sdict::Union{Nothing,IdDict{Symbol,Int}}=nothing)
-    smap::IdDict{Symbol,Int} = if sdict isa Nothing
+function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å", shift::Bool=true, tailcorrection::Bool=!shift;
+                    sdict::Union{Nothing,IdDict{Symbol,Int}}=nothing, name::String="(unnamed)")
+    smap::IdDict{Symbol,Int} = if sdict isa IdDict{Symbol,Int}
+        sdict
+    else
         allatoms = Vector{Symbol}(undef, 2*length(input))
         for (i, ((a, b), _)) in enumerate(input)
             allatoms[2*i-1] = a
@@ -210,8 +196,6 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å
         sort!(allatoms)
         unique!(allatoms)
         IdDict([s => i for (i,s) in enumerate(allatoms)])
-    else
-        sdict
     end
     n = length(smap)
     interactions = Matrix{Union{InteractionRule,InteractionRuleSum}}(undef, n, n)
@@ -247,19 +231,17 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å
         interactions[i,j] = interactions[j,i] = mix_rules(rulei, rulej, mixing)
     end
 
-    if shift
-        for i in 1:n, j in (i+1):n
-            interactions[i,j] = interactions[j,i] = map_rule(interactions[i,j]) do r
-                ShiftedInteractionRule(r, cutoff)
-            end
+    for i in 1:n, j in (i+1):n
+        interactions[i,j] = interactions[j,i] = map_rule(interactions[i,j]) do r
+            InteractionRule(r.kind, r.params, shift, cutoff, tailcorrection)
         end
     end
 
-    ForceField(interactions, sdict, cutoff)
+    ForceField(interactions, sdict, cutoff, name)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", ff::ForceField)
-    print(io, "Force field with cutoff ", ff.cutoff, " Å (ᵀ = tail correction, ₛ = shifted)\n")
+    print(io, "Force field ", ff.name, " with cutoff ", ff.cutoff, " Å (ᵀ = tail correction, ₛ = shifted)\n")
     revdict = Dict([i => at for (at, i) in ff.sdict])
     for i in 1:length(revdict)
         ati = revdict[i]

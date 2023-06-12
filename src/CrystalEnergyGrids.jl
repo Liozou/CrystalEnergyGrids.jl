@@ -2,14 +2,24 @@ module CrystalEnergyGrids
 
 using StaticArrays
 using LinearAlgebra: LinearAlgebra, norm, det, cross, dot
+using Pkg: TOML
+
 using StaticArrays
 using OffsetArrays
 using AtomsBase
+using Scratch: @get_scratch!
 
 export CrystalEnergyGrid, parse_grid, interpolate_grid
 export CrystalEnergySetup
 export energy_point, energy_grid
 # other exports in files
+
+const MODULE_VERSION = VersionNumber(TOML.parsefile(joinpath(dirname(@__DIR__), "Project.toml"))["version"])
+scratchspace::String = ""
+function __init__()
+    global scratchspace
+    scratchspace = @get_scratch!("hnc-$(MODULE_VERSION.major).$(MODULE_VERSION.minor)")
+end
 
 include("constants.jl")
 include("lebedev.jl")
