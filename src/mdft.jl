@@ -145,7 +145,7 @@ function (ma::MonoAtomic)(_, flat_∂ψ, flat_ψ::Vector{Float64})
     rfftΔρ = ma.plan * convol
     rfftΔρ .*= ma.ĉ₂
     FFTW.ldiv!(convol, ma.plan, rfftΔρ)
-    logρ = max.(log.(ρ ./ ma.igp.ρ₀), -1.3407807929942596e154)
+    logρmρ₀ = max.(log.(ρ ./ ma.igp.ρ₀), -1.3407807929942596e154)
     # for (logr, v, ρr, CΔρ, ψr) in zip(logρ, ma.igp.externalV, ρ, convol, ψ)
     #     if isinf(ρr*v + ma.igp.T*(ρr*logr + (ma.igp.ρ₀-ρr) - CΔρ*(ρr-ma.igp.ρ₀)/2))
     #         @show logr, v, ρr, CΔρ
@@ -155,12 +155,11 @@ function (ma::MonoAtomic)(_, flat_∂ψ, flat_ψ::Vector{Float64})
     #         break
     #     end
     # end
-    logρ₀ = log(ma.igp.ρ₀)
-    value = ma.igp.δv*sum(ρr*v + ma.igp.T*(ρr*logr - ρr*logρ₀ + (ma.igp.ρ₀-ρr) - CΔρ*(ρr-ma.igp.ρ₀)/2)
-                for (logr, v, ρr, CΔρ) in zip(logρ, ma.igp.externalV, ρ, convol))
+    value = ma.igp.δv*sum(ρr*v + ma.igp.T*(ρr*logrmr₀ + (ma.igp.ρ₀-ρr) - CΔρ*(ρr-ma.igp.ρ₀)/2)
+                for (logrmr₀, v, ρr, CΔρ) in zip(logρmρ₀, ma.igp.externalV, ρ, convol))
     # value = ifelse(isnan(value), Inf, value)
     if !isnothing(flat_∂ψ) # gradient update
-        @. ρ = $(2*ma.igp.ρ₀*ma.igp.δv)*ψ*(ma.igp.externalV + ma.igp.T*(logρ - logρ₀ - convol))
+        @. ρ = $(2*ma.igp.ρ₀*ma.igp.δv)*ψ*(ma.igp.externalV + ma.igp.T*(logρmρ₀ - convol))
         # @. ρ = ifelse(abs(ρ) > 1.3407807929942596e100, 0.0, ρ)
         # @show value, maximum(ρ), extrema(ψ), norm(vec(ρ))
         # length(ma.igp.externalV) > 156248 && @show value, maximum(ρ)
