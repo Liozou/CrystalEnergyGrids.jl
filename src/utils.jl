@@ -213,10 +213,21 @@ end
 # end
 
 function meanBoltzmann(A, T)
-    B = Array{Float64}(undef, size(A)[2:end]...)
     n = size(A, 1)
+    if ndims(A) == 1
+        facts = 0.0
+        tot = 0.0
+        M = minimum(A) - 30.0*T
+        for j in 1:n
+            y = A[j]
+            fact = exp((M-y)/T)
+            facts += fact
+            tot += fact*y
+        end
+        return tot/facts
+    end
+    B = Array{Float64}(undef, size(A)[2:end]...)
     Base.Threads.@threads for i in eachindex(IndexCartesian(), B)
-        tmp = BigFloat()
         factors = 0.0
         total = 0.0
         m = minimum(view(A, 1:n, i)) - 30.0*T # exp(30.0) ≈ 1e13
@@ -228,7 +239,7 @@ function meanBoltzmann(A, T)
         end
         B[i] = total / factors
     end
-    B
+    return B
 end
 
 
@@ -245,8 +256,6 @@ log1pexp(x::Float64) = x <= -36.7368005696771 ? exp(x) : x < 18.021826694558577 
 # LogExpFunctions.jl for coefficient fine-tuning
 logexpm1(x::Float64) = x < 18.021826694558577 ? log(expm1(x)) : x < 33.23111882352963 ? x - exp(-x) : x
 logistic(x::Float64) = x < -744.4400719213812 ? 0.0 : x < 36.7368005696771 ? (e = exp(x); e/(1.0 + e)) : 1.0
-
-linreg(x, y) = hcat(fill!(similar(x), 1), x) \ y
 
 const ALLATOMS = Set(["D", "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og", "Uue"])
 
