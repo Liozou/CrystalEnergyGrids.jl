@@ -79,3 +79,11 @@ function get_rotation_matrices(mol::AbstractSystem, num)
     end
     rots, (islin ? lebedev.weights : repeat(lebedev.weights, 5)./5)
 end
+
+function lebedev_average(l, weights)
+    tot = 0.0
+    for (x, w) in zip(l, weights)
+        tot += w*x
+    end
+    tot / (4π)
+end
