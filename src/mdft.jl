@@ -182,6 +182,89 @@ function mdft(ma::MonoAtomic, ψ_init=exp.(.-vec(ma.igp.externalV)./(2*ma.igp.T)
 end
 
 
+struct LinearMolecule <: MDFTProblem
+    ρ₀::Float64   # reference number density, in number/Å³ (obtained from VdW coefficients)
+    T::Float64    # temperature, in K
+    P::Float64    # pressure, in bar
+    externalV::Array{Float64,4} # external energy field in K (1st dimension: angles)
+    lebedev_weights::Vector{Float64}
+    mat::SMatrix{3,3,Float64,9} # unit cell
+    δv::Float64   # volume of an elementary grid cube, in Å³, derived from externalV and mat
+    ĉ₂::Array{ComplexF64,3} # ĉ₂(k), Fourier transform of the direct correlation function c₂(r)
+    plan::FFTW.rFFTWPlan{Float64, -1, false, 3, NTuple{3,Int}}
+    c₂r::SemiTruncatedInterpolator
+end
+
+function LinearMolecule(gasname_or_ρ₀, T::Float64, P::Float64, externalV::Array{Float64,4}, c₂r::SemiTruncatedInterpolator, _mat::AbstractMatrix{Float64})
+    mat = SMatrix{3,3,Float64,9}(_mat)
+    c₂ = expand_correlation(c₂r, size(externalV), mat)
+    plan = plan_rfft(c₂)
+    ĉ₂ = plan * c₂
+    igp = IdealGasProblem(gasname_or_ρ₀, T, P, Array{Float64,3}(undef, size(externalV)[2:end]), mat)
+    LinearMolecule(igp.ρ₀, igp.T, igp.P, externalV, lebedev_weights, mat, igp.δv, ĉ₂, plan, c₂r)
+end
+function LinearMolecule(gasname_or_ρ₀, T::Float64, P::Float64, externalV::Array{Float64,4}, qdht::QDHT{0,2,Float64}, ĉ₂vec::Vector{Float64}, _mat::AbstractMatrix{Float64})
+    c₂r = SemiTruncatedInterpolator(qdht, ĉ₂vec)
+    LinearMolecule(gasname_or_ρ₀, T, P, externalV, c₂r, _mat)
+end
+
+function (la::LinearMolecule)(_, flat_∂ψ, flat_ψ::Vector{Float64})
+    a0, a1, a2, a3 = size(la.externalV)
+    ρ₀π = la.ρ₀ / (4π)
+    ψ = reshape(flat_ψ, a0, a1, a2, a3)
+    ρ_average = Array{Float64}(undef, a1, a2, a3)
+    ρ = isnothing(flat_∂ψ) ? similar(ψ) : reshape(flat_∂ψ, size(ma.igp.externalV))
+    logρmρ₀ = similar(ψ)
+    Fext_contrib = Vector{Float64}(undef, a3)
+    Fid_contrib = Vector{Float64}(undef, a3)
+    @threads for i3 in 1:a3
+        fext_c = 0.0
+        fid_c = 0.0
+        for i2 in 1:a2, i1 in 1:a1
+            tot = 0.0
+            for i0 in 1:a0
+                ψ2 = ψ[i0,i1,i2,i3]^2
+                logrmr₀ = log(ψ2) # log(ρ / ρ₀)
+                logρmρ₀[i0,i1,i2,i3] = logrmr₀
+                wψ2 = la.lebedev_weights[i0]*ψ2
+                tot += wψ2
+                fext_c += wψ2*la.externalV[i0,i1,i2,i3]
+                fid_c += la.lebedev_weights[i0]*(ρ₀π*ψ2*(logrmr₀ - 1) + ρ₀π)
+            end
+            ρ_average[i1,i2,i3] = tot*la.ρ₀
+        end
+        Fext_contrib[i3] = fext_c
+        Fid_contrib[i3] = fid_c
+    end
+    Fext = la.ρ₀*sum(Fext_contrib)
+    convol = ρ_average .- la.ρ₀
+    rfftΔρ = la.plan * convol
+    rfftΔρ .*= la.ĉ₂
+    FFTW.ldiv!(convol, la.plan, rfftΔρ)
+
+    # ρ .= ρ₀π .* ψ.^2
+    # logρmρ₀ = max.(log.(ρ ./ ρ₀π), -1.3407807929942596e154)
+    # Fid = la.T*sum(ρr*(logr - 1) + ρ₀π for (ρr, logr) in zip(ρ, logρmρ₀))
+    Fexc = -sum(CΔρ*(ρ_ave-la.ρ₀) for (CΔρ, ρ_ave) in zip(convol, ρ_average))/2
+    if !isnothing(flat_∂ψ) # gradient update
+        @. ρ = $(2*ρ₀π*la.δv)*ψ
+        for i0 in 1:a0
+            @. ρ[i0,:,:,:] *= la.externalV[i0,:,:,:] + la.T*(logρmρ₀*la.lebedev_weights[i0] - convol)
+        end
+        # @. ρ = ifelse(abs(ρ) > 1.3407807929942596e100, 0.0, ρ)
+        # @show value, maximum(ρ), extrema(ψ), norm(vec(ρ))
+    end
+    (Fid + Fext + Fexc)*la.δv
+end
+
+
+function mdft(la::LinearMolecule, ψ_init=exp.(.-vec(la.externalV)./(2*la.T)))
+    Optim.optimize(Optim.only_fg!(pa), ψ_init, Optim.LBFGS(linesearch=Optim.BackTracking(order=2, ρ_hi=0.1)),
+                   Optim.Options(iterations=1000, f_tol=1e-10))
+end
+
+
+
 function __inter(i, a, b)
     m = a÷b
     (1+(i-1)*m):(i == b ? a : i*m)
