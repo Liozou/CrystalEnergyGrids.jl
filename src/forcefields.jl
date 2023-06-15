@@ -259,11 +259,11 @@ Base.getindex(ff::ForceField, a::Symbol, b::Symbol) = ff[ff.sdict[a], ff.sdict[b
 
 function (ff::ForceField)(i::Integer, j::Integer, distance)
     if distance isa (Quantity{T,Unitful.𝐋^2,U} where {T,U})
-        NoUnits(distance/u"Å^2") >= ff.cutoff^2 && return 0.0u"K"
+        distance >= ff.cutoff^2 && return 0.0u"K"
     elseif distance isa (Quantity{T,Unitful.𝐋,U} where {T,U})
-        NoUnits(distance/u"Å") >= ff.cutoff && return 0.0u"K"
+        distance >= ff.cutoff && return 0.0u"K"
     else
-        distance > ff.cutoff && return 0.0u"K"
+        NoUnits(distance/u"Å") > ff.cutoff && return 0.0u"K"
     end
     return ff[i,j](distance)
 end

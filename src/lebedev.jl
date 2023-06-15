@@ -51,6 +51,22 @@ function get_lebedev(size, islinearsymmetric)
     ret
 end
 
+function get_lebedev_direct(size)
+    idx = searchsortedfirst(lebedev_sizes, size)
+    islinearsymmetric = false
+    realsize = size
+    if get(lebedev_sizes, idx, -1) != size
+        realsize = 2*size
+        idx = searchsortedfirst(lebedev_sizes, realsize)
+        islinearsymmetric = true
+    end
+    if get(lebedev_sizes, idx, -1) != realsize
+        size == 1 && return LebedevGrid(one(Int32), one(Int32), [4π], [zero(SVector{3,Float64})])
+        error(lazy"Size $size does not correspond to a registered lebedev grid")
+    end
+    read_lebedev_grid(joinpath(lebedev_path, string(realsize)), islinearsymmetric)
+end
+
 """
     get_rotation_matrices(mol::AbstractSystem, num)
 

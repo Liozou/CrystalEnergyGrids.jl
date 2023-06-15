@@ -415,7 +415,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         idx = next_noncomment_line(lines_ffmr, 1)
         shift = parse_shift(lines_ffmr[idx])
         idx = next_noncomment_line(lines_ffmr, idx)
-        tailcorrection = parse_yesno(lines_ffmr[idx]) == "yes"
+        tailcorrection = parse_yesno(lines_ffmr[idx])
         idx = next_noncomment_line(lines_ffmr, idx)
         num_interactions_ffmr = parse(Int, lines_ffmr[idx])
         for i in 1:num_interactions_ffmr

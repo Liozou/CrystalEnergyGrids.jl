@@ -178,7 +178,7 @@ end
 rdf2tcf(rdf) = rdf ./ mean(rdf[end-div(length(rdf), 10):end]) .- 1
 
 
-function compute_average_self_potential(mol::AbstractSystem, ff::ForceField, range, numrot_hint=30)
+function compute_average_self_potential(mol::AbstractSystem, ff::ForceField, range, numrot_hint=175)
     rots, weights = get_rotation_matrices(mol, numrot_hint)
     numrot = length(rots)
     @assert numrot == length(weights)
