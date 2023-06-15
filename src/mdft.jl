@@ -1,6 +1,7 @@
 import LinearAlgebra: norm, mul!
 using Base.Threads
 using Serialization
+using SHA
 
 using StaticArrays
 import Optim
@@ -9,9 +10,19 @@ import BasicInterpolators: CubicSplineInterpolator, NoBoundaries, WeakBoundaries
 
 FFTW.set_num_threads(nthreads()÷2)
 
-export isotherm_hnc, IdealGasProblem, MonoAtomic
+export isotherm_hnc, IdealGasProblem, MonoAtomic, LinearMolecule
 
 abstract type MDFTProblem <: Function end
+
+function compute_ρ₀(gasname, T, P)
+    a, b = get(VDW_COEFF, gasname, (0.0, 0.0))
+    a == 0.0 && error(lazy"""Gas $gasname does not appear in the database, please enter an explicit ideal density or omit the name to rely on the perfect gas model. Possible gases are: $(join(keys(VDW_COEFF, ", "))). Please open an issue if you want to add the Van der Waals coefficient corresponding to your gas.""")
+    c = 0.0831446261815324*T # perfect gas constants in bar*L/K/mol
+    # The following is the real root of (Px^2 + a)(x-b) = c*x^2 given by Wolfram Alpha
+    x = cbrt(sqrt((18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)^2 + 4*(3*a*P - (-b*P - c)^2)^3) + 18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)/(3*cbrt(2)*P) - (cbrt(2)*(3*a*P - (-b*P - c)^2))/(3*P*cbrt(sqrt((18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)^2 + 4*(3*a*P - (-b*P - c)^2)^3) + 18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)) - (-b*P - c)/(3*P)
+    # inv(x) is ρ₀ in mol/L
+    inv(x) * 6.02214076e-4 # Nₐ×1e-27
+end
 
 struct IdealGasProblem <: MDFTProblem
     ρ₀::Float64   # reference number density, in number/Å³ (obtained from VdW coefficients)
@@ -25,13 +36,7 @@ function IdealGasProblem(T::Float64, P::Float64, externalV::Array{Float64,3}, ma
     IdealGasProblem(P/(0.0831446261815324*T), T, P, externalV, mat, det(mat)/length(externalV))
 end
 function IdealGasProblem(gasname::String, T::Float64, P::Float64, externalV::Array{Float64,3}, mat::SMatrix{3,3,Float64,9})
-    a, b = get(VDW_COEFF, gasname, (0.0, 0.0))
-    a == 0.0 && error(lazy"""Gas $gasname does not appear in the database, please enter an explicit ideal density or omit the name to rely on the perfect gas model. Possible gases are: $(join(keys(VDW_COEFF, ", "))). Please open an issue if you want to add the Van der Waals coefficient corresponding to your gas.""")
-    c = 0.0831446261815324*T # perfect gas constants in bar*L/K/mol
-    # The following is the real root of (Px^2 + a)(x-b) = c*x^2 given by Wolfram Alpha
-    x = cbrt(sqrt((18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)^2 + 4*(3*a*P - (-b*P - c)^2)^3) + 18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)/(3*cbrt(2)*P) - (cbrt(2)*(3*a*P - (-b*P - c)^2))/(3*P*cbrt(sqrt((18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)^2 + 4*(3*a*P - (-b*P - c)^2)^3) + 18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)) - (-b*P - c)/(3*P)
-    # inv(x) is ρ₀ in mol/L
-    ρ₀ = inv(x) * 6.02214076e-4 # Nₐ×1e-27
+    ρ₀ = compute_ρ₀(gasname, T, P)
     IdealGasProblem(ρ₀, T, P, externalV, mat, det(mat)/length(externalV))
 end
 function IdealGasProblem(ρ₀::Float64, T::Float64, P::Float64, externalV::Array{Float64,3}, mat::AbstractMatrix)
@@ -162,11 +167,9 @@ function (ma::MonoAtomic)(_, flat_∂ψ, flat_ψ::Vector{Float64})
         @. ρ = $(2*ma.igp.ρ₀*ma.igp.δv)*ψ*(ma.igp.externalV + ma.igp.T*(logρmρ₀ - convol))
         # @. ρ = ifelse(abs(ρ) > 1.3407807929942596e100, 0.0, ρ)
         # @show value, maximum(ρ), extrema(ψ), norm(vec(ρ))
-        # length(ma.igp.externalV) > 156248 && @show value, maximum(ρ)
     end
     value
 end
-
 
 function mdft(ma::MonoAtomic, ψ_init=exp.(.-vec(ma.igp.externalV)./(2*ma.igp.T)))
     # # ρ = ρ₀*ψ^2
@@ -180,6 +183,16 @@ function mdft(ma::MonoAtomic, ψ_init=exp.(.-vec(ma.igp.externalV)./(2*ma.igp.T)
     Optim.optimize(Optim.only_fg!(ma), ψ_init, Optim.LBFGS(linesearch=Optim.BackTracking(order=2, ρ_hi=0.1)),
                    Optim.Options(iterations=1000, f_tol=1e-10))
 end
+
+function finaldensity(ma::MonoAtomic, opt)
+    if !Optim.converged(opt)
+        @error "Optimizer failed to converge; proceeeding with partial result"
+    end
+    ψ = Optim.minimizer(opt)
+    ρ = ma.igp.ρ₀ .* ψ.^2
+    sum(ρ)*ma.igp.δv
+end
+
 
 
 struct LinearMolecule <: MDFTProblem
@@ -197,23 +210,26 @@ end
 
 function LinearMolecule(gasname_or_ρ₀, T::Float64, P::Float64, externalV::Array{Float64,4}, c₂r::SemiTruncatedInterpolator, _mat::AbstractMatrix{Float64})
     mat = SMatrix{3,3,Float64,9}(_mat)
-    c₂ = expand_correlation(c₂r, size(externalV), mat)
+    _, a1, a2, a3 = size(externalV)
+    c₂ = expand_correlation(c₂r, (a1, a2, a3), mat)
     plan = plan_rfft(c₂)
     ĉ₂ = plan * c₂
-    igp = IdealGasProblem(gasname_or_ρ₀, T, P, Array{Float64,3}(undef, size(externalV)[2:end]), mat)
-    LinearMolecule(igp.ρ₀, igp.T, igp.P, externalV, lebedev_weights, mat, igp.δv, ĉ₂, plan, c₂r)
+    ρ₀ = gasname_or_ρ₀ isa Float64 ? gasname_or_ρ₀ : compute_ρ₀(gasname_or_ρ₀, T, P)
+    δv = det(mat)/(a1*a2*a3)
+    weights = get_lebedev_direct(size(externalV, 1)).weights
+    LinearMolecule(ρ₀, T, P, externalV, weights, mat, δv, ĉ₂, plan, c₂r)
 end
 function LinearMolecule(gasname_or_ρ₀, T::Float64, P::Float64, externalV::Array{Float64,4}, qdht::QDHT{0,2,Float64}, ĉ₂vec::Vector{Float64}, _mat::AbstractMatrix{Float64})
     c₂r = SemiTruncatedInterpolator(qdht, ĉ₂vec)
     LinearMolecule(gasname_or_ρ₀, T, P, externalV, c₂r, _mat)
 end
 
-function (la::LinearMolecule)(_, flat_∂ψ, flat_ψ::Vector{Float64})
-    a0, a1, a2, a3 = size(la.externalV)
-    ρ₀π = la.ρ₀ / (4π)
+function (lm::LinearMolecule)(_, flat_∂ψ, flat_ψ::Vector{Float64})
+    a0, a1, a2, a3 = size(lm.externalV)
+    ρ₀π = lm.ρ₀ / (4π)
     ψ = reshape(flat_ψ, a0, a1, a2, a3)
     ρ_average = Array{Float64}(undef, a1, a2, a3)
-    ρ = isnothing(flat_∂ψ) ? similar(ψ) : reshape(flat_∂ψ, size(ma.igp.externalV))
+    ρ = isnothing(flat_∂ψ) ? similar(ψ) : reshape(flat_∂ψ, size(lm.externalV))
     logρmρ₀ = similar(ψ)
     Fext_contrib = Vector{Float64}(undef, a3)
     Fid_contrib = Vector{Float64}(undef, a3)
@@ -224,43 +240,59 @@ function (la::LinearMolecule)(_, flat_∂ψ, flat_ψ::Vector{Float64})
             tot = 0.0
             for i0 in 1:a0
                 ψ2 = ψ[i0,i1,i2,i3]^2
-                logrmr₀ = log(ψ2) # log(ρ / ρ₀)
-                logρmρ₀[i0,i1,i2,i3] = logrmr₀
-                wψ2 = la.lebedev_weights[i0]*ψ2
+                wψ2 = lm.lebedev_weights[i0]*ψ2
                 tot += wψ2
-                fext_c += wψ2*la.externalV[i0,i1,i2,i3]
-                fid_c += la.lebedev_weights[i0]*(ρ₀π*ψ2*(logrmr₀ - 1) + ρ₀π)
+                fext_c += wψ2*lm.externalV[i0,i1,i2,i3]
+                logrmr₀ = max(log(ψ2), -1.3407807929942596e154) # log(ρ / ρ₀)
+                logρmρ₀[i0,i1,i2,i3] = logrmr₀
+                fid_c += lm.lebedev_weights[i0]*(ψ2*(logrmr₀ - 1) + 1)
             end
-            ρ_average[i1,i2,i3] = tot*la.ρ₀
+            ρ_average[i1,i2,i3] = tot*ρ₀π
         end
         Fext_contrib[i3] = fext_c
         Fid_contrib[i3] = fid_c
     end
-    Fext = la.ρ₀*sum(Fext_contrib)
-    convol = ρ_average .- la.ρ₀
-    rfftΔρ = la.plan * convol
-    rfftΔρ .*= la.ĉ₂
-    FFTW.ldiv!(convol, la.plan, rfftΔρ)
+    Fext = ρ₀π*sum(Fext_contrib)
+    Fid = lm.T*ρ₀π*sum(Fid_contrib)
+    # @show Fext, Fid
+
+    # value = ma.igp.δv*sum(ρr*v + ma.igp.T*(ρr*logrmr₀ + (ma.igp.ρ₀-ρr) - CΔρ*(ρr-ma.igp.ρ₀)/2)
+    # for (logrmr₀, v, ρr, CΔρ) in zip(logρmρ₀, ma.igp.externalV, ρ, convol))
+
+    convol = ρ_average .- lm.ρ₀
+    rfftΔρ = lm.plan * convol
+    rfftΔρ .*= lm.ĉ₂
+    FFTW.ldiv!(convol, lm.plan, rfftΔρ)
 
     # ρ .= ρ₀π .* ψ.^2
     # logρmρ₀ = max.(log.(ρ ./ ρ₀π), -1.3407807929942596e154)
-    # Fid = la.T*sum(ρr*(logr - 1) + ρ₀π for (ρr, logr) in zip(ρ, logρmρ₀))
-    Fexc = -sum(CΔρ*(ρ_ave-la.ρ₀) for (CΔρ, ρ_ave) in zip(convol, ρ_average))/2
+    # Fid = lm.T*sum(ρr*(logr - 1) + ρ₀π for (ρr, logr) in zip(ρ, logρmρ₀))
+    Fexc = -lm.T*sum(CΔρ*(ρ_ave-lm.ρ₀) for (CΔρ, ρ_ave) in zip(convol, ρ_average))/2
+    value = (Fid + Fext + Fexc)*lm.δv
     if !isnothing(flat_∂ψ) # gradient update
-        @. ρ = $(2*ρ₀π*la.δv)*ψ
-        for i0 in 1:a0
-            @. ρ[i0,:,:,:] *= la.externalV[i0,:,:,:] + la.T*(logρmρ₀*la.lebedev_weights[i0] - convol)
+        @. ρ = $(2*ρ₀π*lm.δv)*ψ
+        @threads for i0 in 1:a0
+            @. ρ[i0,:,:,:] *= lm.lebedev_weights[i0]*(lm.externalV[i0,:,:,:] + lm.T*logρmρ₀[i0,:,:,:]) - (4π*lm.T)*convol
         end
         # @. ρ = ifelse(abs(ρ) > 1.3407807929942596e100, 0.0, ρ)
-        # @show value, maximum(ρ), extrema(ψ), norm(vec(ρ))
+        @show value, maximum(ρ), norm(vec(ρ))
     end
-    (Fid + Fext + Fexc)*la.δv
+    value
 end
 
+function mdft(lm::LinearMolecule, ψ_init=exp.(.-vec(lm.externalV)./(2*lm.T)))
+    Optim.optimize(Optim.only_fg!(lm), ψ_init, Optim.LBFGS(linesearch=Optim.BackTracking(order=2, ρ_hi=0.1)),
+                   Optim.Options(iterations=1000))
+end
 
-function mdft(la::LinearMolecule, ψ_init=exp.(.-vec(la.externalV)./(2*la.T)))
-    Optim.optimize(Optim.only_fg!(pa), ψ_init, Optim.LBFGS(linesearch=Optim.BackTracking(order=2, ρ_hi=0.1)),
-                   Optim.Options(iterations=1000, f_tol=1e-10))
+function finaldensity(lm::LinearMolecule, opt)
+    if !Optim.converged(opt)
+        @error "Optimizer failed to converge; proceeeding with partial result"
+    end
+    ψ = Optim.minimizer(opt)
+    a0, a1, a2, a3 = size(lm.externalV)
+    ρ = reshape(lm.ρ₀ .* ψ.^2, a0, a1, a2, a3)
+    lm.δv*sum(lebedev_average(@view(ρ[:,i1,i2,i3]), lm.lebedev_weights) for i1 in 1:a1, i2 in 1:a2, i3 in 1:a3)
 end
 
 
@@ -316,54 +348,50 @@ end
 
 
 
-function finaldensity(ma::MonoAtomic, opt)
-    if !Optim.converged(opt)
-        @error "Optimizer failed to converge; proceeeding with partial result"
-    end
-    ψ = Optim.minimizer(opt)
-    ρ = ma.igp.ρ₀ .* ψ.^2
-    sum(ρ)*ma.igp.δv
-end
 
 
 function compute_store_hnc!(potential, ffname, T, ρ₀, qdht)
-    store = "$ffname-$(hash(potential))-$T-$ρ₀-$(qdht.R)-$(qdht.N)"
+    sha = bytes2hex(sha256(reinterpret(UInt8, potential)))
+    store = "$ffname-$sha-$T-$ρ₀-$(qdht.R)-$(qdht.N)"
     global scratchspace
     path = joinpath(scratchspace, store)
     if isfile(path)
         stored = deserialize(path)
         result = hnc(potential, qdht.R, T, ρ₀; qdht, γ0=copy(stored[2]))
         if result != stored
-            @warn "Previously stored hnc computation stale for FF $ffname (T = $T, ρ₀ = $ρ₀); refreshing."
+            @warn "Previously stored hnc computation stale for FF $ffname (T = $T, ρ₀ = $ρ₀, potential $(sha[1:8])..., QDHT($(qdht.R), $(qdht.N))); refreshing."
             serialize(path, result)
         end
         return result
     end
+    @info "Generating hnc correlation functions for FF $ffname (T = $T, ρ₀ = $ρ₀, potential $(sha[1:8])..., QDHT($(qdht.R), $(qdht.N)))."
     ret = hnc(potential, qdht.R, T, ρ₀; qdht)
     serialize(path, ret)
     return ret
 end
 
-function isotherm_hnc(ff::ForceField, mol::AbstractSystem, egrid, temperature, pressures, mat;
-                      molname=identify_molecule(atomic_symbol(mol)), qdht=QDHT{0,2}(100, 1000))
+function isotherm_hnc(ff::ForceField, mol::AbstractSystem, egrid::Array{Float64,N}, temperature, pressures, mat;
+                      molname=identify_molecule(atomic_symbol(mol)), qdht=QDHT{0,2}(100, 10000)) where N
     potential = compute_average_self_potential(mol, ff, qdht.r)
     m = length(pressures)
     ck_hnc = Vector{Vector{Float64}}(undef, m)
     @threads for i in 1:m
         P = pressures[i]
-        igp = IdealGasProblem(molname, temperature, P, egrid, mat)
-        c, _ = compute_store_hnc!(potential, ff.name, temperature, igp.ρ₀, qdht)
+        ρ₀ = compute_ρ₀(molname, temperature, P)
+        c, _ = compute_store_hnc!(potential, ff.name, temperature, ρ₀, qdht)
         ck_hnc[i] = qdht * c
     end
     isotherm = Vector{Float64}(undef, m)
+    opts = Vector{Any}(undef, m)
     for i in 1:m
         ck = ck_hnc[i]
         P = pressures[i]
-        ma = MonoAtomic(molname, temperature, P, egrid, qdht, ck, mat)
-        opt = mdft(ma)
-        isotherm[i] = finaldensity(ma, opt)
+        system = (N == 3 ? MonoAtomic : LinearMolecule)(molname, temperature, P, egrid, qdht, ck, mat)
+        opt = mdft(system)
+        opts[i] = opt
+        isotherm[i] = finaldensity(system, opt)
         @show P, isotherm[i]
         display(opt)
     end
-    isotherm
+    isotherm, opts
 end
