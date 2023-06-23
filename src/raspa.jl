@@ -305,10 +305,16 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
     supercell_name = join(supercell, 'x')
     grid_dir = joinpath(raspa, "grids", forcefield_framework, framework, gridstep_name)
 
-    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst_framework)) / u"Å"))
-    coulomb = parse_grid(joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid"), true, mat)
-
     syst_mol = load_molecule_RASPA(molecule, forcefield_molecule, forcefield_framework, syst_framework)
+    needcoulomb = any(syst_mol[i,:atomic_charge]!=(0.0u"e_au") for i in 1:length(syst_mol))
+
+    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst_framework)) / u"Å"))
+    coulomb = if needcoulomb
+        parse_grid(joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid"), true, mat)
+    else
+        CrystalEnergyGrid()
+    end
+
     trunc_or_shift = strip(first(Iterators.filter(!startswith('#'), eachline(joinpath(raspa, "forcefield", forcefield_framework, "force_field_mixing_rules.def")))))
     atomdict = IdDict{Symbol,Int}()
     atoms = syst_mol[:,:atomic_symbol]
