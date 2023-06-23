@@ -137,6 +137,24 @@ function MonoAtomic(gasname_or_ρ₀, T::Float64, P::Float64, externalV::Array{F
     MonoAtomic(igp, ĉ₂, plan, c₂r)
 end
 
+function MonoAtomic(gasname_or_ρ₀, T::Float64, P::Float64, withangles::Array{Float64,4}, c₂r::SemiTruncatedInterpolator, _mat::AbstractMatrix{Float64})
+    @info "Averaging grid over angles to compute MDFT on a model monoatomic species"
+    a0, a1, a2, a3 = size(withangles)
+    weights = get_lebedev_direct(a0).weights
+    externalV = Array{Float64,3}(undef, a1, a2, a3)
+    @threads for i3 in 1:a3
+        for i2 in 1:a2, i1 in 1:a1
+            tot = 0.0
+            for i0 in 1:a0
+                tot += weights[i0]*withangles[i0,i1,i2,i3]
+            end
+            externalV[i1,i2,i3] = tot/(4π)
+        end
+    end
+    MonoAtomic(gasname_or_ρ₀, T, P, externalV, c₂r, _mat)
+    # MonoAtomic(gasname_or_ρ₀, T, P, meanBoltzmann(withangles, T), c₂r, _mat)
+end
+
 function MonoAtomic(gasname_or_ρ₀, T::Float64, P::Float64, externalV::Array{Float64,3}, qdht::QDHT{0,2,Float64}, ĉ₂vec::Vector{Float64}, _mat::AbstractMatrix{Float64})
     c₂r = SemiTruncatedInterpolator(qdht, ĉ₂vec)
     MonoAtomic(gasname_or_ρ₀, T, P, externalV, c₂r, _mat)
@@ -164,9 +182,10 @@ function (ma::MonoAtomic)(_, flat_∂ψ, flat_ψ::Vector{Float64})
                 for (logrmr₀, v, ρr, CΔρ) in zip(logρmρ₀, ma.igp.externalV, ρ, convol))
     # value = ifelse(isnan(value), Inf, value)
     if !isnothing(flat_∂ψ) # gradient update
+        # finaldensity = sum(ρ)*ma.igp.δv
         @. ρ = $(2*ma.igp.ρ₀*ma.igp.δv)*ψ*(ma.igp.externalV + ma.igp.T*(logρmρ₀ - convol))
         # @. ρ = ifelse(abs(ρ) > 1.3407807929942596e100, 0.0, ρ)
-        # @show value, maximum(ρ), extrema(ψ), norm(vec(ρ))
+        # @show value, finaldensity, maximum(ρ), norm(vec(ρ))
     end
     value
 end
@@ -189,8 +208,7 @@ function finaldensity(ma::MonoAtomic, opt)
         @error "Optimizer failed to converge; proceeeding with partial result"
     end
     ψ = Optim.minimizer(opt)
-    ρ = ma.igp.ρ₀ .* ψ.^2
-    sum(ρ)*ma.igp.δv
+    sum(x -> x*x, ψ)*ma.igp.ρ₀*ma.igp.δv
 end
 
 
