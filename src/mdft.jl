@@ -7,22 +7,33 @@ using StaticArrays
 import Optim
 using FFTW, Hankel
 import BasicInterpolators: CubicSplineInterpolator, NoBoundaries, WeakBoundaries
+import Clapeyron
 
 FFTW.set_num_threads(nthreads()÷2)
 
 export isotherm_hnc, IdealGasProblem, MonoAtomic, LinearMolecule
+export mdft, finaldensity
 
 abstract type MDFTProblem <: Function end
 
-function compute_ρ₀(gasname, T, P)
-    a, b = get(VDW_COEFF, gasname, (0.0, 0.0))
-    a == 0.0 && error(lazy"""Gas $gasname does not appear in the database, please enter an explicit ideal density or omit the name to rely on the perfect gas model. Possible gases are: $(join(keys(VDW_COEFF, ", "))). Please open an issue if you want to add the Van der Waals coefficient corresponding to your gas.""")
-    c = 0.0831446261815324*T # perfect gas constants in bar*L/K/mol
-    # The following is the real root of (Px^2 + a)(x-b) = c*x^2 given by Wolfram Alpha
-    x = cbrt(sqrt((18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)^2 + 4*(3*a*P - (-b*P - c)^2)^3) + 18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)/(3*cbrt(2)*P) - (cbrt(2)*(3*a*P - (-b*P - c)^2))/(3*P*cbrt(sqrt((18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)^2 + 4*(3*a*P - (-b*P - c)^2)^3) + 18*a*b*P^2 - 9*a*c*P + 2*b^3*P^3 + 6*b^2*c*P^2 + 6*b*c^2*P + 2*c^3)) - (-b*P - c)/(3*P)
-    # inv(x) is ρ₀ in mol/L
-    inv(x) * 6.02214076e-4 # Nₐ×1e-27
+finaldensity(problem::MDFTProblem) = finaldensity(problem, mdft(problem))
+
+"""
+    compute_ρ₀(gasname::AbstractString, T, P)
+
+Compute the density of the given gas at the given temperature and pressure.
+If no unit is given, `T` is assumed to be in K and `P` in Pa.
+The returned density is in Å⁻³
+"""
+function compute_ρ₀(gasname::AbstractString, T::Real, P::Real)
+    gaskey = get(GAS_NAMES, gasname, gasname)
+    if gasname in GERG2008_nameset
+        NoUnits(Clapeyron.molar_density(Clapeyron.GERG2008([gaskey]), P*u"Pa", T*u"K")*𝒩ₐ/u"Å^-3")
+    else
+        NoUnits(Clapeyron.molar_density(Clapeyron.PCSAFT([gaskey]), P*u"Pa", T*u"K")*𝒩ₐ/u"Å^-3")
+    end
 end
+compute_ρ₀(gasname::AbstractString, T::Quantity, P::Quantity) = compute_ρ₀(gasname, NoUnits(T/u"K"), NoUnits(P/u"Pa"))
 
 struct IdealGasProblem <: MDFTProblem
     ρ₀::Float64   # reference number density, in number/Å³ (obtained from VdW coefficients)
@@ -69,12 +80,11 @@ end
 
 function mdft(igp::IdealGasProblem)
     ψ₀ = log(igp.ρ₀)
-    return (ψ₀ .- vec(igp.externalV)./igp.T)
-    # η = 0.0
-    # η = 1e-5
-    # ψ_init = (ψ₀ .- vec(igp.externalV)./igp.T) .* rand(1 .+ (-η:η), length(igp.externalV))
-    # ψ_init = zeros(length(igp.externalV))
-    # Optim.optimize(Optim.only_fg!(igp), ψ_init, Optim.LBFGS(), Optim.Options(iterations=20000))
+    return exp.(ψ₀ .- vec(igp.externalV)./igp.T)
+end
+
+function finaldensity(igp::IdealGasProblem, ψ)
+    sum(ψ)*igp.δv
 end
 
 
@@ -129,10 +139,6 @@ function MonoAtomic(gasname_or_ρ₀, T::Float64, P::Float64, externalV::Array{F
     c₂ = expand_correlation(c₂r, size(externalV), mat)
     plan = plan_rfft(c₂)
     ĉ₂ = plan * c₂
-    # rĉ₂ = real.(ĉ₂)
-    # @show maximum(abs.(imag.(ĉ₂)))
-    # @assert ĉ₂ ≈ rĉ₂
-    # @assert plan \ rĉ₂ ≈ c₂
     igp = IdealGasProblem(gasname_or_ρ₀, T, P, externalV, mat)
     MonoAtomic(igp, ĉ₂, plan, c₂r)
 end
@@ -169,18 +175,8 @@ function (ma::MonoAtomic)(_, flat_∂ψ, flat_ψ::Vector{Float64})
     rfftΔρ .*= ma.ĉ₂
     FFTW.ldiv!(convol, ma.plan, rfftΔρ)
     logρmρ₀ = max.(log.(ρ ./ ma.igp.ρ₀), -1.3407807929942596e154)
-    # for (logr, v, ρr, CΔρ, ψr) in zip(logρ, ma.igp.externalV, ρ, convol, ψ)
-    #     if isinf(ρr*v + ma.igp.T*(ρr*logr + (ma.igp.ρ₀-ρr) - CΔρ*(ρr-ma.igp.ρ₀)/2))
-    #         @show logr, v, ρr, CΔρ
-    #         break
-    #     elseif abs(2*ma.igp.ρ₀*ma.igp.δv*ψr*(v + ma.igp.T*(logr - CΔρ))) > 1e100
-    #         @show logr, v, ρr, CΔρ, ψr
-    #         break
-    #     end
-    # end
     value = ma.igp.δv*sum(ρr*v + ma.igp.T*(ρr*logrmr₀ + (ma.igp.ρ₀-ρr) - CΔρ*(ρr-ma.igp.ρ₀)/2)
                 for (logrmr₀, v, ρr, CΔρ) in zip(logρmρ₀, ma.igp.externalV, ρ, convol))
-    # value = ifelse(isnan(value), Inf, value)
     if !isnothing(flat_∂ψ) # gradient update
         # finaldensity = sum(ρ)*ma.igp.δv
         @. ρ = $(2*ma.igp.ρ₀*ma.igp.δv)*ψ*(ma.igp.externalV + ma.igp.T*(logρmρ₀ - convol))
@@ -191,14 +187,6 @@ function (ma::MonoAtomic)(_, flat_∂ψ, flat_ψ::Vector{Float64})
 end
 
 function mdft(ma::MonoAtomic, ψ_init=exp.(.-vec(ma.igp.externalV)./(2*ma.igp.T)))
-    # # ρ = ρ₀*ψ^2
-    # Optim.optimize(Optim.only_fg!(ma), ψ_init, Optim.LBFGS(linesearch=Optim.LineSearches.Static()), Optim.Options(iterations=100))
-    # ψ_init .*= [1-0.1/i for i in 1:length(ψ_init)]
-    # ρ_init = ma.igp.ρ₀ .* ψ_init.^2
-    # convol = ρ .- ma.igp.ρ₀
-    # rfftΔρ = ma.plan * convol
-    # rfftΔρ .*= ma.ĉ₂
-    # FFTW.ldiv!(convol, ma.plan, rfftΔρ)
     Optim.optimize(Optim.only_fg!(ma), ψ_init, Optim.LBFGS(linesearch=Optim.BackTracking(order=2, ρ_hi=0.1)),
                    Optim.Options(iterations=1000, f_tol=1e-10))
 end
@@ -388,23 +376,47 @@ function compute_store_hnc!(potential, ffname, T, ρ₀, qdht)
     return ret
 end
 
-function isotherm_hnc(ff::ForceField, mol::AbstractSystem, egrid::Array{Float64,N}, temperature, pressures, mat;
-                      molname=identify_molecule(atomic_symbol(mol)), qdht=QDHT{0,2}(100, 10000)) where N
-    potential = compute_average_self_potential(mol, ff, qdht.r)
+
+function _isotherm_hnc_igp(_, _, egrid::Array{Float64,3}, temperature, pressures, mat, molname, _)
     m = length(pressures)
-    ck_hnc = Vector{Vector{Float64}}(undef, m)
-    @threads for i in 1:m
+    isotherm = Vector{Float64}(undef, m)
+    opts = Vector{Vector{Float64}}(undef, m)
+    for i in 1:m
         P = pressures[i]
-        ρ₀ = compute_ρ₀(molname, temperature, P)
-        c, _ = compute_store_hnc!(potential, ff.name, temperature, ρ₀, qdht)
-        ck_hnc[i] = qdht * c
+        system = IdealGasProblem(molname, temperature, P, egrid, mat)
+        opt = mdft(system)
+        opts[i] = opt
+        isotherm[i] = finaldensity(system, opt)
+        @show P, isotherm[i]
+    end
+    isotherm, opts
+end
+
+function _isotherm_hnc(ff::ForceField, mol::AbstractSystem, egrid::Array{Float64,N}, temperature, pressures, mat,
+                      molname::AbstractString, qdht::QDHT{0,2}) where N
+    m = length(pressures)
+    if iszero(qdht.R)
+        ck_hnc = [Float64[] for _ in 1:m]
+    else
+        potential = compute_average_self_potential(mol, ff, qdht.r)
+        ck_hnc = Vector{Vector{Float64}}(undef, m)
+        @threads for i in 1:m
+            P = pressures[i]
+            ρ₀ = compute_ρ₀(molname, temperature, P)
+            c, _ = compute_store_hnc!(potential, ff.name, temperature, ρ₀, qdht)
+            ck_hnc[i] = qdht * c
+        end
     end
     isotherm = Vector{Float64}(undef, m)
     opts = Vector{Any}(undef, m)
     for i in 1:m
         ck = ck_hnc[i]
         P = pressures[i]
-        system = (N == 3 ? MonoAtomic : LinearMolecule)(molname, temperature, P, egrid, qdht, ck, mat)
+        system = if iszero(qdht.R)
+            IdealGasProblem(molname, temperature, P, egrid, mat)
+        else
+            (N == 3 ? MonoAtomic : LinearMolecule)(molname, temperature, P, egrid, qdht, ck, mat)
+        end
         opt = mdft(system)
         opts[i] = opt
         isotherm[i] = finaldensity(system, opt)
@@ -412,4 +424,14 @@ function isotherm_hnc(ff::ForceField, mol::AbstractSystem, egrid::Array{Float64,
         display(opt)
     end
     isotherm, opts
+end
+
+function isotherm_hnc(ff::ForceField, mol::AbstractSystem, egrid::Array{Float64,N}, temperature, pressures, mat;
+                      molname=identify_molecule(atomic_symbol(mol)), qdht=QDHT{0,2}(100, 10000)) where N
+    fun = iszero(qdht.R) ? _isotherm_hnc_igp : _isotherm_hnc
+    if size(egrid, 1) == 1
+        fun(ff, mol, dropdims(egrid; dims=1), temperature, pressures, mat, molname, qdht)
+    else
+        fun(ff, mol, egrid, temperature, pressures, mat, molname, qdht)
+    end
 end

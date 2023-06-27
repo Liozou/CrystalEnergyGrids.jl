@@ -195,17 +195,33 @@ function compute_average_self_potential(mol::AbstractSystem, ff::ForceField, ran
         Base.Threads.@threads for j in 1:numrot
             tot = 0.0u"K"
             system = unalias_position(update_position(model, (1,1), molposs[j]), (1,2))
+            # energies = Vector{typeof(1.0u"K")}(undef, numrot)
             for (k, weight) in enumerate(weights)
                 update_position!(system, (1,2), molposs[k] .+ (offset,))
+                # energies[k] = energy_nocutoff(system)
                 tot += weight*energy_nocutoff(system)
             end
+            # emin_j = minimum(energies)
+            # eweight_j = 0.0
+            # for (k, weight) in enumerate(weights)
+                # x = exp(-NoUnits((energies[k]-emin_j)/temperature))
+                # tot += weight*x*energies[k]
+                # eweight_j += x
+            # end
             vs[j,i] = NoUnits(tot/u"K")
+            # vs[j,i] = NoUnits(tot/u"K")/eweight_j
         end
         tot2 = 0.0
+        # eweight_i = 0.0
+        # emin_i = minimum(@view vs[:,i])
         for (j, weight) in enumerate(weights)
+            # y = exp(-NoUnits((vs[j,i]-emin_i)/NoUnits(temperature/u"K")))
+            # tot2 += weight*y*vs[j,i]
+            # eweight_i += y
             tot2 += weight*vs[j,i]
         end
         v[i] = tot2/(4π)^2
+        # v[i] = tot2/(4π)^2/eweight_i
     end
     flag = false
     for i in n:-1:1 # fill the unphysical part close to 0 with value 1e8

@@ -172,12 +172,6 @@ function energy_point(setup::CrystalEnergySetup, positions)
     return (vdw, coulomb_direct + host_adsorbate_reciprocal + adsorbate_adsorbate_reciprocal)
 end
 
-# __switch_x(p) = SVector{3}(-p[1], p[2], p[3])
-# __switch_y(p) = SVector{3}(p[1], -p[2], p[3])
-# __switch_z(p) = SVector{3}(p[1], p[2], -p[3])
-# __switch_xy(p) = SVector{3}(p[2], p[1], p[3])
-# __switch_xz(p) = SVector{3}(p[3], p[2], p[1])
-# __switch_yz(p) = SVector{3}(p[1], p[3], p[2])
 
 function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     axeA, axeB, axeC = bounding_box(setup.framework)

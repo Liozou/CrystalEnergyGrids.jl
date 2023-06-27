@@ -350,7 +350,7 @@ function (rule::InteractionRule)(r)
     end - rule.shift
 end
 
-(rule::InteractionRule)(input::Quantity{T,Unitful.𝐋,U} where {T,U}) = ((@show input, rule); rule(NoUnits(input/u"Å"))*u"K")
+(rule::InteractionRule)(input::Quantity{T,Unitful.𝐋,U} where {T,U}) = rule(NoUnits(input/u"Å"))*u"K"
 
 function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋^2,U} where {T,U})
     r2 = NoUnits(input/u"Å^2")

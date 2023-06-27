@@ -98,8 +98,14 @@ end
 function Base.getindex(pal::PseudoAtomListing, atom)
     name = atom isa String ? atom : String(atom)
     s = split(name, '_')
-    if length(s) > 1 && all(isnumeric, last(s))
-        name = join(@view(s[1:end-1]), '_')
+    if length(s) > 1
+        if all(isnumeric, last(s))
+            name = join(@view(s[1:end-1]), '_')
+        end
+    else
+        while isnumeric(name[end])
+            name = name[1:end-1]
+        end
     end
     get_strict(pal, name)
 end

@@ -90,26 +90,31 @@ const COEFF = Float64.(
     8 -8 -8 8 -8 8 8 -8 4 4 -4 -4 -4 -4 4 4 4 -4 4 -4 -4 4 -4 4 4 -4 -4 4 4 -4 -4 4 2 2 2 2 -2 -2 -2 -2 2 2 -2 -2 2 2 -2 -2 2 -2 2 -2 2 -2 2 -2 1 1 1 1 1 1 1 1]
 )
 
-# Van der Waals state equation coefficients (from the Handbook (?))
-const VDW_COEFF = Dict{String,Tuple{Float64,Float64}}(
-    "H2"    => (0.2476, 0.02661),
-    "CH4"   => (2.283, 0.04278),
-    "CH4O" => (9.649, 0.06702),
-    "CO"    => (1.505, 0.03985),
-    "CO2"   => (3.640, 0.04267),
-    "H2O"   => (5.536, 0.03049),
-    "N2"    => (1.408, 0.03913),
-    "NO"    => (1.358, 0.02789),
-    "NO2"   => (5.354, 0.04424),
-    "O2"    => (1.378, 0.03183),
-    "H4Si"  => (4.377, 0.05786),
-    "O2S"   => (6.803, 0.05636),
-    "He"    => (0.03457, 0.0237),
-    "Ne"    => (0.2135, 0.01709),
-    "Ar"    => (1.363, 0.03219),
-    "Kr"    => (2.349, 0.03978),
-    "Xe"    => (4.25, 0.05105),
+const GAS_NAMES = Dict{String,String}(
+    "Ar"    => "argon",
+    "CH4"   => "methane",
+    "CH4O"  => "methanol",
+    "CH3OH" => "methanol",
+    "CO"    => "carbon monoxide",
+    "CO2"   => "carbon dioxide",
+    "H2"    => "hydrogen",
+    "H4Si"  => "silane",
+    "SiH4"  => "silane",
+    "H2O"   => "water",
+    "He"    => "helium", # missing for PCSAFT
+    "Kr"    => "krypton",
+    "N2"    => "nitrogen",
+    "NO"    => "nitrogen monoxide", # missing for PCSAFT
+    "NO2"   => "nitrogen dioxide", # missing for PCSAFT
+    "Ne"    => "neon", # missing for PCSAFT
+    "O2"    => "oxygen",
+    "O2S"   => "sulfur dioxide",
+    "SO2"   => "sulfur dioxide",
+    "Xe"    => "xenon",
 )
+
+const GERG2008_nameset = Set(["methane", "nitrogen", "carbon dioxide", "ethane", "propane", "butane", "isobutane", "pentane", "isopentane", "hexane", "heptane", "octane", "nonane", "decane", "hydrogen", "oxygen", "carbon monoxide", "water", "hydrogen sulfide", "helium", "argon"])
+const 𝒩ₐ = 6.02214076e23u"mol^-1"
 
 # other utils
 nint(x) = floor(Int, ifelse(x>=0.0, x+0.5, x-0.5))
