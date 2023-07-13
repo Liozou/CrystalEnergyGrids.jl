@@ -190,9 +190,16 @@ struct RASPASystem <: AbstractSystem{3}
     atomic_number::Vector{Int}
     atomic_mass::Vector{typeof(1.0u"u")}
     atomic_charge::Vector{typeof(1.0u"e_au")}
+    ismolecule::Bool
 end
 AtomsBase.bounding_box(sys::RASPASystem)     = sys.bounding_box
-AtomsBase.boundary_conditions(sys::RASPASystem) = SVector{3,BoundaryCondition}(ntuple(Returns(ifelse(isinf(bounding_box(sys)[1][1]), DirichletZero(), Periodic())), 3))
+function AtomsBase.boundary_conditions(sys::RASPASystem)
+    SVector{3,BoundaryCondition}(if sys.ismolecule || any(Base.Fix1(any, isinf), bounding_box(sys))
+        (DirichletZero(), DirichletZero(), DirichletZero())
+    else
+        (Periodic(), Periodic(), Periodic())
+    end)
+end
 Base.length(sys::RASPASystem)                = length(sys.position)
 Base.size(sys::RASPASystem)                  = size(sys.position)
 AtomsBase.species_type(::RASPASystem)        = AtomView{RASPASystem}
@@ -234,7 +241,7 @@ function load_framework_RASPA(name::AbstractString, forcefield::AbstractString)
         mass[i]    = pseudo.mass*u"u"
         charges[i] = pseudo.charge*u"e_au"
     end
-    RASPASystem(AtomsBase.bounding_box(system), AtomsBase.position(system), AtomsBase.atomic_symbol(system), AtomsBase.atomic_number(system), mass, charges)
+    RASPASystem(AtomsBase.bounding_box(system), AtomsBase.position(system), AtomsBase.atomic_symbol(system), AtomsBase.atomic_number(system), mass, charges, false)
 end
 
 """
@@ -260,14 +267,15 @@ function load_molecule_RASPA(name::AbstractString, forcefield::AbstractString, f
         pseudo::PseudoAtomInfo = pseudoatoms[atom]
         mass[i]    = pseudo.mass*1.0u"u"
         charges[i] = pseudo.charge*1.0u"e_au"
-        atom_numbers[i] = AtomsBase.element(pseudo.symbol).number
+        el = get(AtomsBase.PeriodicTable.elements, pseudo.symbol, missing)
+        atom_numbers[i] = ismissing(el) ? 0 : el.number
     end
     bbox = if framework_system !== nothing
         bounding_box(framework_system)
     else
         SVector{3,SVector{3,typeof(1.0u"Å")}}([[Inf, 0.0, 0.0]*u"Å", [0.0, Inf, 0.0]*u"Å", [0.0, 0.0, Inf]*u"Å"])
     end
-    RASPASystem(bbox, positions, symbols, atom_numbers, mass, charges)
+    RASPASystem(bbox, positions, symbols, atom_numbers, mass, charges, true)
 end
 
 function parse_blockfile(file, gridref)

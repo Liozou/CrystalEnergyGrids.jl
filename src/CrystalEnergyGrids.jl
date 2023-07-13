@@ -34,6 +34,7 @@ include("lammpstrj_parser.jl")
 include("hypernettedchain.jl")
 include("rdf.jl")
 include("mdft.jl")
+include("viewer.jl")
 
 # const BUFFERS = [(Vector{Cdouble}(undef, 64),Vector{Cdouble}(undef, 64)) for _ in 1:Base.Threads.nthreads()]
 # const GLOBAL_LOCK = Base.Threads.ReentrantLock()

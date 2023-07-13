@@ -144,8 +144,8 @@ function MonoAtomic(gasname_or_ρ₀, T::Float64, P::Float64, externalV::Array{F
 end
 
 function MonoAtomic(gasname_or_ρ₀, T::Float64, P::Float64, withangles::Array{Float64,4}, c₂r::SemiTruncatedInterpolator, _mat::AbstractMatrix{Float64})
-    @info "Averaging grid over angles to compute MDFT on a model monoatomic species"
     a0, a1, a2, a3 = size(withangles)
+    a0 == 1 || @info "Averaging grid over angles to compute MDFT on a model monoatomic species"
     weights = get_lebedev_direct(a0).weights
     externalV = Array{Float64,3}(undef, a1, a2, a3)
     @threads for i3 in 1:a3
