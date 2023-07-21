@@ -25,23 +25,45 @@ function Base.iterate(x::PeriodicNeighbors{N}, state=(0,true)) where N
     end, (i, !ispos))
 end
 
-function local_minima(grid::Array{Float64,3})
+"""
+    local_minima(grid::Array{Float64,3}, tolerance=1e-2)
+
+Find the positions of the local minima of an energy grid.
+
+If `tolerance ≥ 0`, only return the smallest minima within the relative tolerance compared
+to the energy minimum. `tolerance == 0` corresponds to only returning the minimum while
+`tolerance == 1` corresponds to returning all the local minima with the same sign as the
+minimum.
+
+Use a negative `tolerance` to return all local minima.
+"""
+function local_minima(grid::Array{Float64,3}, tolerance=1e-2)
     a1, a2, a3 = size(grid)
-    ret = CartesianIndex{3}[]
+    localmins_t = [CartesianIndex{3}[] for _ in 1:nthreads()]
     @threads for i3 in 1:a3
         for i2 in 1:a2, i1 in 1:a1
-            val = grid[a1,a2,a3]
-            if val < grid[mod1(i1-1,a1),a2,a3] &&
-               val < grid[mod1(i1+1,a1),a2,a3] &&
-               val < grid[a1,mod1(i2-1,a2),a3] &&
-               val < grid[a1,mod1(i2+1,a2),a3] &&
-               val < grid[a1,a2,mod1(i3-1,a3)] &&
-               val < grid[a1,a2,mod1(i3+1,a3)]
-                push!(ret, CartesianIndex(i1, i2, i3))
+            val = grid[i1,i2,i3]
+            if val < grid[mod1(i1-1,a1),i2,i3] &&
+               val < grid[mod1(i1+1,a1),i2,i3] &&
+               val < grid[i1,mod1(i2-1,a2),i3] &&
+               val < grid[i1,mod1(i2+1,a2),i3] &&
+               val < grid[i1,i2,mod1(i3-1,a3)] &&
+               val < grid[i1,i2,mod1(i3+1,a3)]
+                push!(localmins_t[threadid()], CartesianIndex(i1, i2, i3))
             end
         end
     end
-    ret
+    localmins = reduce(vcat, localmins_t)
+    min_energy = minimum(Base.Fix1(getindex, grid), localmins)
+    tolerance < 0 && return localmins
+    @assert min_energy < 0
+    max_threshold = min_energy + abs(min_energy*tolerance)
+    kept = CartesianIndex{3}[]
+    for localmin in localmins
+        grid[localmin] > max_threshold && continue
+        push!(kept, localmin)
+    end
+    return kept
 end
 
 function attraction_basins(grid::Array{Float64,3}, locals=local_minima(grid))
