@@ -1,7 +1,7 @@
 # General utils
 
 function wrap_atom(point, mat, invmat)
-    abc = invmat * (point isa SVector ? point : SVector{3,Float64}(point))
+    abc = invmat * (point isa SVector ? point : SVector{3}(point))
     abc = map(x -> ifelse(-eps() < x < eps(), 0.0, x), abc)
     # return mat * (abc .- floor.(abc))
     x, y, z = mat * (abc .- floor.(abc))
@@ -10,7 +10,7 @@ function wrap_atom(point, mat, invmat)
 end
 
 function offsetpoint(point, mat, invmat, shift, size, dims)
-    newpoint = wrap_atom(point, mat, invmat)
+    newpoint = wrap_atom(NoUnits.(point/u"Å"), mat, invmat)
     @. (newpoint - shift)/size*dims + 1
 end
 
