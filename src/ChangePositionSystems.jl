@@ -7,6 +7,9 @@ struct ChangePositionSystem{N,T<:AbstractSystem{N}} <: AbstractSystem{N}
 end
 ChangePositionSystem(s::AbstractSystem{N}, poss) where {N} = ChangePositionSystem{N,typeof(s)}(s, [SVector{N,typeof(1.0u"Å")}(p) for p in poss])
 ChangePositionSystem(s::ChangePositionSystem, poss) = ChangePositionSystem(s.system, poss)
+function ChangePositionSystem(s::ChangePositionSystem, poss::Vector{SVector{N,typeof(1.0u"Å")}}) where N
+    ChangePositionSystem(s.system, poss) # to avoid ambiguity
+end
 
 for f in (:boundary_conditions,
           :bounding_box,

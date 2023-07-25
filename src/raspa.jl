@@ -9,7 +9,7 @@ export setdir_RASPA!, getdir_RASPA
 export PseudoAtomListing, parse_pseudoatoms_RASPA, parse_forcefield_RASPA
 export RASPASystem, setup_RASPA
 
-const RASPADIR = Ref(joinpath(ENV["HOME"], "RASPA2", "simulations", "share", "raspa"))
+const RASPADIR = Ref(joinpath(homedir(), "RASPA2", "simulations", "share", "raspa"))
 
 """
     setdir_RASPA!(path)
@@ -20,13 +20,18 @@ and structures. Default is $(RASPADIR[]). Access the value via [`getdir_RASPA`](
 function setdir_RASPA!(pos)
     RASPADIR[] = pos
 end
+
 """
     getdir_RASPA()
 
 Gets the `path` to the directory containing the forcefields, frameworks, grids, molecules
 and structures. Default is $(RASPADIR[]). Set the value via [`setdir_RASPA!`](@ref).
 """
-getdir_RASPA() = RASPADIR[]
+function getdir_RASPA()
+    ret = RASPADIR[]
+    isdir(ret) || error(lazy"Could not find raspa directory at the given path $ret. Please set the correct path through the `setdir_RASPA!` function.")
+    ret
+end
 
 """
     PseudoAtomInfo

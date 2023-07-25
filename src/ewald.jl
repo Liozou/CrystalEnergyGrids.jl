@@ -19,8 +19,6 @@ function cell_angles(mat::AbstractMatrix)
     return (a, b, c), (α, β, γ)
 end
 
-complexofpoint(x) = begin (s,c) = sincos(x); ComplexF64(c, s) end
-
 
 function setup_Eik(systems, numsites, kx, ky, kz, invmat, (superA, superB, superC))
     Eikx = Vector{ComplexF64}(undef, (kx+1)*numsites)
@@ -41,10 +39,10 @@ function setup_Eik(systems, numsites, kx, ky, kz, invmat, (superA, superB, super
                 px = 2π*(px + sA/superA)
                 py = 2π*(py + sB/superB)
                 pz = 2π*(pz + sC/superC)
-                Eikx[i₊] = complexofpoint(px)
-                tmp = Eiky[i₊] = complexofpoint(py)
+                Eikx[i₊] = cis(px)
+                tmp = Eiky[i₊] = cis(py)
                 Eiky[i₋] = conj(tmp)
-                tmp = Eikz[i₊] = complexofpoint(pz)
+                tmp = Eikz[i₊] = cis(pz)
                 Eikz[i₋] = conj(tmp)
             end
         end
@@ -180,7 +178,7 @@ end
 function compute_ewald((α, kx, ky, kz, invmat, recip_cutoff2, num_kvecs, volume_factor, energy_framework_self, kfactors, UIon, StoreRigidChargeFramework, net_charges_framework),
                        systems)
     numsites = sum(length, systems)
-    allcharges::Vector{Vector{Float64}} = [Float64.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
+    allcharges::Vector{Vector{Float64}} = [NoUnits.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*α
     energy_adsorbate_self = sum(sum(abs2, charges)*chargefactor for charges in allcharges)
     net_charges = sum(sum(charges) for charges in allcharges)

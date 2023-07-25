@@ -1,0 +1,97 @@
+# rules to overwrite
+5
+# pair (from Martin-Calvo, Gutiérrez-Sevillano, Parra, Ania and Calero, doi:10.1039/C5CP03749B (compatible with GarciaSanchez2009))
+Ar   Na   shifted  no
+Ar   Ar   shifted  no
+Ar   Oz   shifted  no
+Ar   Oa   shifted  no
+Ar   OLi  shifted  no
+# number of defined interactions
+82
+# type      type2       interaction
+UNIT        UNIT        lennard-jones     1.0           1.0
+Na          Oz         buckingham2       5.581e+07      3.9850     9.167e+05      1.50
+Na          Oa         buckingham2       5.581e+07      3.9850     9.167e+05      1.50
+K           Oz         buckingham2       6.967e+07      3.4750     2.617e+06      1.50
+K           Oa         buckingham2       6.967e+07      3.4750     2.617e+06      1.50
+Li          Oz         buckingham2       3.516e+07      4.7235     1.353e+05      1.20
+Li          OLi        buckingham2       3.516e+07      4.7235     1.353e+05      1.20
+Rb          Oz         buckingham2       4.150E+07      3.2284     2.221E+06      1.50
+Rb          Oa         buckingham2       4.150E+07      3.2284     2.221E+06      1.50
+Cs          Oz         buckingham2       4.420E+07      2.8438     6.499E+06      1.50
+Cs          Oa         buckingham2       4.420E+07      2.8438     6.499E+06      1.50
+C_co2       Oz          lennard-jones     29.2      3.189
+C_co2       Oa          lennard-jones     29.2      3.189
+C_co2       OLi         lennard-jones     29.2      3.189
+C_co2       Siz         lennard-jones     49.946    3.616 # original value
+C_co2       Alz         lennard-jones     49.8      3.167
+C_co2       Li          lennard-jones     281.8     2.247
+C_co2       Na          lennard-jones     103.2     2.659
+C_co2       K           lennard-jones     174.1     2.993
+C_co2       Rb          lennard-jones     100.7     3.306
+C_co2       Cs          lennard-jones     69.7      3.578
+C_co2       C_co2       lennard-jones     28.129    2.757
+C_co2       O_co2       lennard-jones     47.588    2.892
+O_co2       Oz          lennard-jones     23.5      3.063
+O_co2       Oa          lennard-jones     23.5      3.063
+O_co2       OLi         lennard-jones     23.5      3.063
+O_co2       Siz         lennard-jones     39.050    3.490 # original value
+O_co2       Alz         lennard-jones     39.1      3.054
+O_co2       Li          lennard-jones     240.0     2.139
+O_co2       Na          lennard-jones     84.6      2.547
+O_co2       K           lennard-jones     139       2.881 # check 139.?
+O_co2       Rb          lennard-jones     79.2      3.188
+O_co2       Cs          lennard-jones     54.2      3.457
+O_co2       O_co2       lennard-jones     80.507    3.033
+N_n2        Oa          lennard-jones     25.8      3.213
+N_n2        Oz          lennard-jones     25.8      3.213
+N_n2        OLi         lennard-jones     25.8      3.213
+N_n2        Siz         lennard-jones     43.530    3.652
+N_n2        Alz         lennard-jones     55.4      3.067
+N_n2        Li          lennard-jones     601.9     2.093
+N_n2        Na          lennard-jones     117.2     2.567
+N_n2        K           lennard-jones     153.2     3.068
+N_n2        Rb          lennard-jones     157.7     3.221
+N_n2        Cs          lennard-jones     137.4     3.410
+N_n2        N_n2        lennard-jones     36.4      3.32
+O_o2        Oa          lennard-jones     32.6      3.506
+O_o2        Oz          lennard-jones     25.8      3.506
+O_o2        OLi         lennard-jones     25.8      3.506
+O_o2        Siz         lennard-jones     0         0
+O_o2        Alz         lennard-jones     59.2      3.330
+O_o2        Li          lennard-jones     711.3     1.906
+O_o2        Na          lennard-jones     317.2     2.308
+O_o2        K           lennard-jones     215.8     2.789
+O_o2        Rb          lennard-jones     31.7      3.263
+O_o2        Cs          lennard-jones     167.1     3.175
+O_o2        O_o2        lennard-jones     49.0      3.02
+C_ch4       Oa          lennard-jones     20.6      3.378
+C_ch4       Oz          lennard-jones     20.6      3.378
+C_ch4       OLi         lennard-jones     20.6      3.378
+C_ch4       Siz         lennard-jones     35.1      3.830
+C_ch4       Alz         lennard-jones     76.4      3.252
+C_ch4       Li          lennard-jones     366.0     2.029
+C_ch4       Na          lennard-jones     158.3     2.731
+C_ch4       K           lennard-jones     72.4      3.277
+C_ch4       Rb          lennard-jones     89.3      3.419
+C_ch4       Cs          lennard-jones     111.5     3.541
+C_ch4       C_ch4       lennard-jones     58.0      3.825
+H_ch4       Oa          lennard-jones     16.7      2.833
+H_ch4       Oz          lennard-jones     16.7      2.833
+H_ch4       OLi         lennard-jones     16.7      2.833
+H_ch4       Siz         lennard-jones     25.0      3.285
+H_ch4       Alz         lennard-jones     55.7      2.777
+H_ch4       Li          lennard-jones     389.2     1.628
+H_ch4       Na          lennard-jones     140.7     2.256
+H_ch4       K           lennard-jones     55.7      2.774
+H_ch4       Rb          lennard-jones     65.3      2.918
+H_ch4       Cs          lennard-jones     77.2      3.050
+H_ch4       H_ch4       lennard-jones     7.55      2.400
+Ar          Oz          lennard-jones     107.69    3.15  # from GarciaSanchez2009
+Ar          Oa          lennard-jones     107.69    3.15  # from GarciaSanchez2009
+Ar          OLi         lennard-jones     107.69    3.15  # from GarciaSanchez2009
+Ar          Na          lennard-jones     262.00    2.396 # from Martin-Calvo, Gutiérrez-Sevillano, Parra, Ania and Calero, doi:10.1039/C5CP03749B (compatible with GarciaSanchez2009)
+# mixing rules to overwrite
+1
+#
+C_ch4 H_ch4 Jorgensen
