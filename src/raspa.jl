@@ -197,7 +197,6 @@ struct RASPASystem <: AbstractSystem{3}
     atomic_charge::Vector{typeof(1.0u"e_au")}
     ismolecule::Bool
 end
-AtomsBase.bounding_box(sys::RASPASystem)     = sys.bounding_box
 function AtomsBase.boundary_conditions(sys::RASPASystem)
     SVector{3,BoundaryCondition}(if sys.ismolecule || any(Base.Fix1(any, isinf), bounding_box(sys))
         (DirichletZero(), DirichletZero(), DirichletZero())
@@ -205,6 +204,7 @@ function AtomsBase.boundary_conditions(sys::RASPASystem)
         (Periodic(), Periodic(), Periodic())
     end)
 end
+AtomsBase.bounding_box(sys::RASPASystem)     = sys.bounding_box
 Base.length(sys::RASPASystem)                = length(sys.position)
 Base.size(sys::RASPASystem)                  = size(sys.position)
 AtomsBase.species_type(::RASPASystem)        = AtomView{RASPASystem}

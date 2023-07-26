@@ -141,7 +141,7 @@ struct CrystalEnergySetup{TFramework,TMolecule}
     coulomb::CrystalEnergyGrid
     grids::Vector{CrystalEnergyGrid}
     atomsidx::Vector{Int} # index of the grid corresponding to the atom
-    ewald::Tuple{Float64,Int,Int,Int,SMatrix{3,3,Float64,9},Float64,Int,Float64,Float64,Vector{Float64},Float64,Vector{ComplexF64},Float64}
+    ewald::EwaldContext
     block::Union{Nothing, BitArray{3}}
 end
 
