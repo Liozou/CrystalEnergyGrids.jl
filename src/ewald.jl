@@ -111,35 +111,28 @@ function setup_Eik(systems, numsites, ks, invmat, (ΠA, ΠB, ΠC))
 end
 
 
-function ewald_main_loop(allcharges, numsites, kspace::EwaldKspace, Eikx, Eiky, Eikz, Π)
+function ewald_main_loop(allcharges, kspace::EwaldKspace, Eikx, Eiky, Eikz, Π)
     sums = zeros(ComplexF64, kspace.num_kvecs)
-    Eikr_yz = Vector{ComplexF64}(undef, numsites)
 
     kx, ky, kz = kspace.ks
     kxp = kx + 1
-    kyp = ky + 1
     tkyp = 2ky + 1
-    kzp = kz + 1
     tkzp = 2kz + 1
-    for (jy, jz, jxrange, rangeidx) in kspace.kindices
-        for i in 0:(numsites-1)
-            Eikr_yz[i+1] = Eiky[i*tkyp + kyp + jy] * Eikz[i*tkzp + kzp + jz]
-        end
-        for jidx in 1:length(jxrange)
-            pos = rangeidx + jidx
-            jx1 = jxrange[jidx] + 1
-            ofs = -1
-            for charges in allcharges
-                m = length(charges)
-                for _ in 1:Π
-                    for (i, c) in zip((ofs+1):(ofs+m), charges)
-                        Eikr = Eikx[i*kxp + jx1]*Eikr_yz[i+1]
-                        sums[pos] += c * Eikr
-                    end
-                    ofs += m
-                end
+
+    ix = 1 # reference index of the current site for Eikx
+    iy = ky+1 # reference index of the current site for Eiky
+    iz = kz+1 # reference index of the current site for Eikz
+
+    for charges in allcharges, _ in 1:Π, c in charges
+        for (jy, jz, jxrange, rangeidx) in kspace.kindices
+            Eik_xy = Eiky[iy+jy]*Eikz[iz+jz]
+            for (I, jx) in enumerate(jxrange)
+                sums[rangeidx+I] += c*Eikx[ix+jx]*Eik_xy
             end
         end
+        ix += kxp
+        iy += tkyp
+        iz += tkzp
     end
     sums
 end
@@ -225,7 +218,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
 
     kspace = EwaldKspace((kx, ky, kz), num_kvecs, kindices)
     Eikx, Eiky, Eikz = setup_Eik((syst,), numsites, kspace.ks, invmat, supercell)
-    StoreRigidChargeFramework = ewald_main_loop((charges,), numsites, kspace, Eikx, Eiky, Eikz, Π)
+    StoreRigidChargeFramework = ewald_main_loop((charges,), kspace, Eikx, Eiky, Eikz, Π)
     # UChargeChargeFrameworkRigid = 0.0
     # for idx in 1:num_kvecs
     #     UChargeChargeFrameworkRigid += kfactors[idx]*abs2(StoreRigidChargeFramework[idx])
@@ -246,7 +239,7 @@ function compute_ewald(ctx::EwaldContext, systems)
     net_charges = sum(sum(charges) for charges in allcharges)
 
     Eikx, Eiky, Eikz = setup_Eik(systems, numsites, ctx.kspace.ks, ctx.invmat, (1,1,1))
-    StoreTotalChargeAdsorbates = ewald_main_loop(allcharges, numsites, ctx.kspace, Eikx, Eiky, Eikz, 1)
+    StoreTotalChargeAdsorbates = ewald_main_loop(allcharges, ctx.kspace, Eikx, Eiky, Eikz, 1)
     energy_framework_adsorbate = 0.0
     energy_adsorbate_adsorbate = 0.0
     for idx in 1:ctx.kspace.num_kvecs
