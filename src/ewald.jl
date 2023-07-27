@@ -23,7 +23,7 @@ end
 struct EwaldKspace
     ks::NTuple{3,Int}
     num_kvecs::Int
-    kindices::Vector{Tuple{Int,Int,UnitRange{Int}}}
+    kindices::Vector{Tuple{Int,Int,UnitRange{Int},Int}}
 end
 
 struct EwaldContext
@@ -85,9 +85,9 @@ function setup_Eik(systems, numsites, ks, invmat, (ΠA, ΠB, ΠC))
     ΠABC = ΠA*ΠBC
     ofs = -1
     for syst in systems
-        #=@threads=# for j in 1:length(syst)
+        for j in 1:length(syst)
             px, py, pz = invmat * (NoUnits.(position(syst, j)/u"Å"))
-            #=@threads=# for πs in CartesianIndices((0:(ΠA-1), 0:(ΠB-1), 0:(ΠC-1)))
+            for πs in CartesianIndices((0:(ΠA-1), 0:(ΠB-1), 0:(ΠC-1)))
                 πa, πb, πc = Tuple(πs)
                 πofs = πa*ΠBC + πb*ΠC + πc
 
@@ -110,8 +110,8 @@ function setup_Eik(systems, numsites, ks, invmat, (ΠA, ΠB, ΠC))
     (Eikx, Eiky, Eikz)
 end
 
+
 function ewald_main_loop(allcharges, numsites, kspace::EwaldKspace, Eikx, Eiky, Eikz, Π)
-    idx = 0
     sums = zeros(ComplexF64, kspace.num_kvecs)
     Eikr_yz = Vector{ComplexF64}(undef, numsites)
 
@@ -121,19 +121,20 @@ function ewald_main_loop(allcharges, numsites, kspace::EwaldKspace, Eikx, Eiky, 
     tkyp = 2ky + 1
     kzp = kz + 1
     tkzp = 2kz + 1
-    for (jy, jz, jxrange) in kspace.kindices
+    for (jy, jz, jxrange, rangeidx) in kspace.kindices
         for i in 0:(numsites-1)
             Eikr_yz[i+1] = Eiky[i*tkyp + kyp + jy] * Eikz[i*tkzp + kzp + jz]
         end
-        for jx in jxrange
-            idx += 1
+        for jidx in 1:length(jxrange)
+            pos = rangeidx + jidx
+            jx1 = jxrange[jidx] + 1
             ofs = -1
             for charges in allcharges
                 m = length(charges)
                 for _ in 1:Π
-                    for i in 1:m
-                        Eikr = Eikx[(i+ofs)*kxp + 1 + jx]*Eikr_yz[i+ofs+1]
-                        sums[idx] += charges[i] * Eikr
+                    for (i, c) in zip((ofs+1):(ofs+m), charges)
+                        Eikr = Eikx[i*kxp + jx1]*Eikr_yz[i+1]
+                        sums[pos] += c * Eikr
                     end
                     ofs += m
                 end
@@ -170,7 +171,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
 
     recip_cutoff2 = (1.05*max(kx, ky, kz))^2
     num_kvecs = 0
-    kindices = Tuple{Int,Int,UnitRange{Int}}[]
+    kindices = Tuple{Int,Int,UnitRange{Int},Int}[]
     for j in -ky:ky, k in -kz:kz
         start = -1
         for i in 0:kx
@@ -181,12 +182,16 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
                     start = i
                 end
             elseif start != -1
-                push!(kindices, (j, k, start:(i-1)))
+                _, _, lastrange, lastrangeidx = isempty(kindices) ? (0,0,1:0,0) : last(kindices)
+                push!(kindices, (j, k, start:(i-1), lastrangeidx + length(lastrange)))
                 start = -1
                 break
             end
         end
-        start == -1 || push!(kindices, (j, k, start:kx))
+        if start != -1
+            _, _, lastrange, lastrangeidx = isempty(kindices) ? (0,0,1:0,0) : last(kindices)
+            push!(kindices, (j, k, start:kx, lastrangeidx + length(lastrange)))
+        end
     end
 
     invmat::SMatrix{3,3,Float64,9} = inv(mat)
@@ -197,19 +202,17 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
     # kvecs = Vector{SVector{3,Float64}}(undef, num_kvecs)
     kfactors = Vector{Float64}(undef, num_kvecs)
 
-    idx_b = 0
-    for (j, k, irange) in kindices
+    @threads for (j, k, irange, rangeidx) in kindices
         rk0x = j*il_ay + k*il_az
         rk0y = j*il_by + k*il_bz
         rk0z = j*il_cy + k*il_cz
-        for i in irange
-            idx_b += 1
+        for (I, i) in enumerate(irange)
             rkx = 2π*(rk0x + i*il_ax)
             rky = 2π*(rk0y + i*il_bx)
             rkz = 2π*(rk0z + i*il_cx)
             # kvecs[idx_b] = SVector{3,Float64}(rkx, rky, rkz)
             rksqr = rkx^2 + rky^2 + rkz^2
-            kfactors[idx_b] = volume_factor*(2.0*(1+(i!=0)))*exp(α_factor*rksqr)/rksqr
+            kfactors[rangeidx+I] = volume_factor*(2.0*(1+(i!=0)))*exp(α_factor*rksqr)/rksqr
         end
     end
 
