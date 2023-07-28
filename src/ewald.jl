@@ -36,6 +36,7 @@ struct EwaldContext
     UIon::Float64
     StoreRigidChargeFramework::Vector{ComplexF64}
     net_charges_framework::Float64
+    ε::Float64
 end
 
 
@@ -84,7 +85,7 @@ function setup_Eik(systems, numsites, ks, invmat, (ΠA, ΠB, ΠC))
     ΠBC = ΠB*ΠC
     ΠABC = ΠA*ΠBC
     ofs = -1
-    for syst in systems
+    @inbounds for syst in systems
         for j in 1:length(syst)
             px, py, pz = invmat * (NoUnits.(position(syst, j)/u"Å"))
             for πs in CartesianIndices((0:(ΠA-1), 0:(ΠB-1), 0:(ΠC-1)))
@@ -119,15 +120,17 @@ function ewald_main_loop(allcharges, kspace::EwaldKspace, Eikx, Eiky, Eikz, Π)
     tkyp = 2ky + 1
     tkzp = 2kz + 1
 
-    ix = 1 # reference index of the current site for Eikx
+    ix = 0 # reference index of the current site for Eikx
     iy = ky+1 # reference index of the current site for Eiky
     iz = kz+1 # reference index of the current site for Eikz
 
-    for charges in allcharges, _ in 1:Π, c in charges
+    @inbounds for charges in allcharges, _ in 1:Π, c in charges
         for (jy, jz, jxrange, rangeidx) in kspace.kindices
             Eik_xy = Eiky[iy+jy]*Eikz[iz+jz]
-            for (I, jx) in enumerate(jxrange)
-                sums[rangeidx+I] += c*Eikx[ix+jx]*Eik_xy
+            n = length(jxrange)
+            ofs = first(jxrange) + ix
+            @simd for I in 1:n
+                sums[rangeidx+I] += c*Eikx[ofs+I]*Eik_xy
             end
         end
         ix += kxp
@@ -154,7 +157,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
     α = sqrt(abs(log(ε*tol)))/cutoff_coulomb
     tol1 = sqrt(-log(ε*4.0*(tol*α)^2))
 
-    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst) .* supercell) / u"Å"))
+    mat = stack3(bounding_box(syst) .* supercell)
     len_a, len_b, len_c = cell_lengths(mat)
     volume = abs(det(mat))
     __α = α*tol1/π
@@ -227,7 +230,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
     net_charges_framework = sum(charges)
 
     return EwaldContext(kspace, α, invmat, volume_factor, energy_framework_self, kfactors,
-                        UIon, StoreRigidChargeFramework, net_charges_framework)
+                        UIon, StoreRigidChargeFramework, net_charges_framework, ε)
 end
 
 

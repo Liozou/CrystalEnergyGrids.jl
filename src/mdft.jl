@@ -117,12 +117,11 @@ function expand_correlation(c₂r, (a1, a2, a3)::NTuple{3,Int}, mat)
     δv = det(mat)/(a1*a2*a3)
     invmat = inv(mat)
     buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
-    stepmatrix = similar(buffer)
+    buffer2 = MVector{3,Float64}()
     c₂ = Array{Float64}(undef, a1, a2, a3)
     for i3 in 1:a3, i2 in 1:a2, i1 in 1:a1
-        stepmatrix .= mat[:,1].*((i1-1)/a1) .+ mat[:,2].*((i2-1)/a2) .+ mat[:,3].*((i3-1)/a3)
-        mul!(buffer, invmat, stepmatrix)
-        c₂[i1,i2,i3] = δv*c₂r(periodic_distance!(buffer, mat, ortho, safemin))
+        buffer .= mat[:,1].*((i1-1)/a1) .+ mat[:,2].*((i2-1)/a2) .+ mat[:,3].*((i3-1)/a3)
+        c₂[i1,i2,i3] = δv*c₂r(periodic_distance_fromcartesian!(buffer, mat, invmat, ortho, safemin, buffer2))
     end
     c₂
 end

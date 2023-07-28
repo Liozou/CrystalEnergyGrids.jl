@@ -69,7 +69,7 @@ function guess_bonds(system::AbstractSystem{3})
     bonds = Tuple{Int,Int,SVector{3,Int}}[]
     radii = Vector{Float32}(undef, n)
     wider_metallic_bonds = any(i -> atomic_number(system, i) ≥ 21, 1:n)
-    mat = SMatrix{3,3,Float64,9}(NoUnits.(stack(bounding_box(system))/u"Å"))
+    mat = stack3(bounding_box(system))
     invmat = inv(mat)
     for i in 1:n
         t = atomic_number(system, i)
@@ -82,6 +82,7 @@ function guess_bonds(system::AbstractSystem{3})
     cutoff = 3*(0.75^3.1) * max(maximum(radii), 0.833)
     cutoff2 = 13*0.75/15
     buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
+    buffer2 = MVector{3,Float64}()
     for i in 1:n
         radius_i = radii[i]
         iszero(radius_i) && continue
@@ -90,8 +91,8 @@ function guess_bonds(system::AbstractSystem{3})
             radius_j = radii[j]
             iszero(radius_j) && continue
             posj = NoUnits.(position(system, j)/u"Å")
-            buffer .= invmat*(posi .- posj)
-            d1 = periodic_distance!(buffer, mat, ortho, safemin)
+            buffer .= posi .- posj
+            d1 = periodic_distance_cartesian!(buffer, mat, invmat, ortho, safemin, buffer2)
             maxdist = cutoff2*(radius_i + radius_j)
             if d1 < cutoff && 0.5 < d1 < maxdist
                 for ofsx in -1:1, ofsy in -1:1, ofsz in -1:1
@@ -218,17 +219,65 @@ function preplot(field::AbstractArray{Float64,3}, reference::AbstractSystem{3})
     end
     # @show last(x), last(y), last(z)
     isomin, isomax = extrema(field)
-    @assert iszero(isomin)
-    isomin = isomax/40
+    colorscale = if iszero(isomin) # density
+        isomin = isomax/40
+        colors.BuPu
+    else # energy
+        isomax = partialsort(vec(field), 100) # 100th lowest value
+        colors.ice
+    end
     i = argmax(field)
     [PlotlyJS.volume(; x, y, z, value=field[:],
                        suface_count=20, isomin, isomax,
                        opacity=0.6,
                        hoverinfo="skip",
-                       colorscale=colors.BuPu
+                       colorscale
                     )]
 end
 
+
+function preplot(points::Vector{CartesianIndex{3}}, field::AbstractArray{Float64,3}, reference::AbstractSystem{3})
+    numA, numB, numC = size(field)
+    axeA, axeB, axeC = [NoUnits.(x/u"Å") for x in bounding_box(reference)]
+    # X, Y, Z = mgrid(range(0.0; step=(axeA[1]+axeB[1]+axeC[1])))
+    stepA = axeA / numA
+    stepB = axeB / numB
+    stepC = axeC / numC
+    n = length(points)
+    x = Vector{Float64}(undef, n)
+    y = Vector{Float64}(undef, n)
+    z = Vector{Float64}(undef, n)
+    color = Vector{String}(undef, n)
+    hovertext = Vector{String}(undef, n)
+    markersize = Vector{Float64}(undef, n)
+    values = [field[p] for p in points]
+    m, M = extrema(values)
+    for i in 1:n
+        a, b, c = Tuple(points[i])
+        p = (a-1)*stepA + (b-1)*stepB + (c-1)*stepC
+        x[i] = p[1]
+        y[i] = p[2]
+        z[i] = p[3]
+        value = values[i]
+        markersize[i] = round(Int, clamp(-log(value-m), 2, 20))
+        hovertext[i] = string(value)
+        color[i] = "blue"
+    end
+
+    [PlotlyJS.scatter(; x, y, z,
+                        mode="markers", type="scatter3d",
+                        hoverlabel_namelength=0, hovertext, size_max=20,
+                        marker=PlotlyJS.attr(; color=color, size=markersize, opacity=1,
+                                               line=PlotlyJS.attr(width=0)))]
+end
+
+"""
+    preplot
+
+Return a list of plotting recipes that can be fed to [`internalview`](@ref) or
+[`externalview`](@ref)
+"""
+preplot
 # preplots = preplot(setup.framework)
 # append!(preplots, preplot(density))
 # externalview(preplots) # or internalview(preplots)

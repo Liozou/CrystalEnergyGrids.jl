@@ -101,17 +101,7 @@ function get_strict(pal::PseudoAtomListing, atom)
     return pal.info[curr_priority]
 end
 function Base.getindex(pal::PseudoAtomListing, atom)
-    name = atom isa String ? atom : String(atom)
-    s = split(name, '_')
-    if length(s) > 1
-        if all(isnumeric, last(s))
-            name = join(@view(s[1:end-1]), '_')
-        end
-    else
-        while isnumeric(name[end])
-            name = name[1:end-1]
-        end
-    end
+    name = get_atom_name(atom)
     get_strict(pal, name)
 end
 
@@ -306,28 +296,64 @@ function parse_blockfile(file, gridref)
 end
 
 """
-    setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule, gridstep=0.15, supercell=(1,1,1), blockfile=first(split(framework), '_'))
+    setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=nothing, supercell=nothing, blockfile=nothing)
 
 Return a [`CrystalEnergySetup`](@ref) for studying `molecule` (with its forcefield) in
 `framework` (with its forcefield), extracted from existing RASPA grids and completed with
 Ewald sums precomputations.
 
-`gridsteps` and `supercell` should match that used when creating the grids.
-`blockfile` can be set to `nothing` to allow the molecule to go everywhere in the framework,
-or should be the radical (excluding the ".block" extension) of the block file in the raspa
-directory.
+`gridsteps` and `supercell` should match that used when creating the grids. If not provided,
+they will be found automatically if only one particular step size and one particular
+supercell were used respectively. If provided, `gridstep` should be a floating point number
+and `supercell` a triplet of integers.
+
+`blockfile` can be set to `false` to allow the molecule to go everywhere in the framework.
+Or it can be set to the radical (excluding the ".block" extension) of the block file in the
+raspa directory to include it and prevent the molecule to go in the blocked spheres.
+Setting it to `true` is equivalent to using `blockfile=first(split(framework, '_'))`.
+If not provided, the default is to set it to `false` if the molecule is positively charged
+and monoatomic (considered to be a small cation), or to `true` otherwise.
 """
-function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule, gridstep=0.15, supercell=(1,1,1), blockfile=first(split(framework, '_')))
+function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=nothing, supercell=nothing, blockfile=nothing)
     raspa::String = getdir_RASPA()
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
-    gridstep_name = @sprintf "%.6f" gridstep
-    supercell_name = join(supercell, 'x')
-    grid_dir = joinpath(raspa, "grids", forcefield_framework, framework, gridstep_name)
+    rootdir = joinpath(raspa, "grids", forcefield_framework, framework)
+    gridstep_name::String = if gridstep isa Nothing
+        dirs = readdir(rootdir)
+        length(dirs) == 1 || error(lazy"Please specify an explicit grid step size to choose between the different ones stored at $rootdir.")
+        dirs[1]
+    else
+        @sprintf "%.6f" gridstep
+    end
+    grid_dir = joinpath(rootdir, gridstep_name)
+    supercell_name = if supercell isa Nothing
+        basename(first(Iterators.filter(isdir, readdir(grid_dir; join=true))))
+    else
+        join(supercell, 'x')
+    end
 
     syst_mol = load_molecule_RASPA(molecule, forcefield_molecule, forcefield_framework, syst_framework)
-    needcoulomb = any(syst_mol[i,:atomic_charge]!=(0.0u"e_au") for i in 1:length(syst_mol))
 
-    mat = SMatrix{3,3,Float64,9}((stack(bounding_box(syst_framework)) / u"Å"))
+    mat = stack3(bounding_box(syst_framework))
+
+    ewald = initialize_ewald(syst_framework, parse.(Int, split(supercell_name, 'x')))
+    forcefield = parse_forcefield_RASPA(forcefield_framework)
+    newblockfile = if blockfile isa Union{Bool,AbstractString}
+        blockfile
+    else
+        blockfile = !(length(syst_mol) == 1 && syst_mol.atomic_charge[1] > 0.3u"e_au")
+    end
+    block = if newblockfile isa Bool && !newblockfile
+        nothing
+    else
+        blockpath = newblockfile isa Bool ? first(split(framework, '_')) : newblockfile
+        parse_blockfile(joinpath(raspa, "structures", "block", blockpath)*".block", coulomb)
+    end
+    if block isa BitArray{3} && !any(block)
+        block = nothing
+    end
+
+    needcoulomb = any(syst_mol[i,:atomic_charge]!=(0.0u"e_au") for i in 1:length(syst_mol))
     coulomb = if needcoulomb
         parse_grid(joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid"), true, mat)
     else
@@ -346,11 +372,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
         grids[i] = parse_grid(joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid")), false, mat)
     end
 
-    ewald = initialize_ewald(syst_framework, supercell)
-
-    block = isnothing(blockfile) ? nothing : parse_blockfile(joinpath(raspa, "structures", "block", blockfile)*".block", coulomb)
-
-    CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald, block)
+    CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald, forcefield, block)
 end
 
 
@@ -504,5 +526,5 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
             end
         end
     end
-    ForceField(ff.interactions, ff.sdict, ff.cutoff, name)
+    ForceField(ff.interactions, ff.sdict, ff.cutoff, ff.cutoff2, name)
 end

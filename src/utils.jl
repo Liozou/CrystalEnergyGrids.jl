@@ -19,6 +19,58 @@ function inverse_abc_offsetpoint(ipoint, invmat, shift, size, dims)
     abc .- floor.(abc)
 end
 
+function perpendicular_lengths(a, b, c)
+    # ax = norm(a)
+    # ay = norm(b)
+    # az = norm(c)
+    # bx = (b[1]*c[1] + b[2]*c[2] + b[3]*c[3])/(ay*az)
+    # by = (a[1]*c[1] + a[2]*c[2] + a[3]*c[3])/(ax*az)
+    # bz = (a[1]*b[1] + a[2]*b[2] + a[3]*b[3])/(ax*ay)
+    axb1 = a[2]*b[3] - a[3]*b[2]
+    axb2 = a[3]*b[1] - a[1]*b[3]
+    axb3 = a[1]*b[2] - a[2]*b[1]
+    axb = SVector{3,Float64}((axb1, axb2, axb3))
+    bxc1 = b[2]*c[3] - b[3]*c[2]
+    bxc2 = b[3]*c[1] - b[1]*c[3]
+    bxc3 = b[1]*c[2] - b[2]*c[1]
+    bxc = SVector{3,Float64}((bxc1, bxc2, bxc3))
+    cxa1 = c[2]*a[3] - c[3]*a[2]
+    cxa2 = c[3]*a[1] - c[1]*a[3]
+    cxa3 = c[1]*a[2] - c[2]*a[1]
+    cxa = SVector{3,Float64}((cxa1, cxa2, cxa3))
+    volume = abs(dot(a, bxc))
+    cx = volume/norm(bxc)
+    cy = volume/norm(cxa)
+    cz = volume/norm(axb)
+    return SVector{3,Float64}((cx, cy, cz))
+end
+
+"""
+    find_supercell(mat::AbstractMatrix, cutoff)
+    find_supercell((a, b, c)::NTuple{3,<:AbstractVector}, cutoff)
+    find_supercell((cx, cy, cz)::NTuple{3,AbstractFloat}, cutoff)
+
+Return the triplet `(ix, iy, iz)` such that the `ix × iy × iz` supercell of the input has
+perpendicular widths each at least twice as long as the cutoff.
+
+The input can be the unit cell matrix `mat`, its three axes `(a, b, c)` or its three
+perpendicular widths `(cx, cy, cz)`.
+"""
+function find_supercell((cx, cy, cz)::NTuple{3,AbstractFloat}, cutoff)
+    ceil(Int, cx/(2*cutoff)), ceil(Int, cy/(2*cutoff)), ceil(Int, cz/(2*cutoff))
+end
+find_supercell(mat::AbstractMatrix, cutoff) = find_supercell((view(mat, :, 1), view(mat, :, 2), view(mat, :, 3)), cutoff)
+find_supercell((a, b, c)::NTuple{3,<:AbstractVector}, cutoff) = find_supercell(perpendicular_lengths(a, b, c), cutoff)
+
+function stack3((a, b, c)::NTuple{3,<:AbstractVector{<:Real}})
+    SMatrix{3,3,Float64,9}((a[1], a[2], a[3], b[1], b[2], b[3], c[1], c[2], c[3]))
+end
+function stack3((a, b, c)::NTuple{3,<:AbstractVector{<:(Quantity{U,Unitful.𝐋} where U)}})
+    SMatrix{3,3,Float64,9}((NoUnits(a[1]/u"Å"), NoUnits(a[2]/u"Å"), NoUnits(a[3]/u"Å"),
+                            NoUnits(b[1]/u"Å"), NoUnits(b[2]/u"Å"), NoUnits(b[3]/u"Å"),
+                            NoUnits(c[1]/u"Å"), NoUnits(c[2]/u"Å"), NoUnits(c[3]/u"Å")))
+end
+
 # The following are copied from PeriodicGraphEmbeddings.jl
 
 function cell_parameters(mat::AbstractMatrix)
@@ -65,6 +117,40 @@ end
 function periodic_distance(buffer, mat)
     _, ortho, safemin = prepare_periodic_distance_computations(mat)
     periodic_distance!(buffer, mat, ortho, safemin)
+end
+
+"""
+    periodic_distance_fromcartesian!(buffer, mat, invmat, ortho, safemin, buffer2)
+
+Equivalent to `periodic_distance!` except that `buffer` contains cartesian coordinates, not
+fractional ones.
+
+`buffer2` should be a `MVector{3,Float64}`.
+
+After this function returns the distance, `buffer` contains the cartesian coordinates
+corresponding to the closest image.
+"""
+function periodic_distance_fromcartesian!(buffer, mat, invmat, ortho, safemin, buffer2)
+    mul!(buffer2, invmat, buffer)
+    @simd for i in 1:3
+        diff = buffer2[i] + 0.5
+        buffer2[i] = diff - floor(diff) - 0.5
+    end
+    mul!(buffer, mat, buffer2)
+    ref = norm(buffer)
+    (ortho || ref ≤ safemin) && return ref
+    @inbounds for i in 1:3
+        buffer[i] += 1
+        mul!(buffer, mat, buffer2)
+        newnorm = norm(buffer)
+        newnorm < ref && return newnorm # in a reduced lattice, there should be at most one
+        buffer[i] -= 2
+        mul!(buffer, mat, buffer2)
+        newnorm = norm(buffer)
+        newnorm < ref && return newnorm
+        buffer[i] += 1
+    end
+    return ref
 end
 
 """
@@ -312,4 +398,22 @@ function identify_molecule(atomsymbols)
         end
     end
     join(parts)
+end
+
+
+function get_atom_name(atom)
+    name = atom isa String ? atom : String(atom)
+    s = split(name, '_')
+    if length(s) > 1
+        if all(isnumeric, last(s))
+            return join(@view(s[1:end-1]), '_')
+        end
+    else
+        i = length(name)
+        while isnumeric(name[i])
+            i -= 1
+        end
+        return name[1:i]
+    end
+    return name
 end

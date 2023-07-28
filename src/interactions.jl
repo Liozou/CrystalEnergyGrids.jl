@@ -390,6 +390,47 @@ function tailcorrection(rule::InteractionRule, cutoff)
     end)*u"K"
 end
 
+function derivatives(rule::InteractionRule, r)
+    if rule.kind === FF.LennardJones
+        ε, σ = rule.params
+        x6 = (σ/r)^6
+        r2 = r*r
+        r4 = r2*r2
+        value = 4*ε*x6*(x6 - 1)
+        ∂1 = 24*ε*(x6*(1 - 2*x6))/r2
+        ∂2 = 96*ε*(x6*(7*x6 - 2))/r4
+        ∂3 = 384*ε*(x6*(5 - 28*x6))/(r4*r4)
+    elseif rule.kind === FF.Coulomb
+        error("Coulomb interactions should not be taken into account in VdW grids.")
+    elseif rule.kind === FF.HardSphere
+        value = ifelse(r < rule.params[1] + rule.params[2], Inf, 0.0)
+        ∂1 = ∂2 = ∂3 = 0.0
+    elseif rule.kind === FF.Buckingham
+        A, B, C = rule.params
+        r2 = r*r
+        r4 = r2*r2
+        r5 = r4*r
+        x6 = C/(r4*r2)
+        xe = A*exp(-B*r)
+        value = xe - x6
+        ∂1 = -B*xe/r + 6*x6/r2
+        ∂2 = -48*x6/r4 + B*xe*(1+B*r)/(r2*r)
+        ∂3 = -(3*B*r + B*B*r2 + 3)*B*xe/r5 + 480*C/(r5*r5*r2)
+    elseif rule.kind === FF.NoInteraction
+        0.0
+    elseif rule.kind === FF.Monomial
+        error("VdW grid not implemented for Monomial")
+    elseif rule.kind === FF.Exponential
+        error("VdW grid not implemented for Exponential")
+    elseif rule.kind === FF.UndefinedInteraction
+        throw(UndefinedInteractionError())
+    else
+        @assert false # logically impossible
+    end
+    return value-rule.shift, ∂1, ∂2, ∂3
+end
+
+
 struct RepeatedRuleKind <: Exception
     x::InteractionRule
     y::InteractionRule
@@ -398,7 +439,6 @@ function Base.showerror(io::IO, e::RepeatedRuleKind)
     print(io, "Defining an `InteractionRuleSum` of two rules with the same kind is forbidden: attempted to sum ",
               e.x, " with ", e.y)
 end
-
 
 """
     InteractionRuleSum

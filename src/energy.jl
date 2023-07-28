@@ -179,7 +179,7 @@ function energy_intra(ff::ForceField, system::AbstractSystem)
     for i in 1:n, j in (i+1):n
         r2 = norm2(positions[i], positions[j])
         rule = ff[symbols[i], symbols[j]]
-        if r2 < ff.cutoff^2
+        if r2 < ff.cutoff2
             energy += rule(r2) + tailcorrection(rule, ff.cutoff)
         end
     end
@@ -209,3 +209,27 @@ function energy_nocutoff(step::SimulationStep)
     end
     energy
 end
+
+# function energy_withcutoff(step::SimulationStep)
+#     energy = 0.0u"K"
+#     nkinds = length(step.systemkinds)
+#     for (i1, kind1) in enumerate(step.systemkinds)
+#         poskind1 = step.positions[i1]
+#         idx1 = step.idx[i1]
+#         rigid1 = step.isrigid[i1]
+#         for (j1, pos1) in enumerate(poskind1)
+#             rigid1 || (energy += energy_intra(ff, ChangePositionSystem(kind1, pos1)))
+#             for i2 in i1:nkinds
+#                 poskind2 = step.positions[i2]
+#                 idx2 = step.idx[i2]
+#                 for j2 in (j1*(i1==i2)+1):length(poskind2)
+#                     pos2 = poskind2[j2]
+#                     for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
+#                         energy += step.ff(idx1[k1], idx2[k2], norm2(p1, p2))
+#                     end
+#                 end
+#             end
+#         end
+#     end
+#     energy
+# end
