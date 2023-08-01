@@ -175,11 +175,12 @@ function energy_intra(ff::ForceField, system::AbstractSystem)
     symbols = atomic_symbol(system)
     n = length(positions)
     energy = 0.0u"K"
+    cutoff2 = ff.cutoff^2
     isinf(ff.cutoff) || error("finite cutoff not implemented")
     for i in 1:n, j in (i+1):n
         r2 = norm2(positions[i], positions[j])
         rule = ff[symbols[i], symbols[j]]
-        if r2 < ff.cutoff2
+        if r2 < cutoff2
             energy += rule(r2) + tailcorrection(rule, ff.cutoff)
         end
     end

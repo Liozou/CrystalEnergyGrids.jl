@@ -92,7 +92,7 @@ function guess_bonds(system::AbstractSystem{3})
             iszero(radius_j) && continue
             posj = NoUnits.(position(system, j)/u"Å")
             buffer .= posi .- posj
-            d1 = periodic_distance_cartesian!(buffer, mat, invmat, ortho, safemin, buffer2)
+            d1 = periodic_distance_fromcartesian!(buffer, mat, invmat, ortho, safemin, buffer2)
             maxdist = cutoff2*(radius_i + radius_j)
             if d1 < cutoff && 0.5 < d1 < maxdist
                 for ofsx in -1:1, ofsy in -1:1, ofsz in -1:1

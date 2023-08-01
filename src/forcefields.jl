@@ -6,7 +6,6 @@ struct ForceField
     interactions::Matrix{Union{InteractionRule,InteractionRuleSum}}
     sdict::IdDict{Symbol,Int}
     cutoff::typeof(1.0u"Å")
-    cutoff2::typeof(1.0u"Å^2")
     name::String
 end
 
@@ -238,7 +237,7 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å
         end
     end
 
-    ForceField(interactions, sdict, cutoff, cutoff^2, name)
+    ForceField(interactions, sdict, cutoff, name)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", ff::ForceField)
@@ -258,17 +257,17 @@ end
 Base.getindex(ff::ForceField, i::Integer, j::Integer) = ff.interactions[i,j]
 Base.getindex(ff::ForceField, a::Symbol, b::Symbol) = ff[ff.sdict[a], ff.sdict[b]]
 
-function (ff::ForceField)(i::Integer, j::Integer, distance)
-    if distance isa (Quantity{T,Unitful.𝐋^2,U} where {T,U})
-        distance >= ff.cutoff2 && return 0.0u"K"
-    elseif distance isa (Quantity{T,Unitful.𝐋,U} where {T,U})
-        distance >= ff.cutoff && return 0.0u"K"
-    else
-        NoUnits(distance/u"Å") > ff.cutoff && return 0.0u"K"
-    end
-    return ff[i,j](distance)
-end
-(ff::ForceField)(a::Symbol, b::Symbol, distance) = ff(ff.sdict[a], ff.sdict[b], distance)
+# function (ff::ForceField)(i::Integer, j::Integer, distance)
+#     if distance isa (Quantity{T,Unitful.𝐋^2,U} where {T,U})
+#         distance >= ff.cutoff*ff.cutoff && return 0.0u"K"
+#     elseif distance isa (Quantity{T,Unitful.𝐋,U} where {T,U})
+#         distance >= ff.cutoff && return 0.0u"K"
+#     else
+#         NoUnits(distance/u"Å") > ff.cutoff && return 0.0u"K"
+#     end
+#     return ff[i,j](distance)
+# end
+# (ff::ForceField)(a::Symbol, b::Symbol, distance) = ff(ff.sdict[a], ff.sdict[b], distance)
 
 function derivatives_nocutoff(ff::ForceField, i::Integer, j::Integer, distance)
     derivatives(ff.interactions[i,j], distance)
