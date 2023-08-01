@@ -6,12 +6,15 @@ function wrap_atom(point, mat, invmat)
     # return mat * (abc .- floor.(abc))
     x, y, z = mat * (abc .- floor.(abc))
     ε = 1e-14
+    if x > mat[1,1] + ε || y > mat[2,2] + ε || z > mat[3,3] + ε
+        error("Check this assertion")
+    end
     return SVector{3,Float64}(clamp(x, ε, mat[1,1]-ε), clamp(y, ε, mat[2,2]-ε), clamp(z, ε, mat[3,3]-ε))
 end
 
 function offsetpoint(point, mat, invmat, shift, size, dims)
     newpoint = wrap_atom(NoUnits.(point/u"Å"), mat, invmat)
-    @. (newpoint - shift)/size*dims + 1
+    @. dims*(newpoint - shift)/size + 1
 end
 
 function inverse_abc_offsetpoint(ipoint, invmat, shift, size, dims)
@@ -29,20 +32,20 @@ function perpendicular_lengths(a, b, c)
     axb1 = a[2]*b[3] - a[3]*b[2]
     axb2 = a[3]*b[1] - a[1]*b[3]
     axb3 = a[1]*b[2] - a[2]*b[1]
-    axb = SVector{3,Float64}((axb1, axb2, axb3))
+    axb = SVector{3}((axb1, axb2, axb3))
     bxc1 = b[2]*c[3] - b[3]*c[2]
     bxc2 = b[3]*c[1] - b[1]*c[3]
     bxc3 = b[1]*c[2] - b[2]*c[1]
-    bxc = SVector{3,Float64}((bxc1, bxc2, bxc3))
+    bxc = SVector{3}((bxc1, bxc2, bxc3))
     cxa1 = c[2]*a[3] - c[3]*a[2]
     cxa2 = c[3]*a[1] - c[1]*a[3]
     cxa3 = c[1]*a[2] - c[2]*a[1]
-    cxa = SVector{3,Float64}((cxa1, cxa2, cxa3))
+    cxa = SVector{3}((cxa1, cxa2, cxa3))
     volume = abs(dot(a, bxc))
     cx = volume/norm(bxc)
     cy = volume/norm(cxa)
     cz = volume/norm(axb)
-    return SVector{3,Float64}((cx, cy, cz))
+    return SVector{3}((cx, cy, cz))
 end
 
 """
@@ -56,11 +59,15 @@ perpendicular widths each at least twice as long as the cutoff.
 The input can be the unit cell matrix `mat`, its three axes `(a, b, c)` or its three
 perpendicular widths `(cx, cy, cz)`.
 """
-function find_supercell((cx, cy, cz)::NTuple{3,AbstractFloat}, cutoff)
-    ceil(Int, cx/(2*cutoff)), ceil(Int, cy/(2*cutoff)), ceil(Int, cz/(2*cutoff))
+function find_supercell((cx, cy, cz)::NTuple{3,T}, cutoff::T) where T
+    ceil(Int, 2cutoff/cx), ceil(Int, 2cutoff/cy), ceil(Int, 2*cutoff/cz)
 end
 find_supercell(mat::AbstractMatrix, cutoff) = find_supercell((view(mat, :, 1), view(mat, :, 2), view(mat, :, 3)), cutoff)
 find_supercell((a, b, c)::NTuple{3,<:AbstractVector}, cutoff) = find_supercell(perpendicular_lengths(a, b, c), cutoff)
+function find_supercell(x, cutoff)
+    (x isa NTuple || length(x) != 3) && throw(MethodError(find_supercell, (x, cutoff)))
+    find_supercell((x[1], x[2], x[3]), cutoff)
+end
 
 function stack3((a, b, c)::NTuple{3,<:AbstractVector{<:Real}})
     SMatrix{3,3,Float64,9}((a[1], a[2], a[3], b[1], b[2], b[3], c[1], c[2], c[3]))
@@ -69,6 +76,10 @@ function stack3((a, b, c)::NTuple{3,<:AbstractVector{<:(Quantity{U,Unitful.𝐋}
     SMatrix{3,3,Float64,9}((NoUnits(a[1]/u"Å"), NoUnits(a[2]/u"Å"), NoUnits(a[3]/u"Å"),
                             NoUnits(b[1]/u"Å"), NoUnits(b[2]/u"Å"), NoUnits(b[3]/u"Å"),
                             NoUnits(c[1]/u"Å"), NoUnits(c[2]/u"Å"), NoUnits(c[3]/u"Å")))
+end
+function stack3(x)
+    x isa NTuple && throw(MethodError(stack3, (x,)))
+    stack3((x[1], x[2], x[3]))
 end
 
 # The following are copied from PeriodicGraphEmbeddings.jl
@@ -119,38 +130,56 @@ function periodic_distance(buffer, mat)
     periodic_distance!(buffer, mat, ortho, safemin)
 end
 
+
+function norm2(u::S, v::T) where {S,T}
+    r2 = zero(eltype(S))*zero(eltype(T)) # == zero(u)^2 == zero(v)^2
+    rx = eachindex(u)
+    @simd for i in rx
+        r2 += (u[i] - v[i])^2
+    end
+    r2
+end
+function norm2(u::T) where {T}
+    r2 = zero(eltype(T))^2
+    @simd for x in u
+        r2 += x^2
+    end
+    r2
+end
+
 """
-    periodic_distance_fromcartesian!(buffer, mat, invmat, ortho, safemin, buffer2)
+    periodic_distance2_fromcartesian!(buffer, mat, invmat, ortho, safemin2, buffer2)
 
-Equivalent to `periodic_distance!` except that `buffer` contains cartesian coordinates, not
-fractional ones.
-
-`buffer2` should be a `MVector{3,Float64}`.
+Similar to `periodic_distance!` except that:
+- `buffer` contains cartesian coordinates, not fractional ones.
+- `safemin2` should be `safemin^2`
+- `buffer2` should be a `MVector{3,Float64}`.
+- the result is the squared distance.
 
 After this function returns the distance, `buffer` contains the cartesian coordinates
 corresponding to the closest image.
 """
-function periodic_distance_fromcartesian!(buffer, mat, invmat, ortho, safemin, buffer2)
+function periodic_distance2_fromcartesian!(buffer, mat, invmat, ortho, safemin2, buffer2)
     mul!(buffer2, invmat, buffer)
     @simd for i in 1:3
         diff = buffer2[i] + 0.5
         buffer2[i] = diff - floor(diff) - 0.5
     end
     mul!(buffer, mat, buffer2)
-    ref = norm(buffer)
-    (ortho || ref ≤ safemin) && return ref
+    ref2 = norm2(buffer)
+    (ortho || ref2 ≤ safemin2) && return ref2
     @inbounds for i in 1:3
         buffer[i] += 1
         mul!(buffer, mat, buffer2)
-        newnorm = norm(buffer)
-        newnorm < ref && return newnorm # in a reduced lattice, there should be at most one
+        newnorm2 = norm2(buffer)
+        newnorm2 < ref2 && return newnorm2 # in a reduced lattice, there should be at most one
         buffer[i] -= 2
         mul!(buffer, mat, buffer2)
-        newnorm = norm(buffer)
-        newnorm < ref && return newnorm
+        newnorm2 = norm2(buffer)
+        newnorm2 < ref2 && return newnorm2
         buffer[i] += 1
     end
-    return ref
+    return ref2
 end
 
 """

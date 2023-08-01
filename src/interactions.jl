@@ -390,11 +390,11 @@ function tailcorrection(rule::InteractionRule, cutoff)
     end)*u"K"
 end
 
-function derivatives(rule::InteractionRule, r)
+function derivatives(rule::InteractionRule, d2)
+    r2 = @convertifnotfloat u"Å^2" d2
     if rule.kind === FF.LennardJones
         ε, σ = rule.params
-        x6 = (σ/r)^6
-        r2 = r*r
+        x6 = (σ^2/r2)^3
         r4 = r2*r2
         value = 4*ε*x6*(x6 - 1)
         ∂1 = 24*ε*(x6*(1 - 2*x6))/r2
@@ -403,21 +403,21 @@ function derivatives(rule::InteractionRule, r)
     elseif rule.kind === FF.Coulomb
         error("Coulomb interactions should not be taken into account in VdW grids.")
     elseif rule.kind === FF.HardSphere
-        value = ifelse(r < rule.params[1] + rule.params[2], Inf, 0.0)
+        value = ifelse(r2 < (rule.params[1] + rule.params[2])^2, Inf, 0.0)
         ∂1 = ∂2 = ∂3 = 0.0
     elseif rule.kind === FF.Buckingham
         A, B, C = rule.params
-        r2 = r*r
         r4 = r2*r2
-        r5 = r4*r
-        x6 = C/(r4*r2)
+        r = sqrt(r2)
+        r6 = r4*r2
+        x6 = C/r6
         xe = A*exp(-B*r)
         value = xe - x6
         ∂1 = -B*xe/r + 6*x6/r2
         ∂2 = -48*x6/r4 + B*xe*(1+B*r)/(r2*r)
-        ∂3 = -(3*B*r + B*B*r2 + 3)*B*xe/r5 + 480*C/(r5*r5*r2)
+        ∂3 = -(3*B*r + B*B*r2 + 3)*B*xe*r/r6 + 480*C/(r6*r6)
     elseif rule.kind === FF.NoInteraction
-        0.0
+        return 0.0, 0.0, 0.0, 0.0
     elseif rule.kind === FF.Monomial
         error("VdW grid not implemented for Monomial")
     elseif rule.kind === FF.Exponential
@@ -501,12 +501,26 @@ function Base.show(io::IO, f::InteractionRuleSum)
     join(io, f.rules, ", ")
     print(io, ')')
 end
+
 function (f::InteractionRuleSum)(r)
     ret = r isa Quantity ? 0.0u"K" : 0.0
     for x in f.rules
         ret += x(r)
     end
     ret
+end
+
+function derivatives(f::InteractionRuleSum, d2)
+    r2 = @convertifnotfloat u"Å^2" d2
+    value = ∂1 = ∂2 = ∂3 = 0.0
+    for x in f.rules
+        v, p1, p2, p3 = derivatives(x, r2)
+        value += v
+        ∂1 += p1
+        ∂2 += p2
+        ∂3 += p3
+    end
+    value, ∂1, ∂2, ∂3
 end
 
 function sum_one_rule(l::Vector{InteractionRule}, r::InteractionRule)

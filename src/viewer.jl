@@ -79,9 +79,10 @@ function guess_bonds(system::AbstractSystem{3})
             radii[i] = 0.0
         end
     end
-    cutoff = 3*(0.75^3.1) * max(maximum(radii), 0.833)
+    cutoff = (3*(0.75^3.1) * max(maximum(radii), 0.833))^2
     cutoff2 = 13*0.75/15
     buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
+    safemin2 = safemin^2
     buffer2 = MVector{3,Float64}()
     for i in 1:n
         radius_i = radii[i]
@@ -92,12 +93,12 @@ function guess_bonds(system::AbstractSystem{3})
             iszero(radius_j) && continue
             posj = NoUnits.(position(system, j)/u"Å")
             buffer .= posi .- posj
-            d1 = periodic_distance_fromcartesian!(buffer, mat, invmat, ortho, safemin, buffer2)
-            maxdist = cutoff2*(radius_i + radius_j)
-            if d1 < cutoff && 0.5 < d1 < maxdist
+            d2 = periodic_distance2_fromcartesian!(buffer, mat, invmat, ortho, safemin2, buffer2)
+            maxdist = (cutoff2*(radius_i + radius_j))^2
+            if d2 < cutoff && 0.25 < d2 < maxdist
                 for ofsx in -1:1, ofsy in -1:1, ofsz in -1:1
                     ofs = SVector{3,Int}(ofsx, ofsy, ofsz)
-                    if norm(posi .- (posj .+ mat*ofs)) < maxdist
+                    if norm2(posi .- (posj .+ mat*ofs)) < maxdist
                         push!(bonds, (i, j, ofs))
                     end
                 end

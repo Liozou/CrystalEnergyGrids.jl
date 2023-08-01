@@ -21,7 +21,7 @@ end
 mkdir(GRIDDIR)
 
 @testset "CrystalEnergyGrids" begin
-    setupArCHA = setup_RASPA("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", "Ar", "TraPPE", 0.15, (1,1,1), nothing);
+    setupArCHA = setup_RASPA("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", "Ar", "TraPPE"; blockfile=nothing);
     egridArCHA = dropdims(energy_grid(setupArCHA, 0.3u"Å"); dims=1)
     serialize(joinpath(TESTDIR, "savegrids", "Ar_CHA_1.4_3b4eeb96_Na_11812"), egridArCHA)
 
@@ -38,7 +38,7 @@ mkdir(GRIDDIR)
     @test egridArCHA[only(minimaAr)] ≈ -1854.646947681577
 
 
-    setupNaCHA = setup_RASPA("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", "Na", "TraPPE", 0.15, (1,1,1), nothing);
+    setupNaCHA = setup_RASPA("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", "Na", "TraPPE");
     egridNaCHA = dropdims(energy_grid(setupNaCHA, 0.3u"Å"); dims=1)
     serialize(joinpath(TESTDIR, "savegrids", "Na_CHA_1.4_3b4eeb96"), egridNaCHA)
     vdw, coulomb = energy_point(setupNaCHA, [SVector{3}([0.0, 0.0, 0.0])*u"Å"])

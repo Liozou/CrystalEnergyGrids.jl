@@ -161,15 +161,6 @@ function unalias_position(step, (i,j))
     SimulationStep(step.ff, step.systemkinds, newpositions, step.isrigid, step.idx)
 end
 
-
-function norm2(u::S, v::T) where {S,T}
-    r2 = zero(eltype(S))*zero(eltype(T)) # == zero(u)^2 == zero(v)^2
-    for (x, y) in zip(u, v)
-        r2 += (x - y)^2
-    end
-    r2
-end
-
 function energy_intra(ff::ForceField, system::AbstractSystem)
     positions = position(system)
     symbols = atomic_symbol(system)

@@ -55,8 +55,7 @@ Parse a .grid file and return the corresponding `CrystalEnergyGrid`.
 Set `iscoulomb` if the file corresponds to an eletrostatics grid. `mat` is the unit cell
 matrix of the framework.
 """
-function parse_grid(file, iscoulomb, mat)
-    invmat = inv(mat)
+function parse_grid(file, iscoulomb, mat=nothing)
     open(file) do io
         spacing = read(io, Cdouble)
         dims = @triplet read(io, Cint)
@@ -65,34 +64,50 @@ function parse_grid(file, iscoulomb, mat)
         Δ = @triplet read(io, Cdouble)
         unitcell = @triplet read(io, Cdouble)
         num_unitcell = @triplet read(io, Cint)
+
+        # @printf "ShiftGrid: %g %g %g\n" shift[1] shift[2] shift[3]
+        # @printf "SizeGrid: %g %g %g\n" size[1] size[2] size[3]
+        # @printf "Number of grid points: %d %d %d\n" dims[1] dims[2] dims[3]
+
         ε_Ewald = iscoulomb ? read(io, Cdouble) : Inf
         grid = Array{Cfloat, 4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
         read!(io, grid)
         grid .*= NoUnits(ENERGY_TO_KELVIN/u"K")
-        CrystalEnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, mat, invmat, true, grid)
+        newmat = if mat isa AbstractMatrix
+            mat
+        else
+            pos = position(io)
+            seekend(io)
+            if position(io) == pos
+                error("Missing `mat` argument to `parse_grid` not provided by the grid.")
+            end
+            seek(io, pos)
+            read(io, SMatrix{3,3,Float64,9})
+        end
+        CrystalEnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, newmat, inv(newmat), true, grid)
     end
 end
 
 function _create_grid_common(file, framework::AbstractSystem{3}, spacing::Float64, cutoff::Float64)
     # isfile(file) && error(lazy"File $file already exists, please remove it if you want to overwrite it.")
 
-    a, b, c = [NoUnits(x./u"Å") for x in bounding_box(framework)]
+    a, b, c = [NoUnits.(x./u"Å") for x in bounding_box(framework)]
     unitcell = norm(a), norm(b), norm(c)
     mat = stack3((a,b,c))
     invmat = inv(mat)
-    size = SVector{3,Float64}(abs.(a)) + SVector{3,Float64}(abs.(b)) + SVector{3,Float64}(abs.(c))
-    shift = SVector{3,Float64}(max.(a, 0.0)) + SVector{3,Float64}(max.(b, 0.0)) + SVector{3,Float64}(max.(c, 0.0))
-    _dims = round.(Int, (size ./ spacing))
+    size = SVector{3,Cdouble}(abs.(a)) + SVector{3,Cdouble}(abs.(b)) + SVector{3,Cdouble}(abs.(c))
+    shift = SVector{3,Cdouble}(min.(a, 0.0)) + SVector{3,Cdouble}(min.(b, 0.0)) + SVector{3,Cdouble}(min.(c, 0.0))
+    _dims = floor.(Cint, (size ./ spacing))
     dims = _dims + iseven.(_dims)
     Δ = size ./ dims
-    num_unitcell = find_supercell((a, b, c), cutoff)
+    num_unitcell = Cint.(find_supercell((a, b, c), cutoff))
 
-    @printf "ShiftGrid: %g %g %g\n" shift[1] shift[2] shift[3]
-    @printf "SizeGrid: %g %g %g\n" size[1] size[2] size[3]
-    @printf "Number of grid points: %d %d %d\n" dims[1] dims[2] dims[3]
+    # @printf "ShiftGrid: %g %g %g\n" shift[1] shift[2] shift[3]
+    # @printf "SizeGrid: %g %g %g\n" size[1] size[2] size[3]
+    # @printf "Number of grid points: %d %d %d\n" dims[1] dims[2] dims[3]
 
     open(file, "w") do f
-        write(f, spacing)
+        write(f, Cdouble(spacing))
         write(f, dims[1], dims[2], dims[3])
         write(f, size[1], size[2], size[3])
         write(f, shift[1], shift[2], shift[3])
@@ -104,45 +119,58 @@ function _create_grid_common(file, framework::AbstractSystem{3}, spacing::Float6
     return size, shift, dims, Δ, num_unitcell, mat, invmat
 end
 
+function _set_gridpoint!(grid, i, j, k, Δ, λ, derivatives)
+    value, ∂1, ∂2, ∂3 = derivatives
+    grid[k+1,j+1,i+1,1] = value * λ
+    grid[k+1,j+1,i+1,2] = ∂1[1]*Δ[1] * λ
+    grid[k+1,j+1,i+1,3] = ∂1[2]*Δ[2] * λ
+    grid[k+1,j+1,i+1,4] = ∂1[3]*Δ[3] * λ
+    grid[k+1,j+1,i+1,5] = ∂2[1]*(Δ[1]*Δ[2]) * λ
+    grid[k+1,j+1,i+1,6] = ∂2[2]*(Δ[1]*Δ[3]) * λ
+    grid[k+1,j+1,i+1,7] = ∂2[3]*(Δ[2]*Δ[3]) * λ
+    grid[k+1,j+1,i+1,8] = ∂3*(Δ[1]*Δ[2]*Δ[3]) * λ
+    nothing
+end
+
 function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::Float64, atom::Symbol)
-    size, shift, dims, Δ, num_unitcell, mat, invmat = _create_grid_common(framework, spacing, NoUnits(forcefield.cutoff/u"Å"))
-    grid = Array{Cfloat,4}(undef, dims[1]+1, dims[2]+1, dims[3]+1, 8)
-    for i in 0:dims[1], j in 0:dims[2], k in 0:dims[3]
-        pos = [i*size[1]*dims[1] + shift[1]]
-        value, ∂1, ∂2, ∂3 = compute_derivatives_vdw(framework, forcefield, atom, pos)
-        grid[k+1,j+1,i+1,1] = value
-        grid[k+1,j+1,i+1,2] = ∂1[1]*Δ[1]
-        grid[k+1,j+1,i+1,3] = ∂1[2]*Δ[2]
-        grid[k+1,j+1,i+1,4] = ∂1[3]*Δ[3]
-        grid[k+1,j+1,i+1,5] = ∂2[1]*(Δ[1]*Δ[2])
-        grid[k+1,j+1,i+1,6] = ∂2[2]*(Δ[1]*Δ[3])
-        grid[k+1,j+1,i+1,7] = ∂2[3]*(Δ[2]*Δ[3])
-        grid[k+1,j+1,i+1,8] = ∂3*(Δ[1]*Δ[2]*Δ[3])
+    size, shift, dims, Δ, num_unitcell, mat, invmat = _create_grid_common(file, framework, spacing, NoUnits(forcefield.cutoff/u"Å"))
+    grid = Array{Cfloat,4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
+    probe_vdw = ProbeSystem(framework, forcefield, atom)
+    λ = inv(NoUnits(ENERGY_TO_KELVIN/u"K"))
+    @threads for i in 0:dims[1]
+        for j in 0:dims[2], k in 0:dims[3]
+            pos = SVector{3,Float64}((i*size[1]/dims[1] + shift[1], j*size[2]/dims[2] + shift[2], k*size[3]/dims[3] + shift[3]))
+            derivatives = compute_derivatives_vdw(probe_vdw, pos)
+            _set_gridpoint!(grid, i, j, k, Δ, λ, derivatives)
+        end
     end
     open(file, "a") do f
         write(f, grid)
+        write(f, mat) # not part of RASPA grids
     end
     grid
 end
 
-function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::Float64, ewald::EwaldContext)
-    size, shift, dims, Δ, num_unitcell, mat, invmat = _create_grid_common(framework, spacing, 12.0)
-    grid = Array{Cfloat,4}(undef, dims[1]+1, dims[2]+1, dims[3]+1, 8)
-    for i in 0:dims[1], j in 0:dims[2], k in 0:dims[3]
-        pos = [i*size[1]*dims[1] + shift[1]]
-        value, ∂1, ∂2, ∂3 = compute_derivatives_ewald(framework, forcefield, ewald, pos)
-        grid[k+1,j+1,i+1,1] = value
-        grid[k+1,j+1,i+1,2] = ∂1[1]*Δ[1]
-        grid[k+1,j+1,i+1,3] = ∂1[2]*Δ[2]
-        grid[k+1,j+1,i+1,4] = ∂1[3]*Δ[3]
-        grid[k+1,j+1,i+1,5] = ∂2[1]*(Δ[1]*Δ[2])
-        grid[k+1,j+1,i+1,6] = ∂2[2]*(Δ[1]*Δ[3])
-        grid[k+1,j+1,i+1,7] = ∂2[3]*(Δ[2]*Δ[3])
-        grid[k+1,j+1,i+1,8] = ∂3*(Δ[1]*Δ[2]*Δ[3])
+function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::Float64, _ewald=nothing)
+    size, shift, dims, Δ, num_unitcell, mat, invmat = _create_grid_common(file, framework, spacing, 12.0)
+    ewald = if _ewald isa EwaldContext
+        _ewald
+    else
+        initialize_ewald(framework, num_unitcell)
+    end
+    grid = Array{Cfloat,4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
+    probe_coulomb = ProbeSystem(framework, forcefield)
+    @threads for i in 0:dims[1]
+        for j in 0:dims[2], k in 0:dims[3]
+            pos = SVector{3,Float64}((i*size[1]/dims[1] + shift[1], j*size[2]/dims[2] + shift[2], k*size[3]/dims[3] + shift[3]))
+            derivatives = compute_derivatives_ewald(probe_coulomb, ewald, pos)
+            _set_gridpoint!(grid, i, j, k, Δ, COULOMBIC_CONVERSION_FACTOR, derivatives)
+        end
     end
     open(file, "a") do f
         write(f, ewald.ε)
         write(f, grid)
+        write(f, mat) # not part of RASPA grids
     end
     grid
 end

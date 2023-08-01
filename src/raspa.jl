@@ -7,7 +7,7 @@ using Printf
 
 export setdir_RASPA!, getdir_RASPA
 export PseudoAtomListing, parse_pseudoatoms_RASPA, parse_forcefield_RASPA
-export RASPASystem, setup_RASPA
+export RASPASystem, setup_RASPA, setup_probe_RASPA
 
 const RASPADIR = Ref(joinpath(homedir(), "RASPA2", "simulations", "share", "raspa"))
 
@@ -273,12 +273,19 @@ function load_molecule_RASPA(name::AbstractString, forcefield::AbstractString, f
     RASPASystem(bbox, positions, symbols, atom_numbers, mass, charges, true)
 end
 
-function parse_blockfile(file, gridref)
+function parse_blockfile(file, framework, gridstep)
     lines = readlines(file)
     num = parse(Int, popfirst!(lines))
-    a, b, c = gridref.dims .+ 1
+    _a, _b, _c = [NoUnits.(x./u"Å") for x in bounding_box(framework)]
+    mat = stack3((_a, _b, _c))
+    invmat = inv(mat)
+    size = SVector{3,Cdouble}(abs.(_a)) + SVector{3,Cdouble}(abs.(_b)) + SVector{3,Cdouble}(abs.(_c))
+    shift = SVector{3,Cdouble}(min.(_a, 0.0)) + SVector{3,Cdouble}(min.(_b, 0.0)) + SVector{3,Cdouble}(min.(_c, 0.0))
+    _dims = floor.(Cint, (size ./ gridstep))
+    dims = _dims + iseven.(_dims)
+    a, b, c = dims .+ 1
     block = falses(a, b, c)
-    buffer, ortho, safemin = prepare_periodic_distance_computations(gridref.mat)
+    buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
     for (i, l) in enumerate(lines)
         i > num && ((@assert all(isspace, l)); continue)
         sl = split(l)
@@ -286,8 +293,8 @@ function parse_blockfile(file, gridref)
         center = parse.(Float64, sl)
         for i in 1:a, j in 1:b, k in 1:c
             block[i,j,k] && continue
-            buffer .= center .- inverse_abc_offsetpoint(SVector{3,Float64}(i,j,k), gridref.invmat, gridref.shift, gridref.size, gridref.dims)
-            if periodic_distance!(buffer, gridref.mat, ortho, safemin) < radius
+            buffer .= center .- inverse_abc_offsetpoint(SVector{3,Float64}(i,j,k), invmat, shift, size, dims)
+            if periodic_distance!(buffer, mat, ortho, safemin) < radius
                 block[i,j,k] = true
             end
         end
@@ -296,16 +303,16 @@ function parse_blockfile(file, gridref)
 end
 
 """
-    setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=nothing, supercell=nothing, blockfile=nothing)
+    setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=0.15, supercell=nothing, blockfile=nothing)
 
 Return a [`CrystalEnergySetup`](@ref) for studying `molecule` (with its forcefield) in
 `framework` (with its forcefield), extracted from existing RASPA grids and completed with
 Ewald sums precomputations.
 
-`gridsteps` and `supercell` should match that used when creating the grids. If not provided,
-they will be found automatically if only one particular step size and one particular
-supercell were used respectively. If provided, `gridstep` should be a floating point number
-and `supercell` a triplet of integers.
+`gridstep` and `supercell` should match that used when creating the grids. If provided,
+`gridstep` should be a floating point number and `supercell` a triplet of integers.
+Otherwise, the default grid step is 0.15 Å and the default supercell is the smallest one
+such that its perpendicular lengths are all above 24.0 Å (i.e. twice the 12.0 Å cutoff).
 
 `blockfile` can be set to `false` to allow the molecule to go everywhere in the framework.
 Or it can be set to the radical (excluding the ".block" extension) of the block file in the
@@ -314,48 +321,49 @@ Setting it to `true` is equivalent to using `blockfile=first(split(framework, '_
 If not provided, the default is to set it to `false` if the molecule is positively charged
 and monoatomic (considered to be a small cation), or to `true` otherwise.
 """
-function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=nothing, supercell=nothing, blockfile=nothing)
+function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=0.15, supercell=nothing, blockfile=nothing)
     raspa::String = getdir_RASPA()
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     rootdir = joinpath(raspa, "grids", forcefield_framework, framework)
-    gridstep_name::String = if gridstep isa Nothing
-        dirs = readdir(rootdir)
-        length(dirs) == 1 || error(lazy"Please specify an explicit grid step size to choose between the different ones stored at $rootdir.")
-        dirs[1]
-    else
-        @sprintf "%.6f" gridstep
-    end
+    gridstep_name::String = @sprintf "%.6f" gridstep
     grid_dir = joinpath(rootdir, gridstep_name)
-    supercell_name = if supercell isa Nothing
-        basename(first(Iterators.filter(isdir, readdir(grid_dir; join=true))))
-    else
-        join(supercell, 'x')
+    if supercell isa Nothing
+        supercell = find_supercell(bounding_box(syst_framework), 12.0u"Å")
     end
+    supercell::NTuple{3,Int}
+    supercell_name = join(supercell, 'x')
 
     syst_mol = load_molecule_RASPA(molecule, forcefield_molecule, forcefield_framework, syst_framework)
 
     mat = stack3(bounding_box(syst_framework))
 
-    ewald = initialize_ewald(syst_framework, parse.(Int, split(supercell_name, 'x')))
     forcefield = parse_forcefield_RASPA(forcefield_framework)
     newblockfile = if blockfile isa Union{Bool,AbstractString}
         blockfile
     else
-        blockfile = !(length(syst_mol) == 1 && syst_mol.atomic_charge[1] > 0.3u"e_au")
+        !(length(syst_mol) == 1 && syst_mol.atomic_charge[1] > 0.3u"e_au")
     end
     block = if newblockfile isa Bool && !newblockfile
         nothing
     else
         blockpath = newblockfile isa Bool ? first(split(framework, '_')) : newblockfile
-        parse_blockfile(joinpath(raspa, "structures", "block", blockpath)*".block", coulomb)
+        parse_blockfile(joinpath(raspa, "structures", "block", blockpath)*".block", syst_framework, gridstep)
     end
     if block isa BitArray{3} && !any(block)
         block = nothing
     end
 
+    ewald = initialize_ewald(syst_framework, supercell)
     needcoulomb = any(syst_mol[i,:atomic_charge]!=(0.0u"e_au") for i in 1:length(syst_mol))
     coulomb = if needcoulomb
-        parse_grid(joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid"), true, mat)
+        coulomb_grid_path = joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid")
+        if !isfile(coulomb_grid_path)
+            mkpath(dirname(coulomb_grid_path))
+            printstyled("Creating Coulomb grid at $coulomb_grid_path... "; color=:cyan)
+            create_grid_coulomb(coulomb_grid_path, syst_framework, forcefield, gridstep, ewald)
+            printstyled("Coulomb grid created.\n"; color=:cyan)
+        end
+        parse_grid(coulomb_grid_path, true, mat)
     else
         CrystalEnergyGrid()
     end
@@ -369,7 +377,14 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
     atomsidx = [atomdict[atom] for atom in atoms]
     grids = Vector{CrystalEnergyGrid}(undef, length(atomdict))
     for (atom, i) in atomdict
-        grids[i] = parse_grid(joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid")), false, mat)
+        vdw_grid_path = joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid"))
+        if !isfile(vdw_grid_path)
+            mkpath(dirname(vdw_grid_path))
+            printstyled("Creating VdW grid for $atom at $vdw_grid_path... "; color=:cyan)
+            create_grid_vdw(vdw_grid_path, syst_framework, forcefield, gridstep, atom)
+            printstyled("VdW grid for $atom created.\n"; color=:cyan)
+        end
+        grids[i] = parse_grid(vdw_grid_path, false, mat)
     end
 
     CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald, forcefield, block)
@@ -526,5 +541,11 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
             end
         end
     end
-    ForceField(ff.interactions, ff.sdict, ff.cutoff, ff.cutoff2, name)
+    ForceField(ff.interactions, ff.sdict, ff.cutoff, name)
+end
+
+function setup_probe_RASPA(framework, forcefield_framework, atom)
+    system = load_framework_RASPA(framework, forcefield_framework)
+    forcefield = parse_forcefield_RASPA(forcefield_framework)
+    ProbeSystem(system::AbstractSystem{3}, forcefield::ForceField, atom::Symbol)
 end

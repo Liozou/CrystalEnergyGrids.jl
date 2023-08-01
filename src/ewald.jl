@@ -2,7 +2,7 @@ using LinearAlgebra: norm, det
 using StaticArrays
 using OffsetArrays
 using AtomsBase
-using SpecialFunctions: erf
+using SpecialFunctions: erf, erfc
 
 export initialize_ewald, compute_ewald
 
@@ -286,4 +286,19 @@ function compute_ewald(ctx::EwaldContext, systems)
     # @show UAdsorbateAdsorbateChargeChargeFourier
 
     UHostAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN, UAdsorbateAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN
+end
+
+function derivatives_ewald(ewald::EwaldContext, charge::Float64, r2::Float64)
+    r = sqrt(r2)
+    r3 = r2*r
+    r5 = r3*r2
+    α = ewald.α
+    r2α2 = r2*α^2
+    er2α2 = 2α*r*exp(-r2α2)/sqrt(π)
+    erfαr = erfc(α*r)
+    value = charge*erfαr/r
+    ∂1 = -charge*(er2α2 + erfαr)/r3
+    ∂2 = charge*(er2α2*(3+2*r2α2) + 3*erfαr)/r5
+    ∂3 = charge*(-er2α2*(15 + 10*r2α2 + 4*r2α2^2) - 15*erfαr)/(r5*r2)
+    (value, ∂1, ∂2, ∂3)
 end
