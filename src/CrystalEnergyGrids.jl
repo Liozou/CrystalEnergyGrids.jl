@@ -9,7 +9,7 @@ using OffsetArrays
 using AtomsBase
 using Scratch: @get_scratch!
 
-export CrystalEnergyGrid, parse_grid, interpolate_grid
+export EnergyGrid, parse_grid, interpolate_grid
 export CrystalEnergySetup
 export energy_point, energy_grid
 # other exports in files

@@ -1,13 +1,13 @@
 using StaticArrays
 
 """
-    CrystalEnergyGrid
+    EnergyGrid
 
 Representation of an interpolable energy grid.
 
 Use [`interpolate_grid`](@ref) to access the value of the grid at any point in space.
 """
-struct CrystalEnergyGrid
+struct EnergyGrid
     spacing::Cdouble
     dims::NTuple{3,Cint}
     size::NTuple{3,Cdouble}
@@ -21,10 +21,10 @@ struct CrystalEnergyGrid
     higherorder::Bool # true if grid contains derivatives, false if only raw values
     grid::Array{Cfloat,4}
 end
-function CrystalEnergyGrid()
-    CrystalEnergyGrid(0.0, (0,0,0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0,0,0), -Inf, zero(SMatrix{3,3,Float64,9}), zero(SMatrix{3,3,Float64,9}), false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
+function EnergyGrid()
+    EnergyGrid(0.0, (0,0,0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0,0,0), -Inf, zero(SMatrix{3,3,Float64,9}), zero(SMatrix{3,3,Float64,9}), false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
 end
-function Base.show(io::IO, ::MIME"text/plain", rg::CrystalEnergyGrid)
+function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
     if rg.ε_Ewald == -Inf
         print("Empty grid")
         return
@@ -50,7 +50,7 @@ end
 """
     parse_grid(file, iscoulomb, mat)
 
-Parse a .grid file and return the corresponding `CrystalEnergyGrid`.
+Parse a .grid file and return the corresponding `EnergyGrid`.
 
 Set `iscoulomb` if the file corresponds to an eletrostatics grid. `mat` is the unit cell
 matrix of the framework.
@@ -84,7 +84,7 @@ function parse_grid(file, iscoulomb, mat=nothing)
             seek(io, pos)
             read(io, SMatrix{3,3,Float64,9})
         end
-        CrystalEnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, newmat, inv(newmat), true, grid)
+        EnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, newmat, inv(newmat), true, grid)
     end
 end
 
@@ -176,12 +176,12 @@ function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::For
 end
 
 """
-    interpolate_grid(g::CrystalEnergyGrid, point)
+    interpolate_grid(g::EnergyGrid, point)
 
 Interpolate grid `g` at the given `point`, which should be a triplet of coordinates (with
 their corresponding unit).
 """
-function interpolate_grid(g::CrystalEnergyGrid, point)
+function interpolate_grid(g::EnergyGrid, point)
     shifted = offsetpoint(point, g.mat, g.invmat, g.shift, g.size, g.dims)
     p0 = floor.(Int, shifted)
     p1 = p0 .+ 1
@@ -240,8 +240,8 @@ See also [`setup_RASPA`](@ref) to build a `CrystalEnergySetup` from RASPA2 files
 struct CrystalEnergySetup{TFramework,TMolecule}
     framework::TFramework
     molecule::TMolecule
-    coulomb::CrystalEnergyGrid
-    grids::Vector{CrystalEnergyGrid}
+    coulomb::EnergyGrid
+    grids::Vector{EnergyGrid}
     atomsidx::Vector{Int} # index of the grid corresponding to the atom
     ewald::EwaldContext
     forcefield::ForceField

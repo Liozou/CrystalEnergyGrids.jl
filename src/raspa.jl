@@ -365,7 +365,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
         end
         parse_grid(coulomb_grid_path, true, mat)
     else
-        CrystalEnergyGrid()
+        EnergyGrid()
     end
 
     trunc_or_shift = strip(first(Iterators.filter(!startswith('#'), eachline(joinpath(raspa, "forcefield", forcefield_framework, "force_field_mixing_rules.def")))))
@@ -375,7 +375,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
         get!(Returns(length(atomdict)+1), atomdict, atom)
     end
     atomsidx = [atomdict[atom] for atom in atoms]
-    grids = Vector{CrystalEnergyGrid}(undef, length(atomdict))
+    grids = Vector{EnergyGrid}(undef, length(atomdict))
     for (atom, i) in atomdict
         vdw_grid_path = joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid"))
         if !isfile(vdw_grid_path)
