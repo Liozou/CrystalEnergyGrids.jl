@@ -153,7 +153,7 @@ end
 
 function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::Float64, _ewald=nothing)
     size, shift, dims, Δ, num_unitcell, mat, invmat = _create_grid_common(file, framework, spacing, 12.0)
-    ewald = if _ewald isa EwaldContext
+    ewald = if _ewald isa EwaldFramework
         _ewald
     else
         initialize_ewald(framework, num_unitcell)
@@ -243,7 +243,7 @@ struct CrystalEnergySetup{TFramework,TMolecule}
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid}
     atomsidx::Vector{Int} # index of the grid corresponding to the atom
-    ewald::EwaldContext
+    ewald::EwaldFramework
     forcefield::ForceField
     block::Union{Nothing, BitArray{3}}
 end

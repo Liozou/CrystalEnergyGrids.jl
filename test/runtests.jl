@@ -43,18 +43,18 @@ mkdir(GRIDDIR)
     serialize(joinpath(TESTDIR, "savegrids", "Na_CHA_1.4_3b4eeb96"), egridNaCHA)
     vdw, coulomb = energy_point(setupNaCHA, [SVector{3}([0.0, 0.0, 0.0])*u"Å"])
     @test vdw ≈ -11083.13758653269u"K"
-    @test coulomb ≈ -1.850940229601566e6u"K"
+    @test coulomb ≈ -1.8645348919601506e6u"K"
     @test vdw + coulomb == egridNaCHA[1,1,1]u"K"
 
     minimaNa = sort!(CEG.local_minima(egridNaCHA, 0.0))
     @test minimaNa == [CartesianIndex(29, 60, 60)]
-    @test egridNaCHA[only(minimaNa)] ≈ -1.9278944364761126e6
+    @test egridNaCHA[only(minimaNa)] ≈ -1.941489105927073e6
     @test egridNaCHA[only(minimaNa)] == minimum(egridNaCHA)
 
     ewald = setupNaCHA.ewald
     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
     host, adsorbate = compute_ewald(ewald, [CEG.ChangePositionSystem(co2, [[1.3, 2.9, 1.149]u"Å", [1.3, 2.9, 0.0]u"Å", [1.3, 2.9, -1.149]u"Å"]), CEG.ChangePositionSystem(co2, [[4.7, 10.1, 1.149]u"Å", [4.7, 10.1, 0.0]u"Å", [4.7, 10.1, -1.149]u"Å"])])
-    @test host ≈ 1177.521548912203u"K"
+    @test host ≈ 1177.5215489122043u"K"
     @test adsorbate ≈ 7.4133039820109055u"K"
 
     # ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021")

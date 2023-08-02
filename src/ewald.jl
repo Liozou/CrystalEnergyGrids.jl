@@ -26,7 +26,7 @@ struct EwaldKspace
     kindices::Vector{Tuple{Int,Int,UnitRange{Int},Int}}
 end
 
-struct EwaldContext
+struct EwaldFramework
     kspace::EwaldKspace
     α::Float64
     invmat::SMatrix{3,3,Float64,9}
@@ -61,7 +61,7 @@ end
 
 
 """
-    setup_Eik(systems, numsites, ks, invmat, (ΠA, ΠB, ΠC))
+    setup_Eik!((Eikx, Eiky, Eikz), (kx, ky, kz), systems, invmat, (ΠA, ΠB, ΠC))
 
 Setup the computation of the e^(ik...) necessary for Ewald summation, for the given
 `systems`, with `numsites` total number of point charges (including those in the supercell)
@@ -76,14 +76,15 @@ Return `(Eikx, Eiky, Eikz)` where, for `m` in `1:numsites`
 
 with `fracpos_x[m], fracpos_y[m], fracpos_z[m] == invmat*position[m]`
 """
-function setup_Eik(systems, numsites, ks, invmat, (ΠA, ΠB, ΠC))
-    kx, ky, kz = ks
+function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
+    ΠBC = ΠB*ΠC
+    ΠABC = ΠA*ΠBC
+    numsites = ΠABC * sum(length, systems)
+
     Eikx = Vector{ComplexF64}(undef, (kx+1)*numsites)
     Eiky = Vector{ComplexF64}(undef, (2ky+1)*numsites)
     Eikz = Vector{ComplexF64}(undef, (2kz+1)*numsites)
 
-    ΠBC = ΠB*ΠC
-    ΠABC = ΠA*ΠBC
     ofs = -1
     @inbounds for syst in systems
         for j in 1:length(syst)
@@ -112,9 +113,10 @@ function setup_Eik(systems, numsites, ks, invmat, (ΠA, ΠB, ΠC))
 end
 
 
-function ewald_main_loop(allcharges, kspace::EwaldKspace, Eikx, Eiky, Eikz, Π)
+function ewald_main_loop(allcharges, kspace::EwaldKspace, Eiks)
     sums = zeros(ComplexF64, kspace.num_kvecs)
 
+    Eikx, Eiky, Eikz = Eiks
     kx, ky, kz = kspace.ks
     kxp = kx + 1
     tkyp = 2ky + 1
@@ -124,13 +126,13 @@ function ewald_main_loop(allcharges, kspace::EwaldKspace, Eikx, Eiky, Eikz, Π)
     iy = ky+1 # reference index of the current site for Eiky
     iz = kz+1 # reference index of the current site for Eikz
 
-    @inbounds for charges in allcharges, _ in 1:Π, c in charges
+    @inbounds for charges in allcharges, c in charges
         for (jy, jz, jxrange, rangeidx) in kspace.kindices
-            Eik_xy = Eiky[iy+jy]*Eikz[iz+jz]
+            Eik_xy = c*Eiky[iy+jy]*Eikz[iz+jz]
             n = length(jxrange)
             ofs = first(jxrange) + ix
             @simd for I in 1:n
-                sums[rangeidx+I] += c*Eikx[ofs+I]*Eik_xy
+                sums[rangeidx+I] += Eikx[ofs+I]*Eik_xy
             end
         end
         ix += kxp
@@ -212,16 +214,13 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
         end
     end
 
-    Π = prod(supercell)
-    numsites = length(syst)*Π
-
     UIon = COULOMBIC_CONVERSION_FACTOR*α/sqrt(π) - sum(kfactors)
     charges::Vector{Float64} = Float64.(syst[:,:atomic_charge]/u"e_au")
     energy_framework_self = sum(abs2, charges)*(COULOMBIC_CONVERSION_FACTOR/sqrt(π))*α
 
     kspace = EwaldKspace((kx, ky, kz), num_kvecs, kindices)
-    Eikx, Eiky, Eikz = setup_Eik((syst,), numsites, kspace.ks, invmat, supercell)
-    StoreRigidChargeFramework = ewald_main_loop((charges,), kspace, Eikx, Eiky, Eikz, Π)
+    Eiks = setup_Eik((syst,), kspace.ks, invmat, supercell)
+    StoreRigidChargeFramework = ewald_main_loop((repeat(charges, prod(supercell)),), kspace, Eiks)
     # UChargeChargeFrameworkRigid = 0.0
     # for idx in 1:num_kvecs
     #     UChargeChargeFrameworkRigid += kfactors[idx]*abs2(StoreRigidChargeFramework[idx])
@@ -229,37 +228,52 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
     # UChargeChargeFrameworkRigid += UIon*sum(charges)^2
     net_charges_framework = sum(charges)
 
-    return EwaldContext(kspace, α, invmat, volume_factor, energy_framework_self, kfactors,
-                        UIon, StoreRigidChargeFramework, net_charges_framework, ε)
+    return EwaldFramework(kspace, α, invmat, volume_factor, energy_framework_self,
+                          kfactors, UIon, StoreRigidChargeFramework, net_charges_framework,
+                          ε)
+end
+
+
+struct EwaldContext
+    eframework::EwaldFramework
+    Eiks::NTuple{3,Vector{ComplexF64}}
+    allcharges::Vector{Vector{Float64}}
+    static_contribution::Float64
+    energy_net_charges::Float64
+end
+
+function EwaldContext(eframework::EwaldFramework, systems)
+    allcharges::Vector{Vector{Float64}} = [NoUnits.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
+    chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α
+    energy_adsorbate_self = sum(sum(abs2, charges)*chargefactor for charges in allcharges)
+    net_charges = sum(sum(charges) for charges in allcharges)
+    static_contribution = energy_adsorbate_self +  eframework.UIon*net_charges^2
+    energy_net_charges = eframework.UIon*eframework.net_charges_framework*net_charges
+
+    Eiks = setup_Eik(systems, eframework.kspace.ks, eframework.invmat, (1,1,1))
+    EwaldContext(eframework, Eiks, allcharges, static_contribution, energy_net_charges)
 end
 
 
 function compute_ewald(ctx::EwaldContext, systems)
-    numsites = sum(length, systems)
-    allcharges::Vector{Vector{Float64}} = [NoUnits.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
-    chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*ctx.α
-    energy_adsorbate_self = sum(sum(abs2, charges)*chargefactor for charges in allcharges)
-    net_charges = sum(sum(charges) for charges in allcharges)
-
-    Eikx, Eiky, Eikz = setup_Eik(systems, numsites, ctx.kspace.ks, ctx.invmat, (1,1,1))
-    StoreTotalChargeAdsorbates = ewald_main_loop(allcharges, ctx.kspace, Eikx, Eiky, Eikz, 1)
+    newcharges = ewald_main_loop(ctx.allcharges, ctx.eframework.kspace, ctx.Eiks)
     energy_framework_adsorbate = 0.0
     energy_adsorbate_adsorbate = 0.0
-    for idx in 1:ctx.kspace.num_kvecs
-        temp = ctx.kfactors[idx]
-        _re_f, _im_f = reim(ctx.StoreRigidChargeFramework[idx])
-        _re_a, _im_a = reim(StoreTotalChargeAdsorbates[idx])
+    for idx in 1:ctx.eframework.kspace.num_kvecs
+        temp = ctx.eframework.kfactors[idx]
+        _re_f, _im_f = reim(ctx.eframework.StoreRigidChargeFramework[idx])
+        _re_a, _im_a = reim(newcharges[idx])
         energy_framework_adsorbate += temp*(_re_f*_re_a + _im_f*_im_a)
-        energy_adsorbate_adsorbate += temp*abs2(StoreTotalChargeAdsorbates[idx])
+        energy_adsorbate_adsorbate += temp*abs2(newcharges[idx])
     end
 
-    UHostAdsorbateChargeChargeFourier = 2*(energy_framework_adsorbate + ctx.UIon*ctx.net_charges_framework*net_charges)
+    UHostAdsorbateChargeChargeFourier = 2*(energy_framework_adsorbate + ctx.energy_net_charges)
 
     m = length(systems)
     energy_adsorbate_excluded = 0.0
     for i in 1:m
         syst = systems[i]
-        charges = allcharges[i]
+        charges = ctx.allcharges[i]
         n = length(syst)
         for atomA in 1:n
             chargeA = charges[atomA]
@@ -268,27 +282,22 @@ function compute_ewald(ctx::EwaldContext, systems)
                 chargeB = charges[atomB]
                 posB = Float64.(position(syst, atomB)/u"Å")
                 r = norm(posB .- posA)
-                energy_adsorbate_excluded += erf(ctx.α*r)*chargeA*chargeB/r
+                energy_adsorbate_excluded += erf(ctx.eframework.α*r)*chargeA*chargeB/r
             end
         end
     end
     energy_adsorbate_excluded *= COULOMBIC_CONVERSION_FACTOR
 
-    UAdsorbateAdsorbateChargeChargeFourier = energy_adsorbate_adsorbate - energy_adsorbate_self - energy_adsorbate_excluded + ctx.UIon*net_charges^2
-
-    # @show UIon
-    # @show energy_framework_adsorbate
-    # @show energy_adsorbate_adsorbate
-    # @show energy_adsorbate_self
-    # @show energy_adsorbate_excluded
-
-    # @show UHostAdsorbateChargeChargeFourier
-    # @show UAdsorbateAdsorbateChargeChargeFourier
+    UAdsorbateAdsorbateChargeChargeFourier = energy_adsorbate_adsorbate - energy_adsorbate_excluded - ctx.static_contribution
 
     UHostAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN, UAdsorbateAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN
 end
 
-function derivatives_ewald(ewald::EwaldContext, charge::Float64, r2::Float64)
+function compute_ewald(eframework::EwaldFramework, systems)
+    compute_ewald(EwaldContext(eframework, systems), systems)
+end
+
+function derivatives_ewald(ewald::EwaldFramework, charge::Float64, r2::Float64)
     r = sqrt(r2)
     r3 = r2*r
     r5 = r3*r2
