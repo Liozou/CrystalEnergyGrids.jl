@@ -35,20 +35,20 @@ mkdir(GRIDDIR)
     minimaAr = sort!(CEG.local_minima(egridArCHA))
     @test minimaAr == [CartesianIndex(51, 50, 91)]
     @test egridArCHA[only(minimaAr)] == minimum(egridArCHA)
-    @test egridArCHA[only(minimaAr)] ≈ -1854.646947681577
+    @test egridArCHA[only(minimaAr)] ≈ -1854.9285197062766
 
 
     setupNaCHA = setup_RASPA("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", "Na", "TraPPE");
     egridNaCHA = dropdims(energy_grid(setupNaCHA, 0.3u"Å"); dims=1)
     serialize(joinpath(TESTDIR, "savegrids", "Na_CHA_1.4_3b4eeb96"), egridNaCHA)
     vdw, coulomb = energy_point(setupNaCHA, [SVector{3}([0.0, 0.0, 0.0])*u"Å"])
-    @test vdw ≈ -11083.130753181682u"K"
+    @test vdw ≈ -11083.13758653269u"K"
     @test coulomb ≈ -1.850940229601566e6u"K"
     @test vdw + coulomb == egridNaCHA[1,1,1]u"K"
 
-    minimaNa = sort!(CEG.local_minima(egridNaCHA))
-    @test minimaNa == [CartesianIndex(72, 64, 87)]
-    @test egridNaCHA[only(minimaNa)] ≈ -4.629398710521718e13
+    minimaNa = sort!(CEG.local_minima(egridNaCHA, 0.0))
+    @test minimaNa == [CartesianIndex(29, 60, 60)]
+    @test egridNaCHA[only(minimaNa)] ≈ -1.9278944364761126e6
     @test egridNaCHA[only(minimaNa)] == minimum(egridNaCHA)
 
     ewald = setupNaCHA.ewald

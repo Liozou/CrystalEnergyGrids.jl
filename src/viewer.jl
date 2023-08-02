@@ -83,7 +83,7 @@ function guess_bonds(system::AbstractSystem{3})
     cutoff2 = 13*0.75/15
     buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
     safemin2 = safemin^2
-    buffer2 = MVector{3,Float64}()
+    buffer2 = MVector{3,Float64}(undef)
     for i in 1:n
         radius_i = radii[i]
         iszero(radius_i) && continue

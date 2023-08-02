@@ -40,7 +40,7 @@ Use a negative `tolerance` to return all local minima.
 function local_minima(grid::Array{Float64,3}, tolerance=1e-2)
     a1, a2, a3 = size(grid)
     localmins_t = [CartesianIndex{3}[] for _ in 1:nthreads()]
-    @threads for i3 in 1:a3
+    @threads :static for i3 in 1:a3
         for i2 in 1:a2, i1 in 1:a1
             val = grid[i1,i2,i3]
             if val < grid[mod1(i1-1,a1),i2,i3] &&

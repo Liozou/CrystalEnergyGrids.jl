@@ -98,25 +98,25 @@ end
 """
     update_position!(step::SimulationStep, idx, newpos)
 
-Modifies the position of the system of index `idx` in `step` to `newpos`
+Modifies the position of the system of index `idx` in `step` to `newpos`.
+Return `newpos`.
 
-See also [`update_position`](@ref)
+See also [`update_position!(step::SimulationStep, idx, op, arg)`](@ref) and [`update_position`](@ref).
 """
 function update_position!(step::SimulationStep, (i,j), newpos)
     step.positions[i][j] = newpos
-    nothing
 end
 
 """
     update_position!(step::SimulationStep, idx, op, arg)
 
-Modifies the position `p` of system of index `idx` in `step` into `op.(p, arg)`
+Modifies the position `p` of system of index `idx` in `step` into `op.(p, arg)`.
+Return `op.(p, arg)`.
 
-See also [`update_position`](@ref)
+See also [`update_position!(step::SimulationStep, idx, newpos)`](@ref) and [`update_position`](@ref).
 """
 function update_position!(step::SimulationStep, (i,j), op, arg)
     step.positions[i][j] .= op.(step.positions[i][j], arg)
-    nothing
 end
 
 """
@@ -146,7 +146,7 @@ Return a new `SimulationStep` where the system of index `idx` has a new position
 
 See also [`update_position!`](@ref), [`unalias_position`](@ref)
 """
-update_position
+update_position(step::SimulationStep, idx, op, arg)
 
 """
     unalias_position(step, idx)
