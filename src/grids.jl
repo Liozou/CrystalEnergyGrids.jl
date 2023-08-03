@@ -264,14 +264,10 @@ and `coulomb` is the electrostatic ones, both in K.
 function energy_point(setup::CrystalEnergySetup, positions)
     num_atoms = length(setup.atomsidx)
     vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], positions[i]) for i in 1:num_atoms)
-    coulomb_direct = if setup.coulomb.ε_Ewald == -Inf
-        0.0u"K"
-    else
-        sum((NoUnits(setup.molecule[i,:atomic_charge]/u"e_au"))*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
-    end
+    setup.coulomb.ε_Ewald == -Inf && return vdw, 0.0u"K"
+    coulomb_direct = sum((NoUnits(setup.molecule[i,:atomic_charge]/u"e_au"))*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
     newmolecule = ChangePositionSystem(setup.molecule, positions)
     host_adsorbate_reciprocal, adsorbate_adsorbate_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
-    # @show vdw, coulomb_direct, host_adsorbate_reciprocal, adsorbate_adsorbate_reciprocal
     return (vdw, coulomb_direct + host_adsorbate_reciprocal + adsorbate_adsorbate_reciprocal)
 end
 

@@ -19,13 +19,23 @@ function cell_angles(mat::AbstractMatrix)
     return (a, b, c), (α, β, γ)
 end
 
+"""
+    EwaldKspace
 
+Record of the k-vectors used for a computation, characterized by the unit cell, the coulomb
+cutoff (12.0 Å in this package) and the required precision (default to 1e-6).
+"""
 struct EwaldKspace
     ks::NTuple{3,Int}
     num_kvecs::Int
     kindices::Vector{Tuple{Int,Int,UnitRange{Int},Int}}
 end
 
+"""
+    EwaldFramework
+
+Pre-computation record for the Ewald summation scheme on a fixed framework.
+"""
 struct EwaldFramework
     kspace::EwaldKspace
     α::Float64
@@ -37,6 +47,10 @@ struct EwaldFramework
     StoreRigidChargeFramework::Vector{ComplexF64}
     net_charges_framework::Float64
     ε::Float64
+end
+function EwaldFramwork(invmat::SMatrix{3,3,Float64,9})
+    EwaldFramework(EwaldKspace((0,0,0), 0, Tuple{Int,Int,UnitRange{Int},Int}[]),
+                   0.0, invmat, 0.0, 0.0, Float64[], 0.0, ComplexF64[], 0.0, 0.0)
 end
 
 
@@ -81,6 +95,10 @@ function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
     ΠABC = ΠA*ΠBC
     numsites = ΠABC * sum(length, systems)
 
+    kxp = kx + 1
+    tkyp = 2ky + 1
+    tkzp = 2kz + 1
+
     Eikx = Vector{ComplexF64}(undef, (kx+1)*numsites)
     Eiky = Vector{ComplexF64}(undef, (2ky+1)*numsites)
     Eikz = Vector{ComplexF64}(undef, (2kz+1)*numsites)
@@ -91,18 +109,18 @@ function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
             px, py, pz = invmat * (NoUnits.(position(syst, j)/u"Å"))
             for πs in CartesianIndices((0:(ΠA-1), 0:(ΠB-1), 0:(ΠC-1)))
                 πa, πb, πc = Tuple(πs)
-                πofs = πa*ΠBC + πb*ΠC + πc
+                jofs = (j + ofs)*ΠABC + πa*ΠBC + πb*ΠC + πc
 
-                ix = 1 + ((j+ofs)*ΠABC + πofs)*(kx+1)
+                ix = 1 + jofs*kxp
                 eikx = cispi(2*(px + πa/ΠA))
                 make_line_pos!(Eikx, ix, kx, eikx)
 
                 eiky = cispi(2*(py + πb/ΠB))
-                iy = 1 + ((j+ofs)*ΠABC + πofs)*(2ky+1)
+                iy = 1 + jofs*tkyp
                 make_line_neg!(Eiky, iy, ky, eiky)
 
                 eikz = cispi(2*(pz + πc/ΠC))
-                iz = 1 + ((j+ofs)*ΠABC + πofs)*(2kz+1)
+                iz = 1 + jofs*tkzp
                 make_line_neg!(Eikz, iz, kz, eikz)
             end
         end
@@ -144,13 +162,13 @@ end
 
 
 """
-    initialize_ewald(syst::AbstractSystem{3}, precision=1e-6)
+    initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst, 12.0u"Å"), precision=1e-6)
 
-Given `syst`, which contains a fixed system, return an object `x` to feed to
-`compute_ewald(x, mol)` to compute the Fourier contribution in the Ewald summation for the
-interaction between fixed system `syst` and molecule `mol`.
+Given `syst`, which contains a fixed system, return an `EwaldFramework` object `x` to feed
+to [`compute_ewald(x, molecules)`](@ref compute_ewald) to compute the Fourier contribution
+in the Ewald summation for the interaction between fixed system `syst` and `molecules`.
 """
-function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=1e-6)
+function initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst, 12.0u"Å"), precision=1e-6)
     @assert all(==(Periodic()), boundary_conditions(syst))
 
     cutoff_coulomb = 12.0
@@ -234,14 +252,51 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=(1,1,1), precision=
 end
 
 
+"""
+    EwaldContext
+
+Context to be fed to [`compute_ewald`](@ref) to compute the Fourier contribution to the
+energy of a system composed of a rigid framework and any number of rigid molecules.
+"""
 struct EwaldContext
     eframework::EwaldFramework
     Eiks::NTuple{3,Vector{ComplexF64}}
     allcharges::Vector{Vector{Float64}}
+    offsets::Vector{Int}
     static_contribution::Float64
     energy_net_charges::Float64
 end
 
+# function EwaldContext(invmat::SMatrix{3,3,Float64,9})
+#     eframework = EwaldFramwork(invmat)
+#     EwaldContext(eframework, ntuple(Returns(ComplexF64[]), 3), Vector{Float64}[], Int[], 0.0, 0.0)
+# end
+
+function move_one_system!(ctx::EwaldContext, idx, positions)
+    ofs = ctx.offsets[idx]
+    Eikx, Eiky, Eikz = ctx.Eiks
+    kx, ky, kz = ctx.eframework.kspace.ks
+    kxp = kx + 1
+    tkyp = 2ky + 1
+    tkzp = 2kz + 1
+    invmat = ctx.eframework.invmat
+    isnumber = eltype(positions) <: AbstractVector{<:AbstractFloat}
+    for (j, pos) in enumerate(positions)
+        px, py, pz = invmat * (isnumber ? pos : NoUnits.(pos/u"Å"))
+        jofs = ofs + j
+        make_line_pos!(Eikx, 1 + jofs*kxp, kx, cispi(2*px))
+        make_line_neg!(Eiky, 1 + jofs*tkyp, ky, cispi(2*py))
+        make_line_neg!(Eikz, 1 + jofs*tkzp, kz, cispi(2*pz))
+    end
+end
+
+"""
+    EwaldContext(eframework::EwaldFramework, systems)
+
+Build an [`EwaldContext`](@ref) for a fixed framework and any number of rigid molecules in
+`systems`.
+`eframework` can be obtained from [`initialize_ewald`](@ref).
+"""
 function EwaldContext(eframework::EwaldFramework, systems)
     allcharges::Vector{Vector{Float64}} = [NoUnits.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α
@@ -249,12 +304,23 @@ function EwaldContext(eframework::EwaldFramework, systems)
     net_charges = sum(sum(charges) for charges in allcharges)
     static_contribution = energy_adsorbate_self +  eframework.UIon*net_charges^2
     energy_net_charges = eframework.UIon*eframework.net_charges_framework*net_charges
-
+    offsets = Vector{Int}(undef, length(systems))
+    offsets[1] = -1
+    @inbounds for i in 1:(length(systems)-1)
+        offsets[i+1] = offsets[i] + length(systems[i])
+    end
     Eiks = setup_Eik(systems, eframework.kspace.ks, eframework.invmat, (1,1,1))
-    EwaldContext(eframework, Eiks, allcharges, static_contribution, energy_net_charges)
+    EwaldContext(eframework, Eiks, allcharges, offsets, static_contribution, energy_net_charges)
 end
 
+"""
+    compute_ewald(eframework::EwaldFramework, systems)
+    compute_ewald(ctx::EwaldContext, systems)
 
+Compute the Fourier contribution to the Coulomb part of the interaction energy between
+a framework (represented by either a [`EwaldFramework`](@ref) or an [`EwaldContext`](@ref))
+and any number of rigid molecules in `system`.
+"""
 function compute_ewald(ctx::EwaldContext, systems)
     newcharges = ewald_main_loop(ctx.allcharges, ctx.eframework.kspace, ctx.Eiks)
     energy_framework_adsorbate = 0.0

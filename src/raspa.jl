@@ -331,7 +331,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
     gridstep_name::String = @sprintf "%.6f" gridstep
     grid_dir = joinpath(rootdir, gridstep_name)
     if supercell isa Nothing
-        supercell = find_supercell(bounding_box(syst_framework), 12.0u"Å")
+        supercell = find_supercell(syst_framework, 12.0u"Å")
     end
     supercell::NTuple{3,Int}
     supercell_name = join(supercell, 'x')
@@ -356,19 +356,19 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
         block = nothing
     end
 
-    ewald = initialize_ewald(syst_framework, supercell)
     needcoulomb = any(syst_mol[i,:atomic_charge]!=(0.0u"e_au") for i in 1:length(syst_mol))
-    coulomb = if needcoulomb
+    coulomb, ewald = if needcoulomb
+        _ewald = initialize_ewald(syst_framework, supercell)
         coulomb_grid_path = joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid")
         if new || !isfile(coulomb_grid_path)
             mkpath(dirname(coulomb_grid_path))
             printstyled("Creating Coulomb grid at $coulomb_grid_path... "; color=:cyan)
-            create_grid_coulomb(coulomb_grid_path, syst_framework, forcefield, gridstep, ewald)
+            create_grid_coulomb(coulomb_grid_path, syst_framework, forcefield, gridstep, eframework)
             printstyled("Coulomb grid created.\n"; color=:cyan)
         end
-        parse_grid(coulomb_grid_path, true, mat)
+        parse_grid(coulomb_grid_path, true, mat), _ewald
     else
-        EnergyGrid()
+        EnergyGrid(), EwaldFramwork(inv(mat))
     end
 
     trunc_or_shift = strip(first(Iterators.filter(!startswith('#'), eachline(joinpath(raspa, "forcefield", forcefield_framework, "force_field_mixing_rules.def")))))

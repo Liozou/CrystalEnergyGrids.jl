@@ -21,7 +21,7 @@ end
 function ProbeSystem(framework::AbstractSystem{3}, forcefield::ForceField, atom::Symbol=Symbol(""))
     n = length(framework)
     _atomkinds = [forcefield.sdict[Symbol(get_atom_name(atomic_symbol(framework, i)))] for i in 1:n]
-    nx, ny, nz = find_supercell(bounding_box(framework), 12.0u"Å")
+    nx, ny, nz = find_supercell(framework, 12.0u"Å")
     numsupercell = nx*ny*nz
     vx, vy, vz = bounding_box(framework)
     mat = stack3((nx .* vx, ny .* vy, nz .* vz))

@@ -52,6 +52,7 @@ end
     find_supercell(mat::AbstractMatrix, cutoff)
     find_supercell((a, b, c)::NTuple{3,<:AbstractVector}, cutoff)
     find_supercell((cx, cy, cz)::NTuple{3,AbstractFloat}, cutoff)
+    find_supercell(syst::AbstractSystem{3}, cutoff)
 
 Return the triplet `(ix, iy, iz)` such that the `ix × iy × iz` supercell of the input has
 perpendicular widths each at least twice as long as the cutoff.
@@ -64,6 +65,7 @@ function find_supercell((cx, cy, cz)::NTuple{3,T}, cutoff::T) where T
 end
 find_supercell(mat::AbstractMatrix, cutoff) = find_supercell((view(mat, :, 1), view(mat, :, 2), view(mat, :, 3)), cutoff)
 find_supercell((a, b, c)::NTuple{3,<:AbstractVector}, cutoff) = find_supercell(perpendicular_lengths(a, b, c), cutoff)
+find_supercell(syst::AbstractSystem{3}, cutoff) = find_supercell(bounding_box(syst), cutoff)
 function find_supercell(x, cutoff)
     (x isa NTuple || length(x) != 3) && throw(MethodError(find_supercell, (x, cutoff)))
     find_supercell((x[1], x[2], x[3]), cutoff)
