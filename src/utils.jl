@@ -158,8 +158,8 @@ Similar to `periodic_distance!` except that:
 - `buffer2` should be a `MVector{3,Float64}`.
 - the result is the squared distance.
 
-After this function returns the distance, `buffer` contains the cartesian coordinates
-corresponding to the closest image.
+After this function returns the squared distance, `buffer` contains the cartesian
+coordinates corresponding to the closest image.
 """
 function periodic_distance2_fromcartesian!(buffer, mat, invmat, ortho, safemin2, buffer2)
     mul!(buffer2, invmat, buffer)

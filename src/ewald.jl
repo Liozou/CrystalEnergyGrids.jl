@@ -39,6 +39,7 @@ Pre-computation record for the Ewald summation scheme on a fixed framework.
 struct EwaldFramework
     kspace::EwaldKspace
     α::Float64
+    mat::SMatrix{3,3,Float64,9}
     invmat::SMatrix{3,3,Float64,9}
     volume_factor::Float64
     energy_framework_self::Float64
@@ -48,9 +49,9 @@ struct EwaldFramework
     net_charges_framework::Float64
     ε::Float64
 end
-function EwaldFramwork(invmat::SMatrix{3,3,Float64,9})
+function EwaldFramwork(mat::SMatrix{3,3,Float64,9})
     EwaldFramework(EwaldKspace((0,0,0), 0, Tuple{Int,Int,UnitRange{Int},Int}[]),
-                   0.0, invmat, 0.0, 0.0, Float64[], 0.0, ComplexF64[], 0.0, 0.0)
+                   0.0, mat, inv(mat), 0.0, 0.0, Float64[], 0.0, ComplexF64[], 0.0, 0.0)
 end
 
 
@@ -246,7 +247,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst
     # UChargeChargeFrameworkRigid += UIon*sum(charges)^2
     net_charges_framework = sum(charges)
 
-    return EwaldFramework(kspace, α, invmat, volume_factor, energy_framework_self,
+    return EwaldFramework(kspace, α, mat, invmat, volume_factor, energy_framework_self,
                           kfactors, UIon, StoreRigidChargeFramework, net_charges_framework,
                           ε)
 end
@@ -299,14 +300,36 @@ Build an [`EwaldContext`](@ref) for a fixed framework and any number of rigid mo
 """
 function EwaldContext(eframework::EwaldFramework, systems)
     allcharges::Vector{Vector{Float64}} = [NoUnits.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
+
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α
     energy_adsorbate_self = sum(sum(abs2, charges)*chargefactor for charges in allcharges)
     net_charges = sum(sum(charges) for charges in allcharges)
-    static_contribution = energy_adsorbate_self +  eframework.UIon*net_charges^2
+    buffer, ortho, safemin = prepare_periodic_distance_computations(eframework.mat)
+    buffer2 = MVector{3,Float64}(undef)
+    m = length(systems)
+    energy_adsorbate_excluded = 0.0
+    for i in 1:m
+        syst = systems[i]
+        charges = allcharges[i]
+        n = length(syst)
+        for atomA in 1:n
+            chargeA = charges[atomA]
+            posA = Float64.(position(syst, atomA)/u"Å")
+            for atomB in (atomA+1):n
+                chargeB = charges[atomB]
+                buffer2 .= Float64.(position(syst, atomB)/u"Å") .- posA
+                mul!(buffer, eframework.invmat, buffer2)
+                r = periodic_distance!(buffer, eframework.mat, ortho, safemin)
+                energy_adsorbate_excluded += erf(eframework.α*r)*chargeA*chargeB/r
+            end
+        end
+    end
+    static_contribution = energy_adsorbate_self + eframework.UIon*net_charges^2 + energy_adsorbate_excluded*COULOMBIC_CONVERSION_FACTOR
+
     energy_net_charges = eframework.UIon*eframework.net_charges_framework*net_charges
-    offsets = Vector{Int}(undef, length(systems))
+    offsets = Vector{Int}(undef, m)
     offsets[1] = -1
-    @inbounds for i in 1:(length(systems)-1)
+    @inbounds for i in 1:(m-1)
         offsets[i+1] = offsets[i] + length(systems[i])
     end
     Eiks = setup_Eik(systems, eframework.kspace.ks, eframework.invmat, (1,1,1))
@@ -315,52 +338,32 @@ end
 
 """
     compute_ewald(eframework::EwaldFramework, systems)
-    compute_ewald(ctx::EwaldContext, systems)
+    compute_ewald(ctx::EwaldContext)
 
 Compute the Fourier contribution to the Coulomb part of the interaction energy between
-a framework (represented by either a [`EwaldFramework`](@ref) or an [`EwaldContext`](@ref))
-and any number of rigid molecules in `system`.
+a framework and a set of rigid molecules.
 """
-function compute_ewald(ctx::EwaldContext, systems)
+function compute_ewald(ctx::EwaldContext)
     newcharges = ewald_main_loop(ctx.allcharges, ctx.eframework.kspace, ctx.Eiks)
-    energy_framework_adsorbate = 0.0
-    energy_adsorbate_adsorbate = 0.0
+    framework_adsorbate = 0.0
+    adsorbate_adsorbate = 0.0
     for idx in 1:ctx.eframework.kspace.num_kvecs
         temp = ctx.eframework.kfactors[idx]
         _re_f, _im_f = reim(ctx.eframework.StoreRigidChargeFramework[idx])
         _re_a, _im_a = reim(newcharges[idx])
-        energy_framework_adsorbate += temp*(_re_f*_re_a + _im_f*_im_a)
-        energy_adsorbate_adsorbate += temp*abs2(newcharges[idx])
+        framework_adsorbate += temp*(_re_f*_re_a + _im_f*_im_a)
+        adsorbate_adsorbate += temp*abs2(newcharges[idx])
     end
 
-    UHostAdsorbateChargeChargeFourier = 2*(energy_framework_adsorbate + ctx.energy_net_charges)
+    UHostAdsorbateChargeChargeFourier = 2*(framework_adsorbate + ctx.energy_net_charges)
 
-    m = length(systems)
-    energy_adsorbate_excluded = 0.0
-    for i in 1:m
-        syst = systems[i]
-        charges = ctx.allcharges[i]
-        n = length(syst)
-        for atomA in 1:n
-            chargeA = charges[atomA]
-            posA = Float64.(position(syst, atomA)/u"Å")
-            for atomB in (atomA+1):n
-                chargeB = charges[atomB]
-                posB = Float64.(position(syst, atomB)/u"Å")
-                r = norm(posB .- posA)
-                energy_adsorbate_excluded += erf(ctx.eframework.α*r)*chargeA*chargeB/r
-            end
-        end
-    end
-    energy_adsorbate_excluded *= COULOMBIC_CONVERSION_FACTOR
-
-    UAdsorbateAdsorbateChargeChargeFourier = energy_adsorbate_adsorbate - energy_adsorbate_excluded - ctx.static_contribution
+    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate - ctx.static_contribution
 
     UHostAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN, UAdsorbateAdsorbateChargeChargeFourier*ENERGY_TO_KELVIN
 end
 
 function compute_ewald(eframework::EwaldFramework, systems)
-    compute_ewald(EwaldContext(eframework, systems), systems)
+    compute_ewald(EwaldContext(eframework, systems))
 end
 
 function derivatives_ewald(ewald::EwaldFramework, charge::Float64, r2::Float64)

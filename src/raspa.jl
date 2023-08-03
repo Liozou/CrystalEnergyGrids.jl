@@ -368,7 +368,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
         end
         parse_grid(coulomb_grid_path, true, mat), _ewald
     else
-        EnergyGrid(), EwaldFramwork(inv(mat))
+        EnergyGrid(), EwaldFramwork(mat)
     end
 
     trunc_or_shift = strip(first(Iterators.filter(!startswith('#'), eachline(joinpath(raspa, "forcefield", forcefield_framework, "force_field_mixing_rules.def")))))
