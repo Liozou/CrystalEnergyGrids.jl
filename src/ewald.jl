@@ -132,9 +132,8 @@ function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
 end
 
 
-function ewald_main_loop(allcharges, kspace::EwaldKspace, Eiks)
-    sums = zeros(ComplexF64, kspace.num_kvecs)
-
+function ewald_main_loop!(sums, allcharges, kspace::EwaldKspace, Eiks)
+    sums .= zero(ComplexF64)
     Eikx, Eiky, Eikz = Eiks
     kx, ky, kz = kspace.ks
     kxp = kx + 1
@@ -158,7 +157,7 @@ function ewald_main_loop(allcharges, kspace::EwaldKspace, Eiks)
         iy += tkyp
         iz += tkzp
     end
-    sums
+    nothing
 end
 
 
@@ -239,7 +238,8 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst
 
     kspace = EwaldKspace((kx, ky, kz), num_kvecs, kindices)
     Eiks = setup_Eik((syst,), kspace.ks, invmat, supercell)
-    StoreRigidChargeFramework = ewald_main_loop((repeat(charges, prod(supercell)),), kspace, Eiks)
+    StoreRigidChargeFramework = Vector{ComplexF64}(undef, num_kvecs)
+    ewald_main_loop!(StoreRigidChargeFramework, (repeat(charges, prod(supercell)),), kspace, Eiks)
     # UChargeChargeFrameworkRigid = 0.0
     # for idx in 1:num_kvecs
     #     UChargeChargeFrameworkRigid += kfactors[idx]*abs2(StoreRigidChargeFramework[idx])
@@ -344,7 +344,11 @@ Compute the Fourier contribution to the Coulomb part of the interaction energy b
 a framework and a set of rigid molecules.
 """
 function compute_ewald(ctx::EwaldContext)
-    newcharges = ewald_main_loop(ctx.allcharges, ctx.eframework.kspace, ctx.Eiks)
+    newcharges::Vector{ComplexF64} = get!(task_local_storage(), :ewald_sums) do
+        Vector{ComplexF64}(undef, ctx.eframework.kspace.num_kvecs)
+    end
+    resize!(newcharges, ctx.eframework.kspace.num_kvecs)
+    ewald_main_loop!(newcharges, ctx.allcharges, ctx.eframework.kspace, ctx.Eiks)
     framework_adsorbate = 0.0
     adsorbate_adsorbate = 0.0
     for idx in 1:ctx.eframework.kspace.num_kvecs
@@ -352,7 +356,7 @@ function compute_ewald(ctx::EwaldContext)
         _re_f, _im_f = reim(ctx.eframework.StoreRigidChargeFramework[idx])
         _re_a, _im_a = reim(newcharges[idx])
         framework_adsorbate += temp*(_re_f*_re_a + _im_f*_im_a)
-        adsorbate_adsorbate += temp*abs2(newcharges[idx])
+        adsorbate_adsorbate += temp*(_re_a*_re_a + _im_a*_im_a)
     end
 
     UHostAdsorbateChargeChargeFourier = 2*(framework_adsorbate + ctx.energy_net_charges)
