@@ -145,12 +145,14 @@ function ewald_main_loop!(sums, allcharges, kspace::EwaldKspace, Eiks)
     iz = kz+1 # reference index of the current site for Eikz
 
     @inbounds for charges in allcharges, c in charges
-        for (jy, jz, jxrange, rangeidx) in kspace.kindices
-            Eik_xy = c*Eiky[iy+jy]*Eikz[iz+jz]
-            n = length(jxrange)
-            ofs = first(jxrange) + ix
-            @simd for I in 1:n
-                sums[rangeidx+I] += Eikx[ofs+I]*Eik_xy
+        if !iszero(c)
+            for (jy, jz, jxrange, rangeidx) in kspace.kindices
+                Eik_xy = c*Eiky[iy+jy]*Eikz[iz+jz]
+                n = length(jxrange)
+                ofs = first(jxrange) + ix
+                @simd for I in 1:n
+                    sums[rangeidx+I] += Eikx[ofs+I]*Eik_xy
+                end
             end
         end
         ix += kxp

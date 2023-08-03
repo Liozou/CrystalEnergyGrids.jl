@@ -302,6 +302,38 @@ function parse_blockfile(file, framework, gridstep)
     block
 end
 
+
+function grid_locations(framework, forcefield_framework, atoms, gridstep, supercell)
+    raspa::String = getdir_RASPA()
+    rootdir = joinpath(raspa, "grids", forcefield_framework, framework)
+    gridstep_name::String = @sprintf "%.6f" gridstep
+    grid_dir = joinpath(rootdir, gridstep_name)
+    supercell_name = join(supercell, 'x')
+    coulomb_grid_path = joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid")
+    trunc_or_shift = strip(first(Iterators.filter(!startswith('#'), eachline(joinpath(raspa, "forcefield", forcefield_framework, "force_field_mixing_rules.def")))))
+    vdws = Vector{String}(undef, length(atoms))
+    for (i, atom) in enumerate(atoms)
+        vdws[i] = joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid"))
+    end
+    coulomb_grid_path, vdws
+end
+
+function retrieve_or_create_grid(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework, mat, new)
+    iscoulomb = atom_or_eframework isa EwaldFramework
+    text = iscoulomb ? "Coulomb" : "VdW grid for $atom_or_eframework"
+    if new || !isfile(grid_path)
+        mkpath(dirname(grid_path))
+        printstyled("Creating $text grid at $grid_path... "; color=:cyan)
+        if iscoulomb
+            create_grid_coulomb(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework)
+        else
+            create_grid_vdw(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework)
+        end
+        printstyled("$text grid created.\n"; color=:cyan)
+    end
+    parse_grid(grid_path, iscoulomb, mat)
+end
+
 """
     setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=0.15, supercell=nothing, blockfile=nothing, new=false)
 
@@ -324,19 +356,13 @@ and monoatomic (considered to be a small cation), or to `true` otherwise.
 If `new` is set, new atomic grids will be computed. Otherwise, existing grids will be used
 if they exist
 """
-function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=0.15, supercell=nothing, blockfile=nothing, new=false)
+function setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15, supercell=nothing, blockfile=nothing, new=false)
     raspa::String = getdir_RASPA()
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
-    rootdir = joinpath(raspa, "grids", forcefield_framework, framework)
-    gridstep_name::String = @sprintf "%.6f" gridstep
-    grid_dir = joinpath(rootdir, gridstep_name)
     if supercell isa Nothing
         supercell = find_supercell(syst_framework, 12.0u"Å")
     end
     supercell::NTuple{3,Int}
-    supercell_name = join(supercell, 'x')
-
-    syst_mol = load_molecule_RASPA(molecule, forcefield_molecule, forcefield_framework, syst_framework)
 
     mat = stack3(bounding_box(syst_framework))
 
@@ -356,41 +382,35 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
         block = nothing
     end
 
-    needcoulomb = any(syst_mol[i,:atomic_charge]!=(0.0u"e_au") for i in 1:length(syst_mol))
-    coulomb, ewald = if needcoulomb
-        _ewald = initialize_ewald(syst_framework, supercell)
-        coulomb_grid_path = joinpath(grid_dir, supercell_name, framework*"_Electrostatics_Ewald.grid")
-        if new || !isfile(coulomb_grid_path)
-            mkpath(dirname(coulomb_grid_path))
-            printstyled("Creating Coulomb grid at $coulomb_grid_path... "; color=:cyan)
-            create_grid_coulomb(coulomb_grid_path, syst_framework, forcefield, gridstep, eframework)
-            printstyled("Coulomb grid created.\n"; color=:cyan)
-        end
-        parse_grid(coulomb_grid_path, true, mat), _ewald
-    else
-        EnergyGrid(), EwaldFramwork(mat)
-    end
-
-    trunc_or_shift = strip(first(Iterators.filter(!startswith('#'), eachline(joinpath(raspa, "forcefield", forcefield_framework, "force_field_mixing_rules.def")))))
     atomdict = IdDict{Symbol,Int}()
     atoms = syst_mol[:,:atomic_symbol]
     for atom in atoms
         get!(Returns(length(atomdict)+1), atomdict, atom)
     end
     atomsidx = [atomdict[atom] for atom in atoms]
+
+    coulomb_grid_path, vdws = grid_locations(framework, forcefield_framework, keys(atomdict), gridstep, supercell)
+
+    needcoulomb = any(!iszero(syst_mol[i,:atomic_charge])::Bool for i in 1:length(syst_mol))
+    coulomb, ewald = if needcoulomb
+        _eframework = initialize_ewald(syst_framework, supercell)
+        retrieve_or_create_grid(coulomb_grid_path, syst_framework, forcefield, gridstep, _eframework, mat, new), _eframework
+    else
+        EnergyGrid(), EwaldFramwork(mat)
+    end
+
     grids = Vector{EnergyGrid}(undef, length(atomdict))
     for (atom, i) in atomdict
-        vdw_grid_path = joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid"))
-        if new || !isfile(vdw_grid_path)
-            mkpath(dirname(vdw_grid_path))
-            printstyled("Creating VdW grid for $atom at $vdw_grid_path... "; color=:cyan)
-            create_grid_vdw(vdw_grid_path, syst_framework, forcefield, gridstep, atom)
-            printstyled("VdW grid for $atom created.\n"; color=:cyan)
-        end
-        grids[i] = parse_grid(vdw_grid_path, false, mat)
+        vdw_grid_path = vdws[i]
+        grids[i] = retrieve_or_create_grid(vdw_grid_path, syst_framework, forcefield, gridstep, atom, mat, new)
     end
 
     CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald, forcefield, block)
+end
+function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=0.15, supercell=nothing, blockfile=nothing, new=false)
+    syst_framework = load_framework_RASPA(framework, forcefield_framework)
+    syst_mol = load_molecule_RASPA(molecule, forcefield_molecule, forcefield_framework, syst_framework)
+    setup_RASPA(framework, forcefield_framework, syst_mol; gridstep, supercell, blockfile, new)
 end
 
 
