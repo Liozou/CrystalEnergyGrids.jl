@@ -53,12 +53,30 @@ mkdir(GRIDDIR)
 
     ewald = setupNaCHA.ewald
     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
-    host, adsorbate = compute_ewald(ewald, [CEG.ChangePositionSystem(co2, [[1.3, 2.9, 1.149]u"Å", [1.3, 2.9, 0.0]u"Å", [1.3, 2.9, -1.149]u"Å"]), CEG.ChangePositionSystem(co2, [[4.7, 10.1, 1.149]u"Å", [4.7, 10.1, 0.0]u"Å", [4.7, 10.1, -1.149]u"Å"])])
-    @test host ≈ 1177.5215489122043u"K"
-    @test adsorbate ≈ 7.4133039820109055u"K"
+    reciprocal = compute_ewald(ewald, [CEG.ChangePositionSystem(co2, [[1.3, 2.9, 1.149]u"Å", [1.3, 2.9, 0.0]u"Å", [1.3, 2.9, -1.149]u"Å"]), CEG.ChangePositionSystem(co2, [[4.7, 10.1, 1.149]u"Å", [4.7, 10.1, 0.0]u"Å", [4.7, 10.1, -1.149]u"Å"])])
+    @test reciprocal ≈ 1177.5215489122043u"K" + 7.4133039820109055u"K"
 
     # ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021")
     # boulfelfelsholl2021 = CEG.parse_forcefield_RASPA("BoulfelfelSholl2021")
 end
+
+
+@testset "IncrementalEwaldContext" begin
+    setupNaCHA = setup_RASPA("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", "Na", "TraPPE");
+    co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
+    pos1 = [SVector{3}((1.0, 2.5, 1.7))*u"Å"]
+    ctx = CEG.EwaldContext(setupNaCHA.ewald,[
+        CEG.ChangePositionSystem(setupNaCHA.molecule, pos1),
+        CEG.ChangePositionSystem(setupNaCHA.molecule, [SVector{3}((6.2, 5.1, 3.0))*u"Å"]),
+        co2
+    ])
+    iec = CEG.IncrementalEwaldContext(ctx)
+    reciprocal = compute_ewald(ctx)
+    @test reciprocal == compute_ewald(iec)
+    # /!\ call to single_contribution_ewald must be after call to compute_ewald
+    @test reciprocal ≈ compute_ewald(iec, 1) + CEG.single_contribution_ewald(iec, 1, pos1)
+
+end
+
 
 rm(GRIDDIR; recursive=true)
