@@ -24,8 +24,9 @@ struct AsymetricSelfInteractionRule <: Exception
     rule::InteractionRule
 end
 function Base.showerror(io::IO, e::AsymetricSelfInteractionRule)
+    ofs = e.rule.kind === FF.CoulombEwaldDirect
     print(io, e.rule.kind, " interaction between two species ", e.s, " should be defined by a single parameter specific to ",
-              e.s, " but two were given: ", e.rule.params[1], " ≠ ", e.rule.params[2])
+              e.s, " but two were given: ", e.rule.params[1+ofs], " ≠ ", e.rule.params[2+ofs])
 end
 
 struct IncompatibleMixing <: Exception
@@ -46,9 +47,16 @@ function _mix_rules(A::InteractionRule, B::InteractionRule, mixing::FF.MixingRul
         FF.HardSphere(A.params[1], B.params[1])
     elseif A.kind === FF.HardSphere # && B.kind !== FF.HardSphere
         FF.HardSphere(A.params[1], 0.0)
-    elseif B.kind === FF.Coulomb # && A.kind === FF.Coulomb
-        FF.Coulomb(A.params[1], B.params[1])
-    elseif A.kind === FF.Coulomb # && B.kind !== FF.Coulomb
+    elseif B.kind === FF.CoulombEwaldDirect || B.kind === FF.Coulomb
+        A.kind === B.kind || error("Cannot mix cutoff and no-cutoff coulomb interactions")
+        if B.kind === FF.CoulombEwaldDirect
+            A.params[1] == B.params[1]  || error("Cannot use two Ewald summations with different cutoffs")
+            FF.CoulombEwaldDirect(A.params[1], A.params[2], B.params[2])
+        else
+            FF.Coulomb(A.params[1], B.params[1])
+        end
+    elseif A.kind === FF.CoulombEwaldDirect || A.kind === FF.Coulomb
+        # && B.kind !== FF.CoulombEwaldDirect && B.kind != FF.Coulomb
         FF.NoInteraction()
     elseif B.kind === FF.LennardJones # && A.kind === FF.LennardJones
         εA, σA = A.params
@@ -140,9 +148,9 @@ function mix_rules(rulei, rulej, mixing::FF.MixingRule)
         elseif B.kind === FF.HardSphere
             push!(rules, FF.HardSphere(B.params[1], 0.0))
             j += 1
-        elseif A.kind === FF.Coulomb
+        elseif A.kind === FF.Coulomb || A.kind === FF.CoulombEwaldDirect
             i += 1
-        elseif B.kind === FF.Coulomb
+        elseif B.kind === FF.Coulomb || B.kind === FF.CoulombEwaldDirect
             j += 1
         else
             return FF.UndefinedInteraction()
@@ -205,7 +213,8 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å
         j = smap[b]
         if i == j
             map_rule(rule) do r
-                if (r.kind === FF.HardSphere || r.kind === FF.Coulomb) && r.params[1] != r.params[2]
+                ofs = r.kind === FF.CoulombEwaldDirect
+                if (ofs || r.kind === FF.HardSphere || r.kind === FF.Coulomb) && r.params[1+ofs] != r.params[2+ofs]
                     throw(AsymetricSelfInteractionRule(a, r))
                 end
                 r
@@ -270,5 +279,5 @@ Base.getindex(ff::ForceField, a::Symbol, b::Symbol) = ff[ff.sdict[a], ff.sdict[b
 # (ff::ForceField)(a::Symbol, b::Symbol, distance) = ff(ff.sdict[a], ff.sdict[b], distance)
 
 function derivatives_nocutoff(ff::ForceField, i::Integer, j::Integer, distance)
-    derivatives(ff.interactions[i,j], distance)
+    derivativesGrid(ff.interactions[i,j], distance)
 end

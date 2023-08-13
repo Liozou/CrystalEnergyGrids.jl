@@ -1,6 +1,8 @@
 ## Definition of pair interactions and mixing rules
 export FF, InteractionRule, InteractionRuleSum
 
+using SpecialFunctions: erfc
+
 module FF
     """
         InteractionKind
@@ -20,6 +22,7 @@ module FF
     """
     @enum InteractionKind begin
         HardSphere
+        CoulombEwaldDirect
         Coulomb
         LennardJones
         Buckingham
@@ -51,6 +54,21 @@ module FF
     - `q₂` in elementary charges (if unspecified, defaults to `q₁`)
     """
     Coulomb
+
+    """
+        CoulombEwaldDirect
+
+    Direct (i.e. real-space) contribution to the Ewald summation to take into account
+    coulombic interaction with no cutoff. Equals `q₁ q₂ × erfc(α × r) / r`.
+
+    ## Parameters
+    - `α` in Å⁻¹ only depends on the required precision `p` for the Ewald summation and the
+      direct cutoff `c` used. Its value is `sqrt(abs(log(c*p*t)))/c` with
+      `t = sqrt(abs(log(c*p)))`
+    - `q₁` in elementary charges.
+    - `q₂` in elementary charges (if unspecified, defaults to `q₁`)
+    """
+    CoulombEwaldDirect
 
     """
         HardSphere
@@ -222,7 +240,8 @@ function Base.show(io::IO, ik::InteractionRule)
     print(io, ik.kind, '(')
     join(io, ik.params, ", ")
     print(io, ')')
-    if ik.kind !== FF.NoInteraction && ik.kind !== FF.UndefinedInteraction && get(io, :inforcefield, false)
+    if ik.kind !== FF.NoInteraction && ik.kind !== FF.UndefinedInteraction &&
+       ik.kind !== FF.Coulomb && ik.kind !== FF.CoulombEwaldDirect && get(io, :inforcefield, false)
         if ik.tailcorrection
             print(io, 'ᵀ')
         end
@@ -269,6 +288,24 @@ function (ik::FF.InteractionKind)(args...)
         Aexp = @convertifnotfloat u"K" args[1]
         Bexp = @convertifnotfloat u"Å^-1" args[2]
         InteractionRule(ik, [Aexp, Bexp])
+    elseif ik === FF.CoulombEwaldDirect
+        n > 1 || throw(InvalidParameterNumber(ik, n, [1, 2]))
+        α = args[1]
+        rcoulombdirect = if n == 3
+            c1 = @convertifnotfloat u"e_au" args[2]
+            c2 = @convertifnotfloat u"e_au" args[3]
+            InteractionRule(ik, [α, c1, c2])
+        elseif n == 2
+            conly = @convertifnotfloat u"e_au" args[2]
+            InteractionRule(ik, [α, conly, conly])
+        else
+            throw(InvalidParameterNumber(ik, n, [1, 2]))
+        end
+        if rcoulombdirect.params[2] == 0.0 || rcoulombdirect.params[3] == 0.0
+            InteractionRule(FF.NoInteraction, Float64[])
+        else
+            rcoulombdirect
+        end
     elseif ik === FF.Coulomb
         rcoulomb = if n == 2
             q1 = @convertifnotfloat u"e_au" args[1]
@@ -310,18 +347,18 @@ function (ik::FF.InteractionKind)(args...)
     end
 end
 
-struct ShiftedInteractionRule end
-function ShiftedInteractionRule(kind::FF.InteractionKind, params::Vector{Float64}, cutoff, tailcorrection::Bool=false)
+function _shifted_InteractionRule(kind::FF.InteractionKind, params::Vector{Float64}, cutoff, tailcorrection::Bool=false)
     cut = @convertifnotfloat u"Å" cutoff
     rule = InteractionRule(kind, params, 0.0, false)
     InteractionRule(kind, params, rule(cut), tailcorrection)
 end
-function ShiftedInteractionRule(rule::InteractionRule, cutoff)
-    ShiftedInteractionRule(rule.kind, rule.params, cutoff, rule.tailcorrection)
+function _shifted_InteractionRule(rule::InteractionRule, cutoff)
+    _shifted_InteractionRule(rule.kind, rule.params, cutoff, rule.tailcorrection)
 end
+
 function InteractionRule(kind::FF.InteractionKind, params::Vector{Float64}, shift::Bool, cutoff, tailcorrection::Bool=!shift)
     if shift
-        ShiftedInteractionRule(kind, params, cutoff, tailcorrection)
+        _shifted_InteractionRule(kind, params, cutoff, tailcorrection)
     else
         InteractionRule(kind, params, 0.0, tailcorrection)
     end
@@ -331,6 +368,8 @@ function (rule::InteractionRule)(r)
     if rule.kind === FF.LennardJones
         x6lj = (rule.params[2]/r)^6
         4*rule.params[1]*x6lj*(x6lj - 1)
+    elseif rule.kind === FF.CoulombEwaldDirect
+        rule.params[2]*rule.params[3]*erfc(rule.params[1]*r)/r
     elseif rule.kind === FF.Coulomb
         NoUnits(COULOMBIC_CONVERSION_FACTOR*ENERGY_TO_KELVIN/u"K")*rule.params[1]*rule.params[2]/r
     elseif rule.kind === FF.HardSphere
@@ -371,7 +410,7 @@ end
 
 function tailcorrection(rule::InteractionRule, cutoff)
     cut = @convertifnotfloat u"Å" cutoff
-    (if !rule.tailcorrection || rule.kind === FF.NoInteraction || rule.kind === FF.HardSphere || isinf(cutoff)
+    (if !rule.tailcorrection || rule.kind === FF.NoInteraction || rule.kind === FF.HardSphere || rule.kind === FF.CoulombEwaldDirect || isinf(cutoff)
         0.0
     elseif rule.kind === FF.LennardJones
         ε, σ = rule.params
@@ -390,7 +429,7 @@ function tailcorrection(rule::InteractionRule, cutoff)
     end)*u"K"
 end
 
-function derivatives(rule::InteractionRule, d2)
+function derivativesGrid(rule::InteractionRule, d2)
     r2 = @convertifnotfloat u"Å^2" d2
     if rule.kind === FF.LennardJones
         ε, σ = rule.params
@@ -400,6 +439,8 @@ function derivatives(rule::InteractionRule, d2)
         ∂1 = 24*ε*(x6*(1 - 2*x6))/r2
         ∂2 = 96*ε*(x6*(7*x6 - 2))/r4
         ∂3 = 384*ε*(x6*(5 - 28*x6))/(r4*r4)
+    elseif rule.kind === FF.CoulombEwaldDirect
+        error("GRID with CoulombEwaldDirect NOT IMPLEMENTED")
     elseif rule.kind === FF.Coulomb
         error("Coulomb interactions should not be taken into account in VdW grids.")
     elseif rule.kind === FF.HardSphere
@@ -416,7 +457,9 @@ function derivatives(rule::InteractionRule, d2)
         ∂1 = -B*xe/r + 6*x6/r2
         ∂2 = -48*x6/r4 + B*xe*(1+B*r)/(r2*r)
         ∂3 = -(3*B*r + B*B*r2 + 3)*B*xe*r/r6 + 480*C/(r6*r6)
-    elseif rule.kind === FF.NoInteraction
+    elseif rule.kind === FF.NoInteraction || rule.kind == FF.CoulombEwaldDirect
+        # CoulombEwaldDirect is not included in the VdW grid but directly taken into
+        # account in the Ewald grid
         return 0.0, 0.0, 0.0, 0.0
     elseif rule.kind === FF.Monomial
         error("VdW grid not implemented for Monomial")
@@ -510,11 +553,11 @@ function (f::InteractionRuleSum)(r)
     ret
 end
 
-function derivatives(f::InteractionRuleSum, d2)
+function derivativesGrid(f::InteractionRuleSum, d2)
     r2 = @convertifnotfloat u"Å^2" d2
     value = ∂1 = ∂2 = ∂3 = 0.0
     for x in f.rules
-        v, p1, p2, p3 = derivatives(x, r2)
+        v, p1, p2, p3 = derivativesGrid(x, r2)
         value += v
         ∂1 += p1
         ∂2 += p2

@@ -476,19 +476,22 @@ function next_noncomment_line(lines, i)
 end
 
 """
-    parse_forcefield_RASPA(name, [pseudoatoms::PseudoAtomListing]; cutoff=12.0u"Å", ewald=!isinf(cutoff))
+    parse_forcefield_RASPA(name, [pseudoatoms::PseudoAtomListing]; cutoff=12.0u"Å", ewald_precision=!isinf(cutoff)*1e-6u"Å^-1")
 
 Return a [`ForceField`](@ref) parsed from that called `name` in the RASPA directory. If
 separately precomputed, the [`PseudoAtomListing`] can be provided.
 
 `cutoff` specifies the interaction cutoff.
 
-If `ewald` is unset, the returned force field will include direct [`Coulomb`](@ref) pair
-interactions between all charged species. By default, `ewald` is set (unless there is no
-cutoff), which means that coulombic interactions are not computed directly, but through
-Ewald summation technique.
+`ewald_precision` is the precision that should be used for the Ewald summation technique.
+By default, it is set to 0.0 (which means not to use Ewald summation) if there is no
+cutoff; when set to 0.0, the returned force field will include direct [`Coulomb`](@ref)
+pair interactions between all charged species.
+Otherwise, the default is to set `ewald_precision` to 1e-6 Å⁻¹. When set to a non-zero
+value, the returned force field will include [`CoulombEwaldDirect`](@ref) pair interactions
+between all charged species, which corresponds to the direct part of the Ewald summation.
 """
-function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseudoatoms_RASPA(joinpath(RASPADIR[], "forcefield", name, "pseudo_atoms.def")); cutoff=12.0u"Å", ewald=!isinf(cutoff))
+function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseudoatoms_RASPA(joinpath(RASPADIR[], "forcefield", name, "pseudo_atoms.def")); cutoff=12.0u"Å", ewald_precision=!isinf(cutoff)*1e-6u"Å^-1")
     input = Pair{Tuple{Symbol,Symbol},Union{InteractionRule,InteractionRuleSum}}[]
     general_mixingrule = FF.ErrorOnMix
     shift = true
@@ -553,15 +556,23 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
             end
         end
     end
-    if !ewald
-        for (ati4, i4) in sdict
-            chargei = pseudoatoms[ati4].charge
-            chargei == 0.0 && continue
-            for (atj4, j4) in sdict
-                chargej = pseudoatoms[atj4].charge
-                chargej == 0.0 && continue
-                ff.interactions[i4,j4] = sum_rules(ff.interactions[i4,j4], InteractionRule(FF.Coulomb, [chargei, chargej], 0.0, false))
-            end
+    α = if iszero(ewald_precision)
+        0.0
+    else
+        ε = log(Float64(ewald_precision*cutoff))
+        sqrt(abs(ε + log(sqrt(abs(ε)))))/Float64(cutoff/u"Å")
+    end
+    for (ati4, i4) in sdict
+        chargei = pseudoatoms[ati4].charge
+        chargei == 0.0 && continue
+        for (atj4, j4) in sdict
+            chargej = pseudoatoms[atj4].charge
+            chargej == 0.0 && continue
+            ff.interactions[i4,j4] = sum_rules(ff.interactions[i4,j4], if iszero(ewald_precision)
+                InteractionRule(FF.Coulomb, [chargei, chargej], 0.0, false)
+            else
+                InteractionRule(FF.CoulombEwaldDirect, [α, chargei, chargej], 0.0, false)
+            end)
         end
     end
     ForceField(ff.interactions, ff.sdict, ff.cutoff, name)

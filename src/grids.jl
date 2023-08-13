@@ -267,8 +267,8 @@ function energy_point(setup::CrystalEnergySetup, positions)
     setup.coulomb.ε_Ewald == -Inf && return vdw, 0.0u"K"
     coulomb_direct = sum((Float64(setup.molecule[i,:atomic_charge]/u"e_au"))*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
     newmolecule = ChangePositionSystem(setup.molecule, positions)
-    host_adsorbate_reciprocal, adsorbate_adsorbate_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
-    return (vdw, coulomb_direct + host_adsorbate_reciprocal + adsorbate_adsorbate_reciprocal)
+    coulomb_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
+    return (vdw, coulomb_direct + coulomb_reciprocal)
 end
 
 
