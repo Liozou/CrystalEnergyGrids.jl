@@ -124,6 +124,30 @@ function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=n
     nothing
 end
 
+
+struct FrameworkEnergyReport
+    vdw::typeof(1.0u"K")
+    direct::typeof(1.0u"K")
+end
+FrameworkEnergyReport() = FrameworkEnergyReport(0.0u"K", 0.0u"K")
+function Base.:(+)(f1::FrameworkEnergyReport, f2::FrameworkEnergyReport)
+    FrameworkEnergyReport(f1.vdw + f2.vdw, f1.direct + f2.direct)
+end
+
+struct MCEnergyReport
+    framework::FrameworkEnergyReport
+    inter::typeof(1.0u"K")
+    reciprocal::typeof(1.0u"K")
+end
+function Base.:(+)(e1::MCEnergyReport, e2::MCEnergyReport)
+    EnergyReport(e1.framework + e2.framework, e1.inter + e2.inter, e1.reciprocal + e2.reciprocal)
+end
+function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
+    println(io, e.framework.vdw + e.framework.direct + e.inter + e.reciprocal,
+                " = ", e.framework.vdw, " + ", e.framework.direct, " + ",
+                e.inter, " + ", e.reciprocal)
+end
+
 """
     framework_interactions(mc::MonteCarloSimulation, i, positions)
 
@@ -143,7 +167,7 @@ function framework_interactions(mc::MonteCarloSimulation, indices::Vector{Int}, 
         vdw += interpolate_grid(mc.grids[ix], pos)
         direct += Float64(mc.charges[ix]/u"e_au")*interpolate_grid(mc.coulomb, pos)
     end
-    (vdw, direct)
+    FrameworkEnergyReport(vdw, direct)
 end
 function framework_interactions(mc::MonteCarloSimulation, i::Int, positions)
     framework_interactions(mc, mc.idx[i], positions)
@@ -157,17 +181,14 @@ Compute the energy of the current configuration.
 function baseline_energy(mc::MonteCarloSimulation)
     reciprocal = compute_ewald(mc.ewald)
     vdw = compute_vdw(SimulationStep(mc))
-    framework_vdw = 0.0u"K"
-    framework_direct = 0.0u"K"
+    fer = FrameworkEnergyReport()
     for (i, indices) in enumerate(mc.idx)
         poss_i = mc.positions[i]
         for poss in poss_i
-            f_vdw, f_direct = framework_interactions(mc, indices, poss)
-            framework_vdw += f_vdw
-            framework_direct += f_direct
+            fer += framework_interactions(mc, indices, poss)
         end
     end
-    return reciprocal + vdw + framework_vdw + framework_direct
+    MCEnergyReport(fer, vdw, reciprocal)
 end
 
 """
@@ -184,6 +205,6 @@ function movement_energy(mc::MonteCarloSimulation, idx, positions=mc.positions[i
     k = mc.offsets[i]+j
     singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
     singlevdw = single_contribution_vdw(SimulationStep(mc), (i,j), positions)
-    framework_vdw, framework_durect = framework_interactions(mc, i, positions)
-    singlereciprocal + singlevdw + framework_vdw + framework_durect
+    fer = framework_interactions(mc, i, positions)
+    MCEnergyReport(fer, singlevdw, singlereciprocal)
 end
