@@ -1,17 +1,25 @@
 export setup_montecarlo, move_cost
 
-struct MonteCarloSimulation{TFramework,TMolecules}
+struct MonteCarloSimulation{TFramework}
     ff::ForceField
-    ewald::EwaldContext
+    ewald::IncrementalEwaldContext
     framework::TFramework
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[i] is the VdW grid for atom i in ff
-    systemkinds::Vector{TMolecules}
+    offsets::Vector{Int}
+    # offsets[i] is the number of molecules belonging to a kind strictly lower than i
     idx::Vector{Vector{Int}}
     # idx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
     # in the force field for the k-th atom in a system of kind i
+    charges::Vector{typeof(1.0u"e_au")}
+    # charges[ix] is the charge of the atom whose of index ix in ff, i.e. the charge of the
+    # k-th atom in a system of kind i is charges[idx[i][k]].
     positions::Vector{Vector{Vector{SVector{3,typeof(1.0u"Å")}}}}
     # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
+end
+
+function SimulationStep(mc::MonteCarloSimulation)
+    SimulationStep(mc.ff, mc.charges, mc.positions, trues(length(mc.idx)), mc.idx)
 end
 
 function setup_montecarlo(framework::AbstractSystem{3}, systems::Vector{T}, ff::ForceField,
@@ -21,7 +29,6 @@ function setup_montecarlo(framework::AbstractSystem{3}, systems::Vector{T}, ff::
     U = Vector{SVector{3,typeof(1.0u"Å")}} # positions of the atoms of a system
     poss = Vector{U}[]
     indices = Tuple{Int,Int}[]
-    needcoulomb = false
     for system in systems
         n = length(kindsdict)+1
         kind = get!(kindsdict, atomic_symbol(system), n)
@@ -31,15 +38,28 @@ function setup_montecarlo(framework::AbstractSystem{3}, systems::Vector{T}, ff::
         end
         push!(poss[kind], position(system))
         push!(indices, (kind, length(poss[kind])))
-        if !needcoulomb
-            needcoulomb = any(!iszero(system[i,:atomic_charge])::Bool for i in 1:length(system))
+    end
+
+    idx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
+    charges = fill(NaN*u"e_au", length(ff.sdict))
+    for (i, ids) in enumerate(idx)
+        kindi = systemkinds[i]
+        for (k, ix) in enumerate(ids)
+            charges[ix] = kindi[k,:atomic_charge]
         end
     end
 
-    ewald = EwaldContext(eframework, systems)
-    idx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
 
-    MonteCarloSimulation(ff, ewald, framework, coulomb, grids, systemkinds, idx, poss)
+    n = length(poss)
+    offsets = Vector{Int}(undef, n)
+    offsets[1] = 0
+    for i in 1:(n-1)
+        offsets[i+1] = offsets[i] + length(poss[i])
+    end
+
+    ewald = IncrementalEwaldContext(EwaldContext(eframework, systems))
+
+    MonteCarloSimulation(ff, ewald, framework, coulomb, grids, offsets, idx, charges, poss), indices
 end
 
 function setup_montecarlo(framework::String, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
@@ -82,6 +102,88 @@ function setup_montecarlo(framework::String, forcefield_framework::String, syste
     setup_montecarlo(syst_framework, systems, ff, eframework, coulomb, grids)
 end
 
-function move_cost(mc::MonteCarloSimulation, idx, newpositions)
-    
+function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
+    mc.positions[i][j] = if eltype(positions) <: AbstractVector{<:AbstractFloat}
+        newpositions
+    else
+        (NoUnits.(newpositions[j]/u"Å") for j in 1:length(newpositions))
+    end
+
+    oldEikx, oldEiky, oldEikz = mc.ewald.Eiks
+    if newEiks isa Nothing
+        move_one_system!(mc.ewald, mc.offsets[i] + j, newpositions)
+    else
+        newEikx, newEiky, newEikz = newEiks
+        kx, ky, kz = mc.ewald.eframework.kspace.ks
+        kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
+        jofs = 1 + mc.ewald.offsets[mc.offsets[i] + j]
+        copyto!(oldEikx, 1 + jofs*kxp, newEikx, 1, length(newEikx))
+        copyto!(oldEiky, 1 + jofs*tkyp, newEiky, 1, length(newEikx))
+        copyto!(oldEikz, 1 + jofs*tkzp, newEikz, 1, length(newEikx))
+    end
+    nothing
+end
+
+"""
+    framework_interactions(mc::MonteCarloSimulation, i, positions)
+
+Energy contribution of the interaction between the framework and a molecule of system kind
+`i` at the given `positions`.
+
+Only return the Van der Waals and the direct part of the Ewald summation. The reciprocal
+part can be obtained with [`compute_ewald`](@ref).
+"""
+function framework_interactions(mc::MonteCarloSimulation, indices::Vector{Int}, positions)
+    n = length(indices)
+    vdw = 0.0u"K"
+    direct = 0.0u"K"
+    for k in 1:n
+        ix = indices[k]
+        pos = positions[k]
+        vdw += interpolate_grid(mc.grids[ix], pos)
+        direct += Float64(mc.charges[ix]/u"e_au")*interpolate_grid(mc.coulomb, pos)
+    end
+    (vdw, direct)
+end
+function framework_interactions(mc::MonteCarloSimulation, i::Int, positions)
+    framework_interactions(mc, mc.idx[i], positions)
+end
+
+"""
+    baseline_energy(mc::MonteCarloSimulation)
+
+Compute the energy of the current configuration.
+"""
+function baseline_energy(mc::MonteCarloSimulation)
+    reciprocal = compute_ewald(mc.ewald)
+    vdw = compute_vdw(SimulationStep(mc))
+    framework_vdw = 0.0u"K"
+    framework_direct = 0.0u"K"
+    for (i, indices) in enumerate(mc.idx)
+        poss_i = mc.positions[i]
+        for poss in poss_i
+            f_vdw, f_direct = framework_interactions(mc, indices, poss)
+            framework_vdw += f_vdw
+            framework_direct += f_direct
+        end
+    end
+    return reciprocal + vdw + framework_vdw + framework_direct
+end
+
+"""
+    movement_energy(mc::MonteCarloSimulation, (i, j), positions=mc.positions[i][j])
+
+Compute the energy contribution of the `j`-th molecule of kind `i` when placed at
+`positions`. If not provided, `positions` is the current position for that molecule.
+
+The energy difference between the new position for the molecule and the current one is
+`movement_energy(mc, (i,j), positions) - movement_energy(mc, (i,j))`.
+"""
+function movement_energy(mc::MonteCarloSimulation, idx, positions=mc.positions[idx[1]][idx[2]])
+    i, j = idx
+    k = mc.offsets[i]+j
+    singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
+    singlevdw = single_contribution_vdw(SimulationStep(mc), (i,j), positions)
+    framework_vdw, framework_durect = framework_interactions(mc, i, positions)
+    singlereciprocal + singlevdw + framework_vdw + framework_durect
 end

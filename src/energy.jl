@@ -3,20 +3,21 @@
 export SimulationStep, make_step, update_position, update_position!
 
 """
-    SimulationStep{N,T<:AbstractSystem{N}}
+    SimulationStep{N}
 
 Represent a set of systems in space along with a force-field, i.e. a single frame in time.
 
-To compute the energy of such a step, see [`energy_nocutoff`](@ref) and [`energy_cutoff`](@ref).
+To compute the energy of such a step, see [`energy_nocutoff`](@ref) and [`compute_vdw`](@ref).
 
 The systems are factored into kinds: one kind may designate a molecule of water, another a
 zeolite framework. There can be any number of systems for each kind: simulating the wetting
 of a zeolite will for instance require one system of the "zeolite framework" kind and many
 systems of kind "water".
 """
-struct SimulationStep{N,T<:AbstractSystem{N}}
+struct SimulationStep{N}
     ff::ForceField
-    systemkinds::Vector{T}
+    charges::Vector{typeof(1.0u"e_au")}
+    # charges[i][k] is the charge of the k-th atom in a system of kind i
     positions::Vector{Vector{Vector{SVector{N,typeof(1.0u"Å")}}}}
     # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
     isrigid::BitVector # isrigid[i] applies to all systems of kind i
@@ -53,7 +54,8 @@ function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:Abstract
                         isrigid::BitVector=trues(length(systemkinds)))
     @assert length(systemkinds) == length(positions) == length(isrigid)
     idx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
-    SimulationStep(ff, systemkinds, positions, isrigid, idx)
+    charges = [[uconvert(u"e_au", s[k,:atomic_charge])::typeof(1.0u"e_au") for k in 1:length(s)] for s in systemkinds]
+    SimulationStep(ff, charges, positions, isrigid, idx)
 end
 
 """
@@ -133,7 +135,7 @@ function update_position(step::SimulationStep, (i,j), args...)
     newpositions = copy(step.positions)
     newpositions[i] = copy(step.positions[i])
     length(args) == 2 && (newpositions[i][j] = copy(newpositions[i][j]))
-    x = SimulationStep(step.ff, step.systemkinds, newpositions, step.isrigid, step.idx)
+    x = SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.idx)
     update_position!(x, (i,j), args...)
     x
 end
@@ -158,21 +160,24 @@ function unalias_position(step, (i,j))
     newpositions = copy(step.positions)
     newpositions[i] = copy(step.positions[i])
     newpositions[i][j] = copy(newpositions[i][j])
-    SimulationStep(step.ff, step.systemkinds, newpositions, step.isrigid, step.idx)
+    SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.idx)
 end
 
-function energy_intra(ff::ForceField, system::AbstractSystem)
-    positions = position(system)
-    symbols = atomic_symbol(system)
+function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,typeof(1.0u"Å")}}) where N
     n = length(positions)
     energy = 0.0u"K"
-    cutoff2 = ff.cutoff^2
-    isinf(ff.cutoff) || error("finite cutoff not implemented")
-    for i in 1:n, j in (i+1):n
-        r2 = norm2(positions[i], positions[j])
-        rule = ff[symbols[i], symbols[j]]
-        if r2 < cutoff2
-            energy += rule(r2) + tailcorrection(rule, ff.cutoff)
+    cutoff2 = step.ff.cutoff^2
+    isinf(step.ff.cutoff) || error("finite cutoff not implemented")
+    indices = step.idx[i]
+    for k1 in 1:n
+        ix1 = indices[k1]
+        for k2 in (i+1):n
+            ix2 = indices[k2]
+            r2 = norm2(positions[k1], positions[k2])
+            if r2 < cutoff2
+                rule = step.ff[ix1, ix2]
+                energy += rule(r2) + tailcorrection(rule, step.ff.cutoff)
+            end
         end
     end
     energy
@@ -180,13 +185,13 @@ end
 
 function energy_nocutoff(step::SimulationStep)
     energy = 0.0u"K"
-    nkinds = length(step.systemkinds)
-    for (i1, kind1) in enumerate(step.systemkinds)
+    nkinds = length(step.idx)
+    for i1 in 1:nkinds
         poskind1 = step.positions[i1]
         idx1 = step.idx[i1]
         rigid1 = step.isrigid[i1]
         for (j1, pos1) in enumerate(poskind1)
-            rigid1 || (energy += energy_intra(ff, ChangePositionSystem(kind1, pos1)))
+            rigid1 || (energy += energy_intra(step, i1, pos1))
             for i2 in i1:nkinds
                 poskind2 = step.positions[i2]
                 idx2 = step.idx[i2]
@@ -202,16 +207,16 @@ function energy_nocutoff(step::SimulationStep)
     energy
 end
 
-function energy_cutoff(step::SimulationStep)
+function compute_vdw(step::SimulationStep)
     energy = 0.0u"K"
-    nkinds = length(step.systemkinds)
+    nkinds = length(step.idx)
     cutoff2 = step.ff.cutoff^2
-    for (i1, kind1) in enumerate(step.systemkinds)
+    for i1 in 1:nkinds
         poskind1 = step.positions[i1]
         idx1 = step.idx[i1]
         rigid1 = step.isrigid[i1]
         for (j1, pos1) in enumerate(poskind1)
-            rigid1 || (energy += energy_intra(ff, ChangePositionSystem(kind1, pos1)))
+            rigid1 || (energy += energy_intra(step, i1, pos1))
             for i2 in i1:nkinds
                 poskind2 = step.positions[i2]
                 idx2 = step.idx[i2]
@@ -223,6 +228,29 @@ function energy_cutoff(step::SimulationStep)
                             energy += step.ff[idx1[k1], idx2[k2]](d2)
                         end
                     end
+                end
+            end
+        end
+    end
+    energy
+end
+
+function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, positions::Vector{SVector{N,typeof(1.0u"Å")}}) where N
+    energy = step.isrigid[i1] ? 0.0u"K" : energy_intra(step, i1, positions)
+    nkinds = length(step.idx)
+    cutoff2 = step.ff.cutoff^2
+    pos1 = step.positions[i1][j1]
+    idx1 = step.idx[i1]
+    for i2 in i1:nkinds
+        poskind2 = step.positions[i2]
+        idx2 = step.idx[i2]
+        for j2 in 1:length(poskind2)
+            i1 == i2 && j1 == j2 && continue
+            pos2 = poskind2[j2]
+            for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
+                d2 = norm2(p1, p2)
+                if d2 < cutoff2
+                    energy += step.ff[idx1[k1], idx2[k2]](d2)
                 end
             end
         end
