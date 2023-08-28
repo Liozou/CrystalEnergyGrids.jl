@@ -239,15 +239,14 @@ function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, 
     energy = step.isrigid[i1] ? 0.0u"K" : energy_intra(step, i1, positions)
     nkinds = length(step.idx)
     cutoff2 = step.ff.cutoff^2
-    pos1 = step.positions[i1][j1]
     idx1 = step.idx[i1]
-    for i2 in i1:nkinds
+    for i2 in 1:nkinds
         poskind2 = step.positions[i2]
         idx2 = step.idx[i2]
         for j2 in 1:length(poskind2)
             i1 == i2 && j1 == j2 && continue
             pos2 = poskind2[j2]
-            for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
+            for (k1, p1) in enumerate(positions), (k2, p2) in enumerate(pos2)
                 d2 = norm2(p1, p2)
                 if d2 < cutoff2
                     energy += step.ff[idx1[k1], idx2[k2]](d2)
