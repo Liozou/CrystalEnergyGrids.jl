@@ -398,7 +398,7 @@ function (rule::InteractionRule)(input::Quantity{T,Unitful.𝐋^2,U} where {T,U}
         x6lj = (σ2/r2)^3
         4*rule.params[1]*x6lj*(x6lj - 1)
     elseif rule.kind === FF.HardSphere
-        ifelse(r < (rule.params[1] + rule.params[2])^2, Inf, 0.0)
+        ifelse(r2 < (rule.params[1] + rule.params[2])^2, Inf, 0.0)
     elseif rule.kind === FF.NoInteraction
         0.0
     elseif rule.kind === FF.Monomial
@@ -439,8 +439,6 @@ function derivativesGrid(rule::InteractionRule, d2)
         ∂1 = 24*ε*(x6*(1 - 2*x6))/r2
         ∂2 = 96*ε*(x6*(7*x6 - 2))/r4
         ∂3 = 384*ε*(x6*(5 - 28*x6))/(r4*r4)
-    elseif rule.kind === FF.CoulombEwaldDirect
-        error("GRID with CoulombEwaldDirect NOT IMPLEMENTED")
     elseif rule.kind === FF.Coulomb
         error("Coulomb interactions should not be taken into account in VdW grids.")
     elseif rule.kind === FF.HardSphere

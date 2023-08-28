@@ -54,7 +54,7 @@ function ProbeSystem(framework::AbstractSystem{3}, forcefield::ForceField, atom:
         repeat(_atomkinds, numsupercell), newpositions
     end
     if atom === Symbol("")
-        charges = [NoUnits(x[:atomic_charge] / u"e_au") for x in framework]
+        charges = repeat([NoUnits(x[:atomic_charge] / u"e_au") for x in framework], numsupercell)
         ProbeSystem(positions, mat, invmat, forcefield, atomkinds, charges, 0)
     else
         probe = forcefield.sdict[Symbol(get_atom_name(atom))]
