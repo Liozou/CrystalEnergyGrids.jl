@@ -239,6 +239,14 @@ function load_framework_RASPA(name::AbstractString, forcefield::AbstractString)
     RASPASystem(AtomsBase.bounding_box(system), AtomsBase.position(system), AtomsBase.atomic_symbol(system), AtomsBase.atomic_number(system), mass, charges, false)
 end
 
+function load_framework_RASPA(input::AbstractMatrix{T}, ::AbstractString) where T
+    mat = T <: AbstractFloat ? input*u"Å" : uconvert.(u"Å", input)
+    bbox = SVector{3}([[mat[1,1], mat[2,1], mat[3,1]],
+                       [mat[1,2], mat[2,2], mat[3,2]],
+                       [mat[1,3], mat[2,3], mat[3,3]]])
+    RASPASystem(bbox, SVector{3,typeof(1.0u"Å")}[], Symbol[], Int[], typeof(1.0u"u")[], typeof(1.0u"e_au")[], false)
+end
+
 """
     load_molecule_RASPA(name::AbstractString, forcefield::AbstractString, framework_forcefield::AbstractString, framework_system::Union{AbstractSystem,Nothing}=nothing)
 
@@ -304,6 +312,7 @@ end
 
 
 function grid_locations(framework, forcefield_framework, atoms, gridstep, supercell)
+    framework isa AbstractMatrix && return "", ["" for _ in 1:length(atoms)]
     raspa::String = getdir_RASPA()
     rootdir = joinpath(raspa, "grids", forcefield_framework, framework)
     gridstep_name::String = @sprintf "%.6f" gridstep
@@ -315,21 +324,22 @@ function grid_locations(framework, forcefield_framework, atoms, gridstep, superc
     for (i, atom) in enumerate(atoms)
         vdws[i] = joinpath(grid_dir, string(framework, '_', atom, '_', trunc_or_shift, ".grid"))
     end
-    coulomb_grid_path, vdws
+    return coulomb_grid_path, vdws
 end
 
 function retrieve_or_create_grid(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework, mat, new)
+    isempty(grid_path) && return EnergyGrid()
     iscoulomb = atom_or_eframework isa EwaldFramework
-    text = iscoulomb ? "Coulomb" : "VdW grid for $atom_or_eframework"
+    text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
     if new || !isfile(grid_path)
         mkpath(dirname(grid_path))
-        printstyled("Creating $text grid at $grid_path... "; color=:cyan)
+        printstyled("Creating $text at $grid_path... "; color=:cyan)
         if iscoulomb
             create_grid_coulomb(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework)
         else
             create_grid_vdw(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework)
         end
-        printstyled("$text grid created.\n"; color=:cyan)
+        printstyled("$text created.\n"; color=:cyan)
     end
     parse_grid(grid_path, iscoulomb, mat)
 end
@@ -396,7 +406,7 @@ function setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15, s
         _eframework = initialize_ewald(syst_framework, supercell)
         retrieve_or_create_grid(coulomb_grid_path, syst_framework, forcefield, gridstep, _eframework, mat, new), _eframework
     else
-        EnergyGrid(), EwaldFramwork(mat)
+        EnergyGrid(), EwaldFramework(mat)
     end
 
     grids = Vector{EnergyGrid}(undef, length(atomdict))

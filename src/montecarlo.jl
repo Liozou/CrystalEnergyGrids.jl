@@ -62,7 +62,7 @@ function setup_montecarlo(framework::AbstractSystem{3}, systems::Vector{T}, ff::
     MonteCarloSimulation(ff, ewald, framework, coulomb, grids, offsets, idx, charges, poss), indices
 end
 
-function setup_montecarlo(framework::String, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
+function setup_montecarlo(framework, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
                           gridstep=0.15, supercell=nothing, new=false)
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
@@ -130,22 +130,27 @@ struct FrameworkEnergyReport
     direct::typeof(1.0u"K")
 end
 FrameworkEnergyReport() = FrameworkEnergyReport(0.0u"K", 0.0u"K")
-function Base.:(+)(f1::FrameworkEnergyReport, f2::FrameworkEnergyReport)
-    FrameworkEnergyReport(f1.vdw + f2.vdw, f1.direct + f2.direct)
-end
+Base.Float64(f::FrameworkEnergyReport) = Float64((f.vdw + f.direct)/u"K")
 
 struct MCEnergyReport
     framework::FrameworkEnergyReport
     inter::typeof(1.0u"K")
     reciprocal::typeof(1.0u"K")
 end
-function Base.:(+)(e1::MCEnergyReport, e2::MCEnergyReport)
-    EnergyReport(e1.framework + e2.framework, e1.inter + e2.inter, e1.reciprocal + e2.reciprocal)
-end
+Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
 function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
-    println(io, e.framework.vdw + e.framework.direct + e.inter + e.reciprocal,
-                " = ", e.framework.vdw, " + ", e.framework.direct, " + ",
-                e.inter, " + ", e.reciprocal)
+    println(io, Float64(e), " = ", e.framework.vdw, " + ", e.framework.direct, " + ", e.inter, " + ", e.reciprocal)
+end
+
+for op in (:+, :-)
+    @eval begin
+        function Base.$(op)(f1::FrameworkEnergyReport, f2::FrameworkEnergyReport)
+            FrameworkEnergyReport($op(f1.vdw, f2.vdw), $op(f1.direct, f2.direct))
+        end
+        function Base.$(op)(e1::MCEnergyReport, e2::MCEnergyReport)
+            MCEnergyReport($op(e1.framework, e2.framework), $op(e1.inter, e2.inter), $op(e1.reciprocal, e2.reciprocal))
+        end
+    end
 end
 
 """
@@ -158,16 +163,18 @@ Only return the Van der Waals and the direct part of the Ewald summation. The re
 part can be obtained with [`compute_ewald`](@ref).
 """
 function framework_interactions(mc::MonteCarloSimulation, indices::Vector{Int}, positions)
+    isempty(mc.framework) && return FrameworkEnergyReport()
     n = length(indices)
     vdw = 0.0u"K"
     direct = 0.0u"K"
+    hascoulomb = mc.coulomb.ε_Ewald != -Inf
     for k in 1:n
         ix = indices[k]
         pos = positions[k]
         vdw += interpolate_grid(mc.grids[ix], pos)
-        direct += Float64(mc.charges[ix]/u"e_au")*interpolate_grid(mc.coulomb, pos)
+        hascoulomb && (direct += Float64(mc.charges[ix]/u"e_au")*interpolate_grid(mc.coulomb, pos))
     end
-    FrameworkEnergyReport(vdw, direct)
+    return FrameworkEnergyReport(vdw, direct)
 end
 function framework_interactions(mc::MonteCarloSimulation, i::Int, positions)
     framework_interactions(mc, mc.idx[i], positions)
@@ -182,13 +189,14 @@ function baseline_energy(mc::MonteCarloSimulation)
     reciprocal = compute_ewald(mc.ewald)
     vdw = compute_vdw(SimulationStep(mc))
     fer = FrameworkEnergyReport()
+    isempty(mc.framework) && return MCEnergyReport(fer, vdw, reciprocal)
     for (i, indices) in enumerate(mc.idx)
         poss_i = mc.positions[i]
         for poss in poss_i
             fer += framework_interactions(mc, indices, poss)
         end
     end
-    MCEnergyReport(fer, vdw, reciprocal)
+    return MCEnergyReport(fer, vdw, reciprocal)
 end
 
 """

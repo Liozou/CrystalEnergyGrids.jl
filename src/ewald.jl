@@ -49,7 +49,7 @@ struct EwaldFramework
     net_charges_framework::Float64
     ε::Float64
 end
-function EwaldFramwork(mat::SMatrix{3,3,Float64,9})
+function EwaldFramework(mat::SMatrix{3,3,Float64,9})
     EwaldFramework(EwaldKspace((0,0,0), 0, Tuple{Int,Int,UnitRange{Int},Int}[]),
                    0.0, mat, inv(mat), 0.0, 0.0, Float64[], 0.0, ComplexF64[], 0.0, 0.0)
 end
@@ -299,7 +299,7 @@ struct EwaldContext
 end
 
 # function EwaldContext(invmat::SMatrix{3,3,Float64,9})
-#     eframework = EwaldFramwork(invmat)
+#     eframework = EwaldFramework(invmat)
 #     EwaldContext(eframework, ntuple(Returns(ComplexF64[]), 3), Vector{Float64}[], Int[], 0.0, 0.0)
 # end
 
@@ -327,6 +327,7 @@ Build an [`EwaldContext`](@ref) for a fixed framework and any number of rigid mo
 `eframework` can be obtained from [`initialize_ewald`](@ref).
 """
 function EwaldContext(eframework::EwaldFramework, systems)
+    iszero(eframework.α) && return EwaldContext(eframework, ntuple(Returns(ComplexF64[]), 3), Vector{Float64}[], Int[], 0.0, 0.0)
     allcharges::Vector{Vector{Float64}} = [NoUnits.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
 
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α
@@ -361,7 +362,7 @@ function EwaldContext(eframework::EwaldFramework, systems)
         offsets[i+1] = offsets[i] + length(systems[i])
     end
     Eiks = setup_Eik(systems, eframework.kspace.ks, eframework.invmat, (1,1,1))
-    EwaldContext(eframework, Eiks, allcharges, offsets, static_contribution, energy_net_charges)
+    return EwaldContext(eframework, Eiks, allcharges, offsets, static_contribution, energy_net_charges)
 end
 
 """
@@ -375,6 +376,7 @@ If `skipcontribution` is set to `i`, the contribution of the `i`-th charge is no
 into account.
 """
 function compute_ewald(ctx::EwaldContext, skipcontribution=0)
+    iszero(ctx.eframework.α) && return 0.0u"K"
     newcharges::Vector{ComplexF64} = get!(task_local_storage(), :buffer_vector) do
         Vector{ComplexF64}(undef, ctx.eframework.kspace.num_kvecs)
     end
@@ -394,7 +396,7 @@ function compute_ewald(ctx::EwaldContext, skipcontribution=0)
 
     UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate - ctx.static_contribution
 
-    (UHostAdsorbateChargeChargeFourier + UAdsorbateAdsorbateChargeChargeFourier)*ENERGY_TO_KELVIN
+    return (UHostAdsorbateChargeChargeFourier + UAdsorbateAdsorbateChargeChargeFourier)*ENERGY_TO_KELVIN
 end
 
 function compute_ewald(eframework::EwaldFramework, systems, skipcontribution=0)
@@ -413,6 +415,7 @@ function IncrementalEwaldContext(ctx::EwaldContext)
 end
 
 function compute_ewald(ewald::IncrementalEwaldContext, skipcontribution=0)
+    iszero(ewald.ctx.eframework.α) && return 0.0u"K"
     ewald_main_loop!(ewald.sums, ewald.ctx.allcharges, ewald.ctx.eframework.kspace, ewald.ctx.Eiks, skipcontribution)
     framework_adsorbate = 0.0
     adsorbate_adsorbate = 0.0
@@ -456,6 +459,7 @@ is the reciprocal Ewald sum energy difference between species `k` at positions `
     `k ≠ k₂` in between.
 """
 function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
+    iszero(ewald.ctx.eframework.α) && return 0.0u"K"
     kx, ky, kz = ewald.ctx.eframework.kspace.ks
     kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
     Eiks::NTuple{3,Vector{ComplexF64}} = get!(task_local_storage(), :buffer_Eiks) do
