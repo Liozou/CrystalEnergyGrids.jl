@@ -206,7 +206,7 @@ function interpolate_grid(g::EnergyGrid, point)
         end
         if any(>(1e10), X)
             # release_buffers((X,a))
-            return 1e8*u"K"
+            return 1e100*u"K"
         end
         a = COEFF * X
         for k in 0:3, j in 0:3, i in 0:3
@@ -282,7 +282,7 @@ If the guest molecule is not monoatomic, the first axe of the returned grid will
 the rotation angle of the molecule, and its size will be greater or equal to `num_rotate`.
 Otherwise (or if `num_rotate == 0`), the first axe can be dropped through`dropdims`.
 
-A value of 1e8 in the grid indicates an inaccessible point due to blocking spheres.
+A value of 1e100 in the grid indicates an inaccessible point due to blocking spheres.
 """
 function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     axeA, axeB, axeC = bounding_box(setup.framework)
@@ -311,7 +311,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
             a0, b0, c0 = floor.(Int, offsetpoint(thisofs, mat, invmat, gr0.shift, gr0.size, gr0.dims))
             a1 = a0 + 1; b1 = b0 + 1; c1 = c0 + 1;
             if setup.block[a0,b0,c0]+setup.block[a1,b0,c0]+setup.block[a0,b1,c0]+setup.block[a1,b1,c0]+setup.block[a0,b0,c1]+setup.block[a1,b0,c1]+setup.block[a0,b1,c1]+setup.block[a1,b1,c1] > 3
-                allvals[:,iA,iB,iC] .= 1e8
+                allvals[:,iA,iB,iC] .= 1e100
                 continue
             end
         end
