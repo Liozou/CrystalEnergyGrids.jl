@@ -2,14 +2,7 @@
 
 function wrap_atom(point, mat, invmat)
     abc = invmat * (point isa SVector ? point : SVector{3}(point))
-    abc = map(x -> ifelse(-eps() < x < eps(), 0.0, x), abc)
-    # return mat * (abc .- floor.(abc))
-    x, y, z = mat * (abc .- floor.(abc))
-    ε = 1e-14
-    if x > mat[1,1] + ε || y > mat[2,2] + ε || z > mat[3,3] + ε
-        error("Check this assertion")
-    end
-    return SVector{3,Float64}(clamp(x, ε, mat[1,1]-ε), clamp(y, ε, mat[2,2]-ε), clamp(z, ε, mat[3,3]-ε))
+    mat * (abc .- floor.(abc))
 end
 
 function offsetpoint(point, mat, invmat, shift, size, dims)
