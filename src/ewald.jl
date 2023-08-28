@@ -457,6 +457,7 @@ is the reciprocal Ewald sum energy difference between species `k` at positions `
     This function will only return the correct result if either `compute_ewald(ewald)` or
     `compute_ewald(ewald, k)` has been called prior, and no `compute_ewald(ewald, k₂)` with
     `k ≠ k₂` in between.
+    This is necessary to ensure that the Eiks are correctly set.
 """
 function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
     iszero(ewald.ctx.eframework.α) && return 0.0u"K"
@@ -466,7 +467,9 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
         Vector{ComplexF64}(undef, kxp), Vector{ComplexF64}(undef, tkyp), Vector{ComplexF64}(undef, tkzp)
     end
     Eikx, Eiky, Eikz = Eiks
-    resize!(Eikx, kxp); resize!(Eiky, tkyp); resize!(Eikz, tkzp)
+    if !(length(Eikx) == kxp && length(Eiky) == tkyp && length(Eikz) == tkzp)
+        error("single_contribution_ewald is not following the corresponding compute_ewald call!")
+    end
     move_one_system!(ewald.ctx, k, positions, Eiks, -1)
 
     contribution::Vector{ComplexF64} = get!(task_local_storage(), :buffer_vector) do

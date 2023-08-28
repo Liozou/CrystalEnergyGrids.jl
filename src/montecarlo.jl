@@ -207,6 +207,11 @@ Compute the energy contribution of the `j`-th molecule of kind `i` when placed a
 
 The energy difference between the new position for the molecule and the current one is
 `movement_energy(mc, (i,j), positions) - movement_energy(mc, (i,j))`.
+
+!!! warn
+    `baseline_energy(mc)` must have been called at least once before, otherwise the
+    computation of the Ewald part can yield undefined results.
+    See also [`single_contribution_ewald`](@ref).
 """
 function movement_energy(mc::MonteCarloSimulation, idx, positions=mc.positions[idx[1]][idx[2]])
     i, j = idx
