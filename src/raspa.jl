@@ -312,7 +312,7 @@ end
 
 
 function grid_locations(framework, forcefield_framework, atoms, gridstep, supercell)
-    framework isa AbstractMatrix && return "", ["" for _ in 1:length(atoms)]
+    framework isa AbstractMatrix && return "", String[]
     raspa::String = getdir_RASPA()
     rootdir = joinpath(raspa, "grids", forcefield_framework, framework)
     gridstep_name::String = @sprintf "%.6f" gridstep

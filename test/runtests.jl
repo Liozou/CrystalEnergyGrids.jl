@@ -144,6 +144,15 @@ end
     CEG.baseline_energy(mcArCIT7); movArCIT7 = CEG.movement_energy(mcArCIT7, (1,1))
     CEG.baseline_energy(mcVoidArCIT7); movVoidArCIT7 = CEG.movement_energy(mcVoidArCIT7, (1,1))
     @test Float64(movArCIT7) ≈ Float64(movVoidArCIT7) rtol=0.005
+
+    molAr1 = CEG.ChangePositionSystem(ar, [SVector{3}([-7.7365250811304911,31.5070011601372251,1.5285305931479920]u"Å")]);
+    molAr2 = CEG.ChangePositionSystem(ar, [SVector{3}([10.7586599791867421,-2.3259182727570948,20.5642722996513001]u"Å")]);
+    mcAr2, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molAr1, molAr2]);
+    baseAr2 = Float64(CEG.baseline_energy(mcAr2))
+    movAr2_1 = Float64(CEG.movement_energy(mcAr2, (1,1)))
+    CEG.baseline_energy(mcAr2); movAr2_2 = Float64(CEG.movement_energy(mcAr2, (1,2)))
+    @test baseAr2 ≈ -1789.77383582 rtol=0.001
+    @test baseAr2 - movAr2_1 - movAr2_2 ≈ 0.28797384 rtol=0.001
 end
 
 rm(GRIDDIR; recursive=true)

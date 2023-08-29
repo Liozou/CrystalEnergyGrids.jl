@@ -16,12 +16,6 @@ function inverse_abc_offsetpoint(ipoint, invmat, shift, size, dims)
 end
 
 function perpendicular_lengths(a, b, c)
-    # ax = norm(a)
-    # ay = norm(b)
-    # az = norm(c)
-    # bx = (b[1]*c[1] + b[2]*c[2] + b[3]*c[3])/(ay*az)
-    # by = (a[1]*c[1] + a[2]*c[2] + a[3]*c[3])/(ax*az)
-    # bz = (a[1]*b[1] + a[2]*b[2] + a[3]*b[3])/(ax*ay)
     axb1 = a[2]*b[3] - a[3]*b[2]
     axb2 = a[3]*b[1] - a[1]*b[3]
     axb3 = a[1]*b[2] - a[2]*b[1]
@@ -38,8 +32,9 @@ function perpendicular_lengths(a, b, c)
     cx = volume/norm(bxc)
     cy = volume/norm(cxa)
     cz = volume/norm(axb)
-    return SVector{3}((cx, cy, cz))
+    SVector{3}((cx, cy, cz))
 end
+perpendicular_lengths(mat) = perpendicular_lengths(@view(mat[:,1]), @view(mat[:,2]), @view(mat[:,3]))
 
 """
     find_supercell(mat::AbstractMatrix, cutoff)
@@ -211,6 +206,29 @@ function periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
     end
     return ref
 end
+
+struct CellMatrix
+    mat::SMatrix{3,3,typeof(1.0u"Å"),9}
+    invmat::SMatrix{3,3,typeof(1.0u"Å^-1"),9}
+end
+CellMatrix(mat::AbstractMatrix{typeof(1.0u"Å")}) = CellMatrix(mat, inv(ustrip.(mat))*u"Å^-1")
+CellMatrix(mat::AbstractMatrix{Float64}) = CellMatrix(mat*u"Å")
+function CellMatrix(mat::AbstractMatrix{Float64}, invmat::AbstractMatrix{Float64})
+    CellMatrix(mat*u"Å", invmat*u"Å^-1")
+end
+CellMatrix() = CellMatrix(SMatrix{3,3}([Inf 0.0 0.0; 0.0 Inf 0.0; 0.0 0.0 Inf]u"Å"))
+
+function unsafe_periodic_distance2!(buffer, buffer2, cell::CellMatrix)
+    mul!(buffer2, cell.invmat, buffer)
+    @simd for i in 1:3
+        diff = buffer2[i] + 0.5
+        buffer2[i] = diff - floor(diff) - 0.5
+    end
+    mul!(buffer, cell.mat, buffer2)
+    norm2(buffer)
+end
+
+
 
 # Root mean-square deviation i.e. √[(∑(xᵢ-yᵢ)²)/n]
 function rmsd(a::AbstractVector{T}, b::AbstractVector{T}) where T

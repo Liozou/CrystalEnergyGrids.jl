@@ -1,9 +1,9 @@
 export setup_montecarlo, move_cost
 
-struct MonteCarloSimulation{TFramework}
+struct MonteCarloSimulation
     ff::ForceField
     ewald::IncrementalEwaldContext
-    framework::TFramework
+    cell::CellMatrix
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[i] is the VdW grid for atom i in ff
     offsets::Vector{Int}
@@ -19,11 +19,15 @@ struct MonteCarloSimulation{TFramework}
 end
 
 function SimulationStep(mc::MonteCarloSimulation)
-    SimulationStep(mc.ff, mc.charges, mc.positions, trues(length(mc.idx)), mc.idx)
+    SimulationStep(mc.ff, mc.charges, mc.positions, trues(length(mc.idx)), mc.idx, mc.cell)
 end
 
-function setup_montecarlo(framework::AbstractSystem{3}, systems::Vector{T}, ff::ForceField,
+function setup_montecarlo(cell::CellMatrix, systems::Vector{T}, ff::ForceField,
                           eframework::EwaldFramework, coulomb::EnergyGrid, grids::Vector{EnergyGrid}) where {T<:AbstractSystem{3}}
+    if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
+        error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
+    end
+
     kindsdict = Dict{Vector{Symbol},Int}()
     systemkinds = T[]
     U = Vector{SVector{3,typeof(1.0u"Å")}} # positions of the atoms of a system
@@ -49,7 +53,6 @@ function setup_montecarlo(framework::AbstractSystem{3}, systems::Vector{T}, ff::
         end
     end
 
-
     n = length(poss)
     offsets = Vector{Int}(undef, n)
     offsets[1] = 0
@@ -59,7 +62,7 @@ function setup_montecarlo(framework::AbstractSystem{3}, systems::Vector{T}, ff::
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, systems))
 
-    MonteCarloSimulation(ff, ewald, framework, coulomb, grids, offsets, idx, charges, poss), indices
+    MonteCarloSimulation(ff, ewald, cell, coulomb, grids, offsets, idx, charges, poss), indices
 end
 
 function setup_montecarlo(framework, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
@@ -71,6 +74,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems::Vect
         supercell = find_supercell(syst_framework, 12.0u"Å")
     end
     supercell::NTuple{3,Int}
+    cell = CellMatrix(SMatrix{3,3,typeof(1.0u"Å"),9}(stack(bounding_box(syst_framework).*supercell)))
 
     needcoulomb = false
     encountered_atoms = Set{Symbol}()
@@ -84,6 +88,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems::Vect
     end
     atoms = [(atom, ff.sdict[atom]) for atom in encountered_atoms]
     sort!(atoms; by=last)
+    # atoms is the list of unique atom types encountered in the molecule species
 
     coulomb_grid_path, vdw_grid_paths = grid_locations(framework, forcefield_framework, first.(atoms), gridstep, supercell)
 
@@ -94,12 +99,18 @@ function setup_montecarlo(framework, forcefield_framework::String, systems::Vect
         EnergyGrid(), EwaldFramework(mat)
     end
 
-    grids = Vector{EnergyGrid}(undef, length(ff.sdict))
-    for (j, (atom, i)) in enumerate(atoms)
-        grids[i] = retrieve_or_create_grid(vdw_grid_paths[j], syst_framework, ff, gridstep, atom, mat, new)
+    grids = if isempty(vdw_grid_paths) || isempty(framework)
+        # if framework is empty, signal it by having an empty list of grids
+        EnergyGrid[]
+    else
+        _grids = Vector{EnergyGrid}(undef, length(ff.sdict))
+        for (j, (atom, i)) in enumerate(atoms)
+            _grids[i] = retrieve_or_create_grid(vdw_grid_paths[j], syst_framework, ff, gridstep, atom, mat, new)
+        end
+        _grids
     end
 
-    setup_montecarlo(syst_framework, systems, ff, eframework, coulomb, grids)
+    setup_montecarlo(cell, systems, ff, eframework, coulomb, grids)
 end
 
 function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
@@ -163,7 +174,7 @@ Only return the Van der Waals and the direct part of the Ewald summation. The re
 part can be obtained with [`compute_ewald`](@ref).
 """
 function framework_interactions(mc::MonteCarloSimulation, indices::Vector{Int}, positions)
-    isempty(mc.framework) && return FrameworkEnergyReport()
+    isempty(mc.grids) && return FrameworkEnergyReport()
     n = length(indices)
     vdw = 0.0u"K"
     direct = 0.0u"K"
@@ -189,7 +200,7 @@ function baseline_energy(mc::MonteCarloSimulation)
     reciprocal = compute_ewald(mc.ewald)
     vdw = compute_vdw(SimulationStep(mc))
     fer = FrameworkEnergyReport()
-    isempty(mc.framework) && return MCEnergyReport(fer, vdw, reciprocal)
+    isempty(mc.grids) && return MCEnergyReport(fer, vdw, reciprocal)
     for (i, indices) in enumerate(mc.idx)
         poss_i = mc.positions[i]
         for poss in poss_i

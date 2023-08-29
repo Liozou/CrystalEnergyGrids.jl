@@ -187,7 +187,7 @@ function compute_average_self_potential(mol::AbstractSystem, ff::ForceField, ran
     T = eltype(rs)
     poss0 = position(mol)
     molposs = [[SVector{3}(r*p) for p in poss0] for r in rots]
-    model = SimulationStep(ff, [mol], [[poss0, copy(poss0)]])
+    model = SimulationStep(ff, [mol], [[poss0, copy(poss0)]], CellMatrix())
     vs = Matrix{Float64}(undef, numrot, n)
     v = dropdims(mean(vs; dims=1); dims=1)
     Base.Threads.@threads for i in 1:n

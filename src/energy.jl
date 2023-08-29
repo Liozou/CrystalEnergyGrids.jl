@@ -24,15 +24,17 @@ struct SimulationStep{N}
     idx::Vector{Vector{Int}}
     # idx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
     # in the force field for the k-th atom in a system of kind i
+    cell::CellMatrix
 end
 
 """
     SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
                    positions::Vector{Vector{Vector{SVector{N,typeof(1.0u"Å")}}}} where N,
+                   cell::CellMatrix,
                    isrigid::BitVector=trues(length(systemkinds)))
 
-Create a `SimulationStep` from a force field `ff`, a list of system kinds, and the
-positions of all atoms for all systems.
+Create a `SimulationStep` from a force field `ff`, a list of system kinds, the cell matrix
+and the positions of all atoms for all systems.
 
 `systemkinds[i]` is a system that represents all systems of kind `i`. This means that all
 its properties are shared with other systems of kind `i`, except the positions of its atoms.
@@ -51,15 +53,16 @@ without having to specify the system kinds.
 """
 function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
                         positions::Vector{Vector{Vector{SVector{N,typeof(1.0u"Å")}}}} where N,
+                        cell::CellMatrix,
                         isrigid::BitVector=trues(length(systemkinds)))
     @assert length(systemkinds) == length(positions) == length(isrigid)
     idx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
     charges = [[uconvert(u"e_au", s[k,:atomic_charge])::typeof(1.0u"e_au") for k in 1:length(s)] for s in systemkinds]
-    SimulationStep(ff, charges, positions, isrigid, idx)
+    SimulationStep(ff, charges, positions, isrigid, idx, cell)
 end
 
 """
-    make_step(ff::ForceField, systems::Vector{T}, isrigid::BitVector=trues(length(systems))) where T<:AbstractSystem
+    make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatrix(), isrigid::BitVector=trues(length(systems))) where T<:AbstractSystem
 
 Create a [`SimulationStep`](@ref) from a given force field `ff` and a list of interacting
 `systems`. `isrigid[i]` specifies whether `systems[i]` is considered rigid. If unspecified,
@@ -70,8 +73,10 @@ the index of `systems[i]` in `step`, for use with [`update_position`](@ref) and 
 
 Systems sharing the same ordered list of atom symbols and the same rigidity will be
 considered as having the same system kind (e.g. several molecules of water).
+
+If unspecified, `cell` is set to an open (i.e. aperiodic) box.
 """
-function make_step(ff::ForceField, systems::Vector{T}, isrigid::BitVector=trues(length(systems))) where T<:AbstractSystem
+function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatrix(), isrigid::BitVector=trues(length(systems))) where T<:AbstractSystem
     length(isrigid) > length(systems) && error("Less systems provided than `isrigid` specifications")
     if length(isrigid) < length(systems)
         @info "All systems beyond the $(length(isrigid)) first ones are implicitly considered rigid."
@@ -94,7 +99,7 @@ function make_step(ff::ForceField, systems::Vector{T}, isrigid::BitVector=trues(
         push!(poss[kind], position(system))
         push!(indices, (kind, length(poss[kind])))
     end
-    SimulationStep(ff, systemkinds, poss, newisrigid), indices
+    SimulationStep(ff, systemkinds, poss, newisrigid, cell), indices
 end
 
 """
@@ -135,7 +140,7 @@ function update_position(step::SimulationStep, (i,j), args...)
     newpositions = copy(step.positions)
     newpositions[i] = copy(step.positions[i])
     length(args) == 2 && (newpositions[i][j] = copy(newpositions[i][j]))
-    x = SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.idx)
+    x = SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.idx, step.cell)
     update_position!(x, (i,j), args...)
     x
 end
@@ -160,7 +165,7 @@ function unalias_position(step, (i,j))
     newpositions = copy(step.positions)
     newpositions[i] = copy(step.positions[i])
     newpositions[i][j] = copy(newpositions[i][j])
-    SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.idx)
+    SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.idx, step.cell)
 end
 
 function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,typeof(1.0u"Å")}}) where N
@@ -174,10 +179,9 @@ function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,
         for k2 in (i+1):n
             ix2 = indices[k2]
             r2 = norm2(positions[k1], positions[k2])
-            if r2 < cutoff2
-                rule = step.ff[ix1, ix2]
-                energy += rule(r2) + tailcorrection(rule, step.ff.cutoff)
-            end
+            r2 > cutoff2 && error("Flexible molecule cannot be larger than the cutoff")
+            rule = step.ff[ix1, ix2]
+            energy += rule(r2) + tailcorrection(rule, step.ff.cutoff)
         end
     end
     energy
@@ -211,6 +215,8 @@ function compute_vdw(step::SimulationStep)
     energy = 0.0u"K"
     nkinds = length(step.idx)
     cutoff2 = step.ff.cutoff^2
+    buffer = MVector{3,typeof(1.0u"Å")}(undef)
+    buffer2 = MVector{3,Float64}(undef)
     for i1 in 1:nkinds
         poskind1 = step.positions[i1]
         idx1 = step.idx[i1]
@@ -223,7 +229,8 @@ function compute_vdw(step::SimulationStep)
                 for j2 in (j1*(i1==i2)+1):length(poskind2)
                     pos2 = poskind2[j2]
                     for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
-                        d2 = norm2(p1, p2)
+                        buffer .= p2 .- p1
+                        d2 = unsafe_periodic_distance2!(buffer, buffer2, step.cell)
                         if d2 < cutoff2
                             energy += step.ff[idx1[k1], idx2[k2]](d2)
                         end
@@ -239,6 +246,8 @@ function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, 
     energy = step.isrigid[i1] ? 0.0u"K" : energy_intra(step, i1, positions)
     nkinds = length(step.idx)
     cutoff2 = step.ff.cutoff^2
+    buffer = MVector{3,typeof(1.0u"Å")}(undef)
+    buffer2 = MVector{3,Float64}(undef)
     idx1 = step.idx[i1]
     for i2 in 1:nkinds
         poskind2 = step.positions[i2]
@@ -247,7 +256,8 @@ function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, 
             i1 == i2 && j1 == j2 && continue
             pos2 = poskind2[j2]
             for (k1, p1) in enumerate(positions), (k2, p2) in enumerate(pos2)
-                d2 = norm2(p1, p2)
+                buffer .= p2 .- p1
+                d2 = unsafe_periodic_distance2!(buffer, buffer2, step.cell)
                 if d2 < cutoff2
                     energy += step.ff[idx1[k1], idx2[k2]](d2)
                 end
