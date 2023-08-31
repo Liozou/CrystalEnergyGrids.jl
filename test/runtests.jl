@@ -168,6 +168,13 @@ end
     @test baseMini ≈ Float64(CEG.baseline_energy(mcNaMiniRef))
     @test baseMini ≈ -248304.58180794 rtol=0.001
 
+    molNaPetit = CEG.ChangePositionSystem(na, [SVector{3}([18.77838182689036, 14.73031622108175, 3.669308624409278]u"Å")]);
+    mcNaPetit, _ = setup_montecarlo("Petit", "BoulfelfelSholl2021", [molNaPetit]);
+    mcNaPetitRef, _ = setup_montecarlo("PetitRef", "BoulfelfelSholl2021", [molNaPetit]);
+    basePetit = Float64(CEG.baseline_energy(mcNaPetit))
+    @test basePetit ≈ Float64(CEG.baseline_energy(mcNaPetitRef)) rtol=0.0001
+    @test basePetit ≈ 262204.85720076 rtol=0.001
+
     molNaSolo = CEG.ChangePositionSystem(na, [SVector{3}([-5.485237153390736, 18.66002404042065, 24.29891456309461]u"Å")]);
     mcNaSolo, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaSolo]);
     @test mcNaSolo.tailcorrection[] ≈ -70.44772635984882u"K" # account for supercell

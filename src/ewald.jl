@@ -251,13 +251,14 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst
     Eiks = setup_Eik((syst,), kspace.ks, invmat, supercell)
     StoreRigidChargeFramework = Vector{ComplexF64}(undef, num_kvecs)
     Π = prod(supercell)
-    ewald_main_loop!(StoreRigidChargeFramework, (repeat(charges, Π),), kspace, Eiks, 0)
+    repeatedcharges = [c for c in charges for _ in 1:Π]
+    ewald_main_loop!(StoreRigidChargeFramework, repeatedcharges, kspace, Eiks, 0)
     # UChargeChargeFrameworkRigid = 0.0
     # for idx in 1:num_kvecs
     #     UChargeChargeFrameworkRigid += kfactors[idx]*abs2(StoreRigidChargeFramework[idx])
     # end
-    # UChargeChargeFrameworkRigid += UIon*sum(charges)^2
     net_charges_framework = sum(charges)*Π
+    # UChargeChargeFrameworkRigid += UIon*net_charges_framework^2
 
     return EwaldFramework(kspace, α, mat, invmat, kfactors, UIon,
                           StoreRigidChargeFramework, net_charges_framework, precision)
