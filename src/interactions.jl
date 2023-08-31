@@ -369,7 +369,7 @@ function (rule::InteractionRule)(r)
         x6lj = (rule.params[2]/r)^6
         4*rule.params[1]*x6lj*(x6lj - 1)
     elseif rule.kind === FF.CoulombEwaldDirect
-        rule.params[2]*rule.params[3]*erfc(rule.params[1]*r)/r
+        NoUnits(COULOMBIC_CONVERSION_FACTOR*ENERGY_TO_KELVIN/u"K")*rule.params[2]*rule.params[3]*erfc(rule.params[1]*r)/r
     elseif rule.kind === FF.Coulomb
         NoUnits(COULOMBIC_CONVERSION_FACTOR*ENERGY_TO_KELVIN/u"K")*rule.params[1]*rule.params[2]/r
     elseif rule.kind === FF.HardSphere
