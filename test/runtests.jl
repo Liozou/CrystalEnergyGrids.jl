@@ -11,8 +11,7 @@ using Serialization
 # using Aqua
 # Aqua.test_all(CrystalEnergyGrids; ambiguities=false)
 
-const TESTDIR = joinpath(dirname(dirname(pathof(CEG))), "test")
-setdir_RASPA!(joinpath(TESTDIR, "raspa"))
+const TESTDIR = joinpath(dirname(dirname(pathof(CEG))), "test"); setdir_RASPA!(joinpath(TESTDIR, "raspa"))
 
 const GRIDDIR = joinpath(TESTDIR, "savegrids")
 if isdir(GRIDDIR)
@@ -42,12 +41,12 @@ mkdir(GRIDDIR)
     serialize(joinpath(TESTDIR, "savegrids", "Na_CHA_1.4_3b4eeb96"), egridNaCHA)
     vdw, coulomb = energy_point(setupNaCHA, [SVector{3}([0.0, 0.0, 0.0])*u"Å"])
     @test vdw ≈ -11083.13758653269u"K" rtol=0.001
-    @test coulomb ≈ -1.8645348919601506e6u"K" rtol=0.001
+    @test coulomb ≈ -1.8509402225092095e6u"K" rtol=0.001
     @test vdw + coulomb == egridNaCHA[1,1,1]u"K"
 
     minimaNa = sort!(CEG.local_minima(egridNaCHA, 0.0))
     @test minimaNa == [CartesianIndex(29, 60, 60)]
-    @test egridNaCHA[only(minimaNa)] ≈ -1.941489105927073e6 rtol=0.001
+    @test egridNaCHA[only(minimaNa)] ≈ -1.9278944364761321e6 rtol=0.001
     @test egridNaCHA[only(minimaNa)] == minimum(egridNaCHA)
 
     ewald = setupNaCHA.ewald
@@ -84,36 +83,38 @@ end
     pos2 = [SVector{3}([1.0, 3.0, 1.0]u"Å")]
 
     mcAr1, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021",
-                                [co2, CEG.ChangePositionSystem(ar, pos1)])
+                                [co2, CEG.ChangePositionSystem(ar, pos1)]);
     mcAr2, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021",
-                                [co2, CEG.ChangePositionSystem(ar, pos2)])
+                                [co2, CEG.ChangePositionSystem(ar, pos2)]);
     baseAr1 = CEG.baseline_energy(mcAr1)
     baseAr2 = CEG.baseline_energy(mcAr2)
     mov1 = CEG.movement_energy(mcAr1, (2,1))
-    @test baseAr1.reciprocal == baseAr2.reciprocal
-    @test baseAr1.framework.direct == baseAr2.framework.direct
-    @test baseAr1.inter != baseAr2.inter
-    @test baseAr1.framework.vdw != baseAr2.framework.vdw
+    @test baseAr1.er.reciprocal == baseAr2.er.reciprocal
+    @test baseAr1.er.framework.direct == baseAr2.er.framework.direct
+    @test baseAr1.er.inter != baseAr2.er.inter
+    @test baseAr1.er.framework.vdw != baseAr2.er.framework.vdw
     @test mov1.reciprocal == mov1.framework.direct == 0.0u"K"
     @test mov1 == CEG.movement_energy(mcAr1, (2,1), pos1)
     @test Float64(baseAr2) ≈ Float64(baseAr1 - mov1 + CEG.movement_energy(mcAr1, (2,1), pos2))
 
     mcNa1, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021",
-                                [co2, CEG.ChangePositionSystem(na, pos1)])
+                                [co2, CEG.ChangePositionSystem(na, pos1)]);
     mcNa2, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021",
-                                [co2, CEG.ChangePositionSystem(na, pos2)])
-    @test CEG.movement_energy(mcNa1, (2,1)) == CEG.movement_energy(mcNa1, (2,1), pos1)
-    @test Float64(CEG.baseline_energy(mcNa2)) ≈ Float64(CEG.baseline_energy(mcNa1) - CEG.movement_energy(mcNa1, (2,1)) + CEG.movement_energy(mcNa1, (2,1), pos2))
+                                [co2, CEG.ChangePositionSystem(na, pos2)]);
+    baseNa1 = CEG.baseline_energy(mcNa1)
+    movNa1_1 = CEG.movement_energy(mcNa1, (2,1))
+    movNa1_2 = CEG.movement_energy(mcNa1, (2,1), pos2)
+    @test movNa1_1 == CEG.movement_energy(mcNa1, (2,1), pos1)
+    @test Float64(CEG.baseline_energy(mcNa2)) ≈ Float64(baseNa1 - movNa1_1 + movNa1_2)
 end
 
 @testset "Triclinic" begin
     # triclinic input
-    setupArCIT7 = setup_RASPA("CIT-7", "BoulfelfelSholl2021", "Ar", "TraPPE"; blockfile=false);
+    setupArCIT7 = setup_RASPA("CIT7", "BoulfelfelSholl2021", "Ar", "TraPPE"; blockfile=false);
     @test only(setupArCIT7.grids).num_unitcell == (2, 3, 3)
     vdw, coulomb = energy_point(setupArCIT7, [SVector{3}([-6.2437738548095165, 22.4072046579578092, 5.7557837121224642]u"Å")])
     @test iszero(coulomb)
     @test vdw ≈ -1043.35893781u"K" rtol=0.001
-
     cit7 = setupArCIT7.framework
     ΠA, ΠB, ΠC = setupArCIT7.grids[1].num_unitcell
     Π = ΠA*ΠB*ΠC
@@ -136,10 +137,9 @@ end
     _charges = repeat(cit7.atomic_charge, Π)
     superCIT7 = RASPASystem(AtomsBase.bounding_box(setupArCIT7.framework) .* (ΠA, ΠB, ΠC), _positions, _symbols, _numbers, _masses, _charges, false)
     supermat = [axeA .* ΠA;; axeB .* ΠB;; axeC .* ΠC]
-
     ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
     molAr = CEG.ChangePositionSystem(ar, [SVector{3}([5.86207, 16.23616, 17.52779]u"Å")]);
-    mcArCIT7, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molAr]);
+    mcArCIT7, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molAr]);
     mcVoidArCIT7, _ = setup_montecarlo(supermat, "BoulfelfelSholl2021", [molAr, superCIT7]);
     CEG.baseline_energy(mcArCIT7); movArCIT7 = CEG.movement_energy(mcArCIT7, (1,1))
     CEG.baseline_energy(mcVoidArCIT7); movVoidArCIT7 = CEG.movement_energy(mcVoidArCIT7, (1,1))
@@ -147,12 +147,38 @@ end
 
     molAr1 = CEG.ChangePositionSystem(ar, [SVector{3}([-7.7365250811304911,31.5070011601372251,1.5285305931479920]u"Å")]);
     molAr2 = CEG.ChangePositionSystem(ar, [SVector{3}([10.7586599791867421,-2.3259182727570948,20.5642722996513001]u"Å")]);
-    mcAr2, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molAr1, molAr2]);
+    mcAr2, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molAr1, molAr2]);
     baseAr2 = Float64(CEG.baseline_energy(mcAr2))
     movAr2_1 = Float64(CEG.movement_energy(mcAr2, (1,1)))
     CEG.baseline_energy(mcAr2); movAr2_2 = Float64(CEG.movement_energy(mcAr2, (1,2)))
     @test baseAr2 ≈ -1789.77383582 rtol=0.001
     @test baseAr2 - movAr2_1 - movAr2_2 ≈ 0.28797384 rtol=0.001
+
+
+    na = CEG.load_molecule_RASPA("Na", "TraPPE", "BoulfelfelSholl2021");
+    molNaSm1 = CEG.ChangePositionSystem(na, [SVector{3}([4.935357501688667, 23.53557287745349, 25.71480449842175]u"Å")]);
+    mcNaSm1, _ = setup_montecarlo("SuperCIT7m1", "BoulfelfelSholl2021", [molNaSm1]);
+    @test Float64(CEG.baseline_energy(mcNaSm1)) ≈ -8996.975999017683 rtol=0.001
+
+    molNaSolo = CEG.ChangePositionSystem(na, [SVector{3}([-5.485237153390736, 18.66002404042065, 24.29891456309461]u"Å")]);
+    mcNaSolo, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaSolo]);
+    @test mcNaSolo.tailcorrection[] ≈ -70.44772635984882u"K" # account for supercell
+
+
+    # molNa1 = CEG.ChangePositionSystem(na, [SVector{3}([0.9813979229493714, 10.43406962195019, 23.05994195152032]u"Å")]);
+    # molNa2 = CEG.ChangePositionSystem(na, [SVector{3}([1.369507482331668, 19.16986027450343, 7.145326794850396]u"Å")]);
+    # mcNa2NoVDW, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNa1, molNa2]);
+
+    # co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
+    # molNa0 = CEG.ChangePositionSystem(na, [SVector{3}([-6.901, 14.575, 22.728]u"Å")]);
+    # molCO21 = CEG.ChangePositionSystem(co2, [SVector{3}([-7.464, 8.180, 20.644]u"Å"),
+    #                                          SVector{3}([-8.467, 8.482, 21.117]u"Å"),
+    #                                          SVector{3}([-9.469, 8.784, 21.589]u"Å"),]);
+    # molCO22 = CEG.ChangePositionSystem(co2, [SVector{3}([12.666, 18.725, 24.722]u"Å"),
+    #                                          SVector{3}([12.058, 17.758, 24.847]u"Å"),
+    #                                          SVector{3}([11.450, 16.792, 24.972]u"Å"),]);
+    # mcNaCO2, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNa0, molCO21, molCO22]);
+
 end
 
 rm(GRIDDIR; recursive=true)

@@ -419,7 +419,7 @@ function tailcorrection(rule::InteractionRule, cutoff)
         (4/3)*ε*σ^3*(xlj9/3 - xlj3)
     elseif rule.kind === FF.Buckingham
         A, B, C = rule.params
-        A*exp(-B*cut)*((2.0 + B*cut*(2.0 + B*cut))/B^3 - C/(3*cut^3))
+        A*exp(-B*cut)*(2.0 + B*cut*(2.0 + B*cut))/B^3 - C/(3*cut^3)
     elseif rule.kind === FF.Coulomb
         error("Coulomb direct pair interaction cannot have a tail correction: use Ewald summation.")
     elseif rule.kind === FF.UndefinedInteraction

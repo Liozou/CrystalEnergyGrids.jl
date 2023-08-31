@@ -76,7 +76,8 @@ considered as having the same system kind (e.g. several molecules of water).
 
 If unspecified, `cell` is set to an open (i.e. aperiodic) box.
 """
-function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatrix(), isrigid::BitVector=trues(length(systems))) where T<:AbstractSystem
+function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatrix(),
+                   isrigid::BitVector=trues(length(systems))) where T<:AbstractSystem
     length(isrigid) > length(systems) && error("Less systems provided than `isrigid` specifications")
     if length(isrigid) < length(systems)
         @info "All systems beyond the $(length(isrigid)) first ones are implicitly considered rigid."
@@ -99,7 +100,7 @@ function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatr
         push!(poss[kind], position(system))
         push!(indices, (kind, length(poss[kind])))
     end
-    SimulationStep(ff, systemkinds, poss, newisrigid, cell), indices
+    SimulationStep(ff, systemkinds, poss, cell, newisrigid), indices
 end
 
 """
@@ -181,7 +182,7 @@ function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,
             r2 = norm2(positions[k1], positions[k2])
             r2 > cutoff2 && error("Flexible molecule cannot be larger than the cutoff")
             rule = step.ff[ix1, ix2]
-            energy += rule(r2) + tailcorrection(rule, step.ff.cutoff)
+            energy += rule(r2)# + tailcorrection(rule, step.ff.cutoff)
         end
     end
     energy

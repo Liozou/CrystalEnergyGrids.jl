@@ -15,7 +15,7 @@ struct EnergyGrid
     Δ::NTuple{3,Cdouble}
     unitcell::NTuple{3,Cdouble}
     num_unitcell::NTuple{3,Cint}
-    ε_Ewald::Cfloat # Inf for VdW grid, -Inf for empty grid
+    ewald_precision::Cfloat # Inf for VdW grid, -Inf for empty grid
     mat::SMatrix{3,3,Float64,9}
     invmat::SMatrix{3,3,Float64,9}
     higherorder::Bool # true if grid contains derivatives, false if only raw values
@@ -25,11 +25,11 @@ function EnergyGrid()
     EnergyGrid(0.0, (0,0,0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0,0,0), -Inf, zero(SMatrix{3,3,Float64,9}), zero(SMatrix{3,3,Float64,9}), false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
 end
 function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
-    if rg.ε_Ewald == -Inf
+    if rg.ewald_precision == -Inf
         print("Empty grid")
         return
     end
-    print(io, rg.ε_Ewald == Inf ? "VdW" : "Coulomb", " grid with ")
+    print(io, rg.ewald_precision == Inf ? "VdW" : "Coulomb", " grid with ")
     join(io, rg.dims .+ 1, '×')
     print(io, " points for a ")
     if rg.num_unitcell != (1,1,1)
@@ -69,7 +69,7 @@ function parse_grid(file, iscoulomb, mat=nothing)
         # @printf "SizeGrid: %g %g %g\n" size[1] size[2] size[3]
         # @printf "Number of grid points: %d %d %d\n" dims[1] dims[2] dims[3]
 
-        ε_Ewald = iscoulomb ? read(io, Cdouble) : Inf
+        ewald_precision = iscoulomb ? read(io, Cdouble) : Inf
         grid = Array{Cfloat, 4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
         read!(io, grid)
         grid .*= NoUnits(ENERGY_TO_KELVIN/u"K")
@@ -84,7 +84,7 @@ function parse_grid(file, iscoulomb, mat=nothing)
             seek(io, pos)
             read(io, SMatrix{3,3,Float64,9})
         end
-        EnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ε_Ewald, newmat, inv(newmat), true, grid)
+        EnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ewald_precision, newmat, inv(newmat), true, grid)
     end
 end
 
@@ -168,7 +168,7 @@ function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::For
         end
     end
     open(file, "a") do f
-        write(f, ewald.ε)
+        write(f, ewald.precision)
         write(f, grid)
         write(f, mat) # not part of RASPA grids
     end
@@ -264,7 +264,7 @@ and `coulomb` is the electrostatic ones, both in K.
 function energy_point(setup::CrystalEnergySetup, positions)
     num_atoms = length(setup.atomsidx)
     vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], positions[i]) for i in 1:num_atoms)
-    setup.coulomb.ε_Ewald == -Inf && return vdw, 0.0u"K"
+    setup.coulomb.ewald_precision == -Inf && return vdw, 0.0u"K"
     coulomb_direct = sum((Float64(setup.molecule[i,:atomic_charge]/u"e_au"))*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
     newmolecule = ChangePositionSystem(setup.molecule, positions)
     coulomb_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
@@ -292,7 +292,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     stepA = (axeA / norm(axeA)) * step
     stepB = (axeB / norm(axeB)) * step
     stepC = (axeC / norm(axeC)) * step
-    gr0 = setup.coulomb.ε_Ewald == -Inf ? setup.grids[1] : setup.coulomb
+    gr0 = setup.coulomb.ewald_precision == -Inf ? setup.grids[1] : setup.coulomb
     mat = gr0.mat
     invmat = gr0.invmat
     __pos = position(setup.molecule) / u"Å"

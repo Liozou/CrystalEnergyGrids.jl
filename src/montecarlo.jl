@@ -4,6 +4,7 @@ struct MonteCarloSimulation
     ff::ForceField
     ewald::IncrementalEwaldContext
     cell::CellMatrix
+    tailcorrection::Base.RefValue{typeof(1.0u"K")}
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[i] is the VdW grid for atom i in ff
     offsets::Vector{Int}
@@ -23,7 +24,8 @@ function SimulationStep(mc::MonteCarloSimulation)
 end
 
 function setup_montecarlo(cell::CellMatrix, systems::Vector{T}, ff::ForceField,
-                          eframework::EwaldFramework, coulomb::EnergyGrid, grids::Vector{EnergyGrid}) where {T<:AbstractSystem{3}}
+                          eframework::EwaldFramework, coulomb::EnergyGrid,
+                          grids::Vector{EnergyGrid}, num_framework_atoms::Vector{Int}) where {T<:AbstractSystem{3}}
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
@@ -53,6 +55,23 @@ function setup_montecarlo(cell::CellMatrix, systems::Vector{T}, ff::ForceField,
         end
     end
 
+    num_atoms = copy(num_framework_atoms)
+    for (i, indices) in enumerate(idx)
+        mult = length(poss[i])
+        for id in indices
+            num_atoms[id] += mult
+        end
+    end
+    tcorrection = 0.0u"K"
+    for (i, ni) in enumerate(num_atoms)
+        ni == 0 && continue
+        for (j, nj) in enumerate(num_atoms)
+            nj == 0 && continue
+            tcorrection += ni*nj*tailcorrection(ff[i,j], ff.cutoff)
+        end
+    end
+    tcorrection *= 2π/det(ustrip.(cell.mat))
+
     n = length(poss)
     offsets = Vector{Int}(undef, n)
     offsets[1] = 0
@@ -62,7 +81,7 @@ function setup_montecarlo(cell::CellMatrix, systems::Vector{T}, ff::ForceField,
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, systems))
 
-    MonteCarloSimulation(ff, ewald, cell, coulomb, grids, offsets, idx, charges, poss), indices
+    MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets, idx, charges, poss), indices
 end
 
 function setup_montecarlo(framework, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
@@ -110,7 +129,13 @@ function setup_montecarlo(framework, forcefield_framework::String, systems::Vect
         _grids
     end
 
-    setup_montecarlo(cell, systems, ff, eframework, coulomb, grids)
+    num_framework_atoms = zeros(Int, length(ff.sdict))
+    Π = prod(supercell)
+    for at in syst_framework
+        num_framework_atoms[ff.sdict[Symbol(get_atom_name(atomic_symbol(at)))]] += Π
+    end
+
+    setup_montecarlo(cell, systems, ff, eframework, coulomb, grids, num_framework_atoms)
 end
 
 function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
@@ -150,7 +175,17 @@ struct MCEnergyReport
 end
 Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
 function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
-    println(io, Float64(e), " = ", e.framework.vdw, " + ", e.framework.direct, " + ", e.inter, " + ", e.reciprocal)
+    println(io, Float64(e), " = [", e.framework.vdw, " (f VdW) + ", e.framework.direct, " (f direct)] + [", e.inter, " (internal) + ", e.reciprocal, " (reciprocal)]")
+end
+
+struct BaselineEnergyReport
+    er::MCEnergyReport
+    tailcorrection::typeof(1.0u"K")
+end
+BaselineEnergyReport(f, i, r, t) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
+Base.Float64(ber::BaselineEnergyReport) = Float64(ber.er) + Float64(ber.tailcorrection/u"K")
+function Base.show(io::IO, ::MIME"text/plain", b::BaselineEnergyReport)
+    println(io, Float64(b), " = [", b.er.framework.vdw, " (f VdW) + ", b.er.framework.direct, " (f direct)] + [", b.er.inter, " (internal) + ", b.er.reciprocal, " (reciprocal)] + ", b.tailcorrection, " (tailcorrection)")
 end
 
 for op in (:+, :-)
@@ -160,6 +195,9 @@ for op in (:+, :-)
         end
         function Base.$(op)(e1::MCEnergyReport, e2::MCEnergyReport)
             MCEnergyReport($op(e1.framework, e2.framework), $op(e1.inter, e2.inter), $op(e1.reciprocal, e2.reciprocal))
+        end
+        function Base.$(op)(b1::BaselineEnergyReport, e2::MCEnergyReport)
+            BaselineEnergyReport($op(b1.er, e2), b1.tailcorrection)
         end
     end
 end
@@ -178,7 +216,7 @@ function framework_interactions(mc::MonteCarloSimulation, indices::Vector{Int}, 
     n = length(indices)
     vdw = 0.0u"K"
     direct = 0.0u"K"
-    hascoulomb = mc.coulomb.ε_Ewald != -Inf
+    hascoulomb = mc.coulomb.ewald_precision != -Inf
     for k in 1:n
         ix = indices[k]
         pos = positions[k]
@@ -200,14 +238,14 @@ function baseline_energy(mc::MonteCarloSimulation)
     reciprocal = compute_ewald(mc.ewald)
     vdw = compute_vdw(SimulationStep(mc))
     fer = FrameworkEnergyReport()
-    isempty(mc.grids) && return MCEnergyReport(fer, vdw, reciprocal)
+    isempty(mc.grids) && return BaselineEnergyReport(fer, vdw, reciprocal, mc.tailcorrection[])
     for (i, indices) in enumerate(mc.idx)
         poss_i = mc.positions[i]
         for poss in poss_i
             fer += framework_interactions(mc, indices, poss)
         end
     end
-    return MCEnergyReport(fer, vdw, reciprocal)
+    return BaselineEnergyReport(fer, vdw, reciprocal, mc.tailcorrection[])
 end
 
 """
@@ -221,7 +259,7 @@ The energy difference between the new position for the molecule and the current 
 
 !!! warn
     `baseline_energy(mc)` must have been called at least once before, otherwise the
-    computation of the Ewald part can yield undefined results.
+    computation of the Ewald part will error.
     See also [`single_contribution_ewald`](@ref).
 """
 function movement_energy(mc::MonteCarloSimulation, idx, positions=mc.positions[idx[1]][idx[2]])
