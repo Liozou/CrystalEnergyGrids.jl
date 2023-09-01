@@ -257,7 +257,7 @@ framework. `positions` is a list of triplet of coordinates (with their unit).
 Return a pair `(vdw, coulomb)` where `vdw` is the Van der Waals contribution to the energy
 and `coulomb` is the electrostatic ones, both in K.
 
-!!! warn
+!!! warning
     No validation is used to ensure that the input `positions` are consistent with the
     shape of the molecule.
 """

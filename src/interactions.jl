@@ -103,7 +103,7 @@ module FF
     - `A` in K⋅Åⁿ
     - `n` (no unit)
 
-    !!! warn
+    !!! warning
         Check that you are not constructing an interaction rule which is already provided
         like [`LennardJones`](@ref) or [`Buckingham`](@ref) to ensure appropriate mixing
         rules behaviour.
@@ -120,7 +120,7 @@ module FF
     - `A` in K
     - `B` in Å⁻¹
 
-    !!! warn
+    !!! warning
         Check that you are not constructing an interaction rule which is already provided
         like [`Buckingham`](@ref) to ensure appropriate mixing rules behaviour.
     """
