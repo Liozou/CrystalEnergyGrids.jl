@@ -145,29 +145,30 @@ function ewald_main_loop!(sums::T, allcharges, kspace::EwaldKspace, Eiks, skipco
 
     counter = 0
 
-    @inbounds for (idxsystem, charges) in enumerate(allcharges), c in charges
-        ix += kxp
-        iy += tkyp
-        iz += tkzp
+    @inbounds for (idxsystem, charges) in enumerate(allcharges)
         counter += 1
         counter == skipcontribution && continue
-        # if !iszero(c) # TODO: remove zero charges when constructing EwaldContext
-            for (jy, jz, jxrange, rangeidx) in kspace.kindices
-                Eik_xy = c*Eiky[iy+jy]*Eikz[iz+jz]
-                n = length(jxrange)
-                ofs = first(jxrange) + ix
-                if T === Vector{ComplexF64}
-                    @simd for I in 1:n
-                        Eikr = Eikx[ofs+I]*Eik_xy
-                        sums[rangeidx+I] += Eikr
-                    end
-                else
-                    @simd for I in 1:n
-                        sums[rangeidx+I,idxsystem] += Eikx[ofs+I]*Eik_xy
+        for c in charges
+            ix += kxp
+            iy += tkyp
+            iz += tkzp
+            # if !iszero(c) # TODO: remove zero charges when constructing EwaldContext
+                for (jy, jz, jxrange, rangeidx) in kspace.kindices
+                    Eik_xy = c*Eiky[iy+jy]*Eikz[iz+jz]
+                    n = length(jxrange)
+                    ofs = first(jxrange) + ix
+                    if T === Vector{ComplexF64}
+                        @simd for I in 1:n
+                            sums[rangeidx+I] += Eikx[ofs+I]*Eik_xy
+                        end
+                    else
+                        @simd for I in 1:n
+                            sums[rangeidx+I,idxsystem] += Eikx[ofs+I]*Eik_xy
+                        end
                     end
                 end
-            end
-        # end
+            # end
+        end
     end
     nothing
 end
@@ -373,8 +374,8 @@ end
 Compute the Fourier contribution to the Coulomb part of the interaction energy between
 a framework and a set of rigid molecules.
 
-If `skipcontribution` is set to `i`, the contribution of the `i`-th charge is not taken
-into account.
+If `skipcontribution` is set to `k`, the contributions of the charges of the `k`-th species
+are not taken into account.
 """
 function compute_ewald(ctx::EwaldContext, skipcontribution=0)
     iszero(ctx.eframework.α) && return 0.0u"K"
@@ -429,7 +430,7 @@ end
 
 See [`compute_ewald(ctx::EwaldContext)`](@ref).
 
-!!! warn
+!!! warning
     When used with an `IncrementalEwaldContext`, `compute_ewald` modifies a hidden state of
     its input. This means that it cannot be called from multiple threads in parallel on the
     same input.
@@ -470,11 +471,15 @@ is the reciprocal Ewald sum energy difference between species `k` at positions `
 If `positions == nothing`, use the position for the species currently stored in `ewald`
 (note that this particular computation is substantially faster).
 
-!!! warn
+!!! info
     This function can only be called if `compute_ewald(ewald)` has been called prior.
     Otherwise it will error.
-
     This is necessary to ensure that the `ewald.sums` are correctly set.
+
+!!! warning
+    This function is not thread-safe if `positions !== nothing`. This means that it must
+    not be called from multiple threads in parallel on the same `ewald` with
+    `positions !== nothing`.
 """
 function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
     iszero(ewald.ctx.eframework.α) && return 0.0u"K"
@@ -485,8 +490,10 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
         kx, ky, kz = ewald.ctx.eframework.kspace.ks
         kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
         Eiks = ewald.tmpEiks
-        move_one_system!(Eiks, ewald.ctx, positions, -1) # this only modifies Eiks, not ewald
         Eikx, Eiky, Eikz = Eiks
+        m = length(positions)
+        resize!(Eikx, m*kxp); resize!(Eiky, m*tkyp); resize!(Eikz, m*tkzp)
+        move_one_system!(Eiks, ewald.ctx, positions, -1) # this only modifies Eiks, not ewald
         contribution = ewald.tmpsums
         contribution .= zero(ComplexF64)
         charges = ewald.ctx.allcharges[k]
@@ -507,18 +514,15 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
             iy += tkyp
             iz += tkzp
         end
-        ewald.last[] = k
+        ewald.last[] = k # signal for update_ewald_context!
     end
 
     rest_single = 0.0
     single_single = 0.0
     n = length(ewald.ctx.allcharges)
-    for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
+    @inbounds for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
         rest = ewald.ctx.eframework.StoreRigidChargeFramework[idxkvec]
-        for idxcharge in 1:n
-            idxcharge == k && continue
-            rest += ewald.sums[idxkvec,idxcharge]
-        end
+        rest += sum(@view ewald.sums[idxkvec,:]; init=zero(ComplexF64)) - ewald.sums[idxkvec,k]
         _re_f, _im_f = reim(rest)
         _re_a, _im_a = reim(contribution[idxkvec])
         temp = ewald.ctx.eframework.kfactors[idxkvec]
@@ -527,4 +531,25 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
     end
 
     (2*rest_single + single_single)*ENERGY_TO_KELVIN
+end
+
+"""
+    update_ewald_context!(ewald::IncrementalEwaldContext)
+
+Following a call to [`single_contribution_ewald(ewald, k, positions)`](@ref), update the
+internal state of `ewald` so that the species `k` is now at the given `positions`.
+
+Note that this modifies the underlying [`EwaldContext`](@ref) `ewald.ctx`.
+"""
+function update_ewald_context!(ewald::IncrementalEwaldContext)
+    k = ewald.last[]
+    ewald.sums[:,k] = ewald.tmpsums
+    Eikx, Eiky, Eikz = ewald.ctx.Eiks
+    newEikx, newEiky, newEikz = ewald.tmpEiks
+    kx, ky, kz = ewald.ctx.eframework.kspace.ks
+    copyto!(Eikx, 1 + (k-1)*(kx+1), newEikx, 1, length(newEikx))
+    copyto!(Eiky, 1 + (k-1)*(ky+ky+1), newEiky, 1, length(newEiky))
+    copyto!(Eikz, 1 + (k-1)*(kz+kz+1), newEikz, 1, length(newEikz))
+    ewald.last[] = 0
+    nothing
 end
