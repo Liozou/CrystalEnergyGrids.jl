@@ -17,10 +17,15 @@ struct MonteCarloSimulation
     # k-th atom in a system of kind i is charges[idx[i][k]].
     positions::Vector{Vector{Vector{SVector{3,typeof(1.0u"Å")}}}}
     # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
+    isrigid::BitVector # always set to true
+    blocks::Vector{Tuple{BitArray{3},typeof(1.0u"Å")}}
+    # blocks[i][1][x,y,z] is set if (x,y,z) is blocked for any atom of a species of kind i.
+    # The block has a step size of blocks[i][2]
+    bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i
 end
 
 function SimulationStep(mc::MonteCarloSimulation)
-    SimulationStep(mc.ff, mc.charges, mc.positions, trues(length(mc.idx)), mc.idx, mc.cell)
+    SimulationStep(mc.ff, mc.charges, mc.positions, mc.isrigid, mc.idx, mc.cell)
 end
 
 function setup_montecarlo(cell::CellMatrix, systems::Vector{T}, ff::ForceField,
@@ -79,9 +84,32 @@ function setup_montecarlo(cell::CellMatrix, systems::Vector{T}, ff::ForceField,
         offsets[i+1] = offsets[i] + length(poss[i])
     end
 
+    buffer = MVector{3,typeof(1.0u"Å")}(undef)
+    buffer2 = MVector{3,Float64}(undef)
+    bead = Vector{Int}(undef, n)
+    for i in 1:n
+        possi = poss[i][1]
+        refpos = possi[1]
+        meanpos = refpos + mean(pos - refpos for pos in possi)
+        mind2 = Inf*u"Å^2"
+        thisbead = 0
+        for (k, pos) in enumerate(possi)
+            buffer .= pos .- meanpos
+            d2 = unsafe_periodic_distance2!(buffer, buffer2, cell)
+            if d2 < mind2
+                mind2 = d2
+                thisbead = k
+            end
+        end
+        bead[i] = thisbead
+    end
+
     ewald = IncrementalEwaldContext(EwaldContext(eframework, systems))
 
-    MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets, idx, charges, poss), indices
+    blocks = Tuple{BitArray{3},typeof(1.0u"Å")}[]
+
+    MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets, idx,
+                         charges, poss, trues(length(idx)), blocks, bead), indices
 end
 
 function setup_montecarlo(framework, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
@@ -174,6 +202,7 @@ struct MCEnergyReport
     reciprocal::typeof(1.0u"K")
 end
 Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
+Base.show(io::IO, e::MCEnergyReport) = show(io, Float64(e)*u"K")
 function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
     println(io, Float64(e), " = [", e.framework.vdw, " (f VdW) + ", e.framework.direct, " (f direct)] + [", e.inter, " (internal) + ", e.reciprocal, " (reciprocal)]")
 end
@@ -184,6 +213,7 @@ struct BaselineEnergyReport
 end
 BaselineEnergyReport(f, i, r, t) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
 Base.Float64(ber::BaselineEnergyReport) = Float64(ber.er) + Float64(ber.tailcorrection/u"K")
+Base.show(io::IO, ber::BaselineEnergyReport) = show(io, Float64(ber)*u"K")
 function Base.show(io::IO, ::MIME"text/plain", b::BaselineEnergyReport)
     println(io, Float64(b), " = [", b.er.framework.vdw, " (f VdW) + ", b.er.framework.direct, " (f direct)] + [", b.er.inter, " (internal) + ", b.er.reciprocal, " (reciprocal)] + ", b.tailcorrection, " (tailcorrection)")
 end
@@ -257,7 +287,7 @@ Compute the energy contribution of the `j`-th molecule of kind `i` when placed a
 The energy difference between the new position for the molecule and the current one is
 `movement_energy(mc, (i,j), positions) - movement_energy(mc, (i,j))`.
 
-!!! warn
+!!! warning
     `baseline_energy(mc)` must have been called at least once before, otherwise the
     computation of the Ewald part will error.
     See also [`single_contribution_ewald`](@ref).
@@ -265,9 +295,104 @@ The energy difference between the new position for the molecule and the current 
 function movement_energy(mc::MonteCarloSimulation, idx, positions=nothing)
     i, j = idx
     k = mc.offsets[i]+j
-    singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
     poss = positions isa Nothing ? mc.positions[idx[1]][idx[2]] : positions
-    singlevdw = single_contribution_vdw(SimulationStep(mc), (i,j), poss)
-    fer = framework_interactions(mc, i, poss)
-    MCEnergyReport(fer, singlevdw, singlereciprocal)
+    singlevdw = @spawn single_contribution_vdw(SimulationStep(mc), (i,j), poss)
+    fer = @spawn framework_interactions(mc, i, poss)
+    singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
+    MCEnergyReport(fetch(fer), fetch(singlevdw), singlereciprocal)
+end
+
+"""
+    update_mc!(mc::MonteCarloSimulation, idx, positions)
+
+Following a call to [`movement_energy(mc, idx, positions)`](@ref), update the internal
+state of `mc` so that the species of index `idx` is now at `positions`.
+"""
+function update_mc!(mc::MonteCarloSimulation, idx, positions)
+    update_ewald_context!(mc.ewald)
+    mc.positions[idx[1]][idx[2]] = positions
+    nothing
+end
+
+
+function inblockpocket(blocks, idx, newpos)
+end
+
+function random_translation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, dmax::typeof(1.0u"Å"))
+    r = SVector{3}((rand()*dmax) for _ in 1:3)
+    [poss + r for poss in positions]
+end
+function random_rotation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, θmax, bead)
+    θ = θmax*(2*rand()-1)
+    s, c = sincos(θ)
+    r = rand(1:3)
+    mat = if r == 1
+        SMatrix{3,3}(1, 0, 0, 0, c, s, 0, -s, c)
+    elseif r == 2
+        SMatrix{3,3}(c, 0, -s, 0, 1, 0, s, 0, c)
+    else
+        SMatrix{3,3}(c, s, 0, -s, c, 0, 0, 0, 1)
+    end
+    refpos = positions[bead]
+    [refpos + mat*(poss - refpos) for poss in positions]
+end
+
+function choose_random_species(mc::MonteCarloSimulation)
+    i = rand(1:length(mc.positions))
+    poss = mc.positions[i]
+    j = rand(1:length(poss))
+    (i,j)
+end
+function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T)
+    b = Float64(before)
+    a = Float64(after)
+    a < b && return true
+    e = exp((b-a)*u"K"/T)
+    return rand() < e
+end
+
+
+
+
+function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
+    energy = baseline_energy(mc)
+    reports = [energy]
+    running_update = @spawn nothing
+    oldpos = SVector{3,typeof(1.0)}[]
+    old_idx = (0,0)
+    before_task = @spawn nothing
+    accepted = false
+    for _ in 1:nsteps
+        idx = choose_random_species(mc)
+        currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.positions[idx[1]][idx[2]]
+        newpos = if length(mc.idx[idx[1]]) == 1
+            random_translation(currentposition, 1.3u"Å")
+        else
+            if rand() < 0.5
+                random_translation(currentposition, 1.3u"Å")
+            else
+                random_rotation(currentposition, 30.0u"°", mc.bead[idx[1]])
+            end
+        end
+        # inblockpocket(mc.blocks, idx[1], newpos) && continue
+        wait(running_update)
+        if old_idx != idx
+            before_task = @spawn movement_energy(mc, idx)
+        end
+        old_idx = idx
+        after = movement_energy(mc, idx, newpos)
+        before = fetch(before_task)
+        accepted = compute_accept_move(before, after, T)
+        oldpos = newpos
+        if accepted
+            running_update = @spawn update_mc!(mc, idx, oldpos)
+            energy += after - before
+
+            # shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [ChangePositionSystem(na, mc.positions[1][1]), ChangePositionSystem(co2, mc.positions[2][1]), ChangePositionSystem(co2, mc.positions[2][2])])
+            # display(energy)
+            # display(baseline_energy(shadow))
+        end
+        push!(reports, energy)
+    end
+    reports
 end
