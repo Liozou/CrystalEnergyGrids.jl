@@ -202,9 +202,35 @@ end
                                                          [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
     mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]);
-    @test Float64(CEG.baseline_energy(mcTrio)) ≈ -28329.113561030445 rtol=0.001
-    @test Float64(CEG.movement_energy(mcTrio, (1,1), [SVector{3}([0.9, 0.1, 1.5]u"Å")]) - CEG.movement_energy(mcTrio, (1,1))) ≈ 5440.529635958557 rtol=0.001
+    baseTrio = Float64(CEG.baseline_energy(mcTrio))
+    @test baseTrio ≈ -28329.113561030445 rtol=0.001
+    newposNaTrio = [SVector{3}([0.9, 0.1, 1.5]u"Å")]
+    diffNa = Float64(CEG.movement_energy(mcTrio, (1,1), newposNaTrio) - CEG.movement_energy(mcTrio, (1,1)))
+    @test diffNa ≈ 5440.529635958557 rtol=0.001
+    mcTrio_diffNa, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, newposNaTrio), molCO2_1, molCO2_2]);
+    @test baseTrio + diffNa ≈ Float64(CEG.baseline_energy(mcTrio_diffNa))
+    newposCO2_2 = SVector{3}.([[1.3, 2.9, 1.149]u"Å", [1.3, 2.9, 0.0]u"Å", [1.3, 2.9, -1.149]u"Å"])
+    diffCO2 = Float64(CEG.movement_energy(mcTrio, (2,2), newposCO2_1) - CEG.movement_energy(mcTrio, (2,2)))
+    mcTrio_diffCO2, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, CEG.ChangePositionSystem(molCO2_1, newposCO2_2)]);
+    @test baseTrio + diffCO2 ≈ Float64(CEG.baseline_energy(mcTrio_diffCO2))
 end
+
+# @testset "Random walk" begin
+#     na = CEG.load_molecule_RASPA("Na", "TraPPE", "BoulfelfelSholl2021");
+#     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
+#     molCO2_1 = CEG.ChangePositionSystem(co2, SVector{3}.([[11.93940309885289, 8.48657378465003, 2.135736631609201]u"Å",
+#                                                          [11.10485516124311, 7.710040763525694, 1.991767166323031]u"Å",
+#                                                          [10.27030722363334, 6.933507742401357, 1.84779770103686]u"Å"]));
+#     molCO2_2 = CEG.ChangePositionSystem(co2, SVector{3}.([[5.491645446274333, 8.057854365959964, 8.669190836544463]u"Å",
+#                                                          [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
+#                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
+#     posNas = vec([SVector{3}([t[1]*9.0, t[2]*5.0, t[3]*3.0]u"Å") for t in CartesianIndices((3,5,9))]);
+#     posNas = 
+#     molNas = [CEG.ChangePositionSystem(na, [pos]) for pos in posNas];
+#     mc1, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [molNas; molCO2_1; molCO2_2]);
+#     reports = CEG.run_montecarlo!(mc1, 300.0u"K", 100)
+#     mc2
+# end
 
 rm(GRIDDIR; recursive=true)
 rm(joinpath(TESTDIR, "raspa", "grids"); recursive=true)
