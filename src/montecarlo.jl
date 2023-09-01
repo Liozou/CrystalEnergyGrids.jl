@@ -249,7 +249,7 @@ function baseline_energy(mc::MonteCarloSimulation)
 end
 
 """
-    movement_energy(mc::MonteCarloSimulation, (i, j), positions=mc.positions[i][j])
+    movement_energy(mc::MonteCarloSimulation, (i, j), positions=nothing)
 
 Compute the energy contribution of the `j`-th molecule of kind `i` when placed at
 `positions`. If not provided, `positions` is the current position for that molecule.
@@ -262,11 +262,12 @@ The energy difference between the new position for the molecule and the current 
     computation of the Ewald part will error.
     See also [`single_contribution_ewald`](@ref).
 """
-function movement_energy(mc::MonteCarloSimulation, idx, positions=mc.positions[idx[1]][idx[2]])
+function movement_energy(mc::MonteCarloSimulation, idx, positions=nothing)
     i, j = idx
     k = mc.offsets[i]+j
     singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
-    singlevdw = single_contribution_vdw(SimulationStep(mc), (i,j), positions)
-    fer = framework_interactions(mc, i, positions)
+    poss = positions isa Nothing ? mc.positions[idx[1]][idx[2]] : positions
+    singlevdw = single_contribution_vdw(SimulationStep(mc), (i,j), poss)
+    fer = framework_interactions(mc, i, poss)
     MCEnergyReport(fer, singlevdw, singlereciprocal)
 end

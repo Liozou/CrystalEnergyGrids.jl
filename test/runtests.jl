@@ -203,6 +203,7 @@ end
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
     mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]);
     @test Float64(CEG.baseline_energy(mcTrio)) ≈ -28329.113561030445 rtol=0.001
+    @test Float64(CEG.movement_energy(mcTrio, (1,1), [SVector{3}([0.9, 0.1, 1.5]u"Å")]) - CEG.movement_energy(mcTrio, (1,1))) ≈ 5440.529635958557 rtol=0.001
 end
 
 rm(GRIDDIR; recursive=true)
