@@ -154,6 +154,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems::Vect
     cell = CellMatrix(SMatrix{3,3,typeof(1.0u"Å"),9}(stack(bounding_box(syst_framework).*supercell)))
 
     csetup = GridCoordinatesSetup(syst_framework, gridstep)
+    length(blockfiles) == length(systems) || error("Please provide one blockfiles element per system")
     blocksetup = [decide_parse_block(file, syst, framework) for (file, syst) in zip(blockfiles, systems)]
 
     needcoulomb = false

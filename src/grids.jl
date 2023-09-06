@@ -253,11 +253,16 @@ framework. `positions` is a list of triplet of coordinates (with their unit).
 Return a pair `(vdw, coulomb)` where `vdw` is the Van der Waals contribution to the energy
 and `coulomb` is the electrostatic ones, both in K.
 
+If one of the atom is on a blocking sphere, return `(1e100u"K", 0.0u"K")`
+
 !!! warning
     No validation is used to ensure that the input `positions` are consistent with the
     shape of the molecule.
 """
 function energy_point(setup::CrystalEnergySetup, positions)
+    for pos in positions
+        setup.block[pos] && return (1e100u"K", 0.0u"K")
+    end
     num_atoms = length(setup.atomsidx)
     vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], positions[i]) for i in 1:num_atoms)
     setup.coulomb.ewald_precision == -Inf && return vdw, 0.0u"K"
@@ -300,10 +305,6 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     Base.Threads.@threads for idx in CartesianIndices((numA, numB, numC))
         iA, iB, iC = Tuple(idx)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
-        if num_rotate >= 0 && setup.block[thisofs]
-            allvals[:,iA,iB,iC] .= 1e100
-            continue
-        end
         for (k, pos) in enumerate(rotpos)
             ofs = if num_rotate < 0
                 rand()*numA*stepA + rand()*numB*stepB + rand()*numC*stepC
