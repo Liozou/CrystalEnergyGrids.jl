@@ -7,7 +7,7 @@ export externalview, internalview, preplot
 function externalview(args)
     path = tempname()
     serialize(path, args)
-    jlcmd = "using CrystalEnergyGrids, PlotlyJS, Serialization; atexit(() -> close(stdin)); args = deserialize(\"$path\"); rm(\"$path\"); p = CrystalEnergyGrids.internalview(args); display(p); while true; read(stdin); end"
+    jlcmd = "using CrystalEnergyGrids, PlotlyJS, Serialization; atexit(() -> close(stdin)); args = deserialize(\"$path\"); rm(\"$path\"); p = CrystalEnergyGrids.internalview(args); display(p); while true; read(stdin); sleep(10.0); end"
     cmd = `$(Base.julia_cmd()) --project=$(dirname(@__DIR__)) -e "$jlcmd"`
     p = Pipe()
     close(p.out)
@@ -199,7 +199,7 @@ function preplot(system::AbstractSystem{3})
     ret
 end
 
-function preplot(field::AbstractArray{Float64,3}, reference::AbstractSystem{3})
+function preplot(field::AbstractArray{Float64,3}, reference::AbstractSystem{3}, block=nothing)
     numA, numB, numC = size(field)
     axeA, axeB, axeC = [NoUnits.(x/u"Å") for x in bounding_box(reference)]
     # X, Y, Z = mgrid(range(0.0; step=(axeA[1]+axeB[1]+axeC[1])))
@@ -211,12 +211,20 @@ function preplot(field::AbstractArray{Float64,3}, reference::AbstractSystem{3})
     x = Vector{Float64}(undef, n)
     y = Vector{Float64}(undef, n)
     z = Vector{Float64}(undef, n)
+    blockx = Float64[]
+    blocky = Float64[]
+    blockz = Float64[]
     for (i, ci) in enumerate(indices)
         iA, iB, iC = Tuple(ci)
         v = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         x[i] = v[1]
         y[i] = v[2]
         z[i] = v[3]
+        if (block===nothing || block) && field[iA, iB, iC] == 1e100
+            push!(blockx, v[1])
+            push!(blocky, v[2])
+            push!(blockz, v[3])
+        end
     end
     # @show last(x), last(y), last(z)
     isomin, isomax = extrema(field)
@@ -224,16 +232,27 @@ function preplot(field::AbstractArray{Float64,3}, reference::AbstractSystem{3})
         isomin = isomax/40
         colors.BuPu
     else # energy
-        isomax = partialsort(vec(field), 100) # 100th lowest value
+        isomax = partialsort(vec(field), min(length(field), 10000)) # 10000th lowest value
         colors.ice
     end
-    i = argmax(field)
-    [PlotlyJS.volume(; x, y, z, value=field[:],
-                       suface_count=20, isomin, isomax,
-                       opacity=0.6,
-                       hoverinfo="skip",
-                       colorscale
-                    )]
+
+    ret = [PlotlyJS.volume(; x, y, z, value=field[:],
+                            suface_count=20, isomin, isomax,
+                            opacity=0.6,
+                            hoverinfo="skip",
+                            colorscale
+                            )]
+    if (block===nothing || block) && !isempty(blockx)
+        push!(ret,
+            PlotlyJS.scatter(; x=blockx, y=blocky, z=blockz,
+                mode="markers", type="scatter3d",
+                hoverinfo="skip",
+                marker=PlotlyJS.attr(; color="black", size=1, opacity=0.4,
+                                        line=PlotlyJS.attr(width=0))
+        ))
+    end
+    block===true && popfirst!(ret)
+    ret
 end
 
 

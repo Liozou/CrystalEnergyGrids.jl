@@ -1,20 +1,5 @@
 # General utils
 
-function wrap_atom(point, mat, invmat)
-    abc = invmat * (point isa SVector ? point : SVector{3}(point))
-    mat * (abc .- floor.(abc))
-end
-
-function offsetpoint(point, mat, invmat, shift, size, dims)
-    newpoint = wrap_atom(NoUnits.(point/u"Å"), mat, invmat)
-    @. dims*(newpoint - shift)/size + 1
-end
-
-function inverse_abc_offsetpoint(ipoint, invmat, shift, size, dims)
-    abc = invmat*(@. (ipoint - 1)/dims*size + shift)
-    abc .- floor.(abc)
-end
-
 function perpendicular_lengths(a, b, c)
     axb1 = a[2]*b[3] - a[3]*b[2]
     axb2 = a[3]*b[1] - a[1]*b[3]
@@ -213,6 +198,7 @@ struct CellMatrix
 end
 CellMatrix(mat::AbstractMatrix{typeof(1.0u"Å")}) = CellMatrix(mat, inv(ustrip.(mat))*u"Å^-1")
 CellMatrix(mat::AbstractMatrix{Float64}) = CellMatrix(mat*u"Å")
+CellMatrix(system::AbstractSystem{3}) = CellMatrix(SMatrix{3,3,typeof(1.0u"Å"),9}(stack(bounding_box(system))))
 function CellMatrix(mat::AbstractMatrix{Float64}, invmat::AbstractMatrix{Float64})
     CellMatrix(mat*u"Å", invmat*u"Å^-1")
 end

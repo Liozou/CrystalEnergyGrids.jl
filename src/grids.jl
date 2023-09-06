@@ -8,21 +8,14 @@ Representation of an interpolable energy grid.
 Use [`interpolate_grid`](@ref) to access the value of the grid at any point in space.
 """
 struct EnergyGrid
-    spacing::Cdouble
-    dims::NTuple{3,Cint}
-    size::NTuple{3,Cdouble}
-    shift::NTuple{3,Cdouble}
-    Δ::NTuple{3,Cdouble}
-    unitcell::NTuple{3,Cdouble}
+    csetup::GridCoordinatesSetup
     num_unitcell::NTuple{3,Cint}
     ewald_precision::Cfloat # Inf for VdW grid, -Inf for empty grid
-    mat::SMatrix{3,3,Float64,9}
-    invmat::SMatrix{3,3,Float64,9}
     higherorder::Bool # true if grid contains derivatives, false if only raw values
     grid::Array{Cfloat,4}
 end
 function EnergyGrid()
-    EnergyGrid(0.0, (0,0,0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0.0,0.0,0.0), (0,0,0), -Inf, zero(SMatrix{3,3,Float64,9}), zero(SMatrix{3,3,Float64,9}), false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
+    EnergyGrid(GridCoordinatesSetup(), (0, 0, 0), -Inf, false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
 end
 function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
     if rg.ewald_precision == -Inf
@@ -30,14 +23,14 @@ function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
         return
     end
     print(io, rg.ewald_precision == Inf ? "VdW" : "Coulomb", " grid with ")
-    join(io, rg.dims .+ 1, '×')
+    join(io, rg.csetup.dims .+ 1, '×')
     print(io, " points for a ")
     if rg.num_unitcell != (1,1,1)
         join(io, rg.num_unitcell, '×')
         print(io, " supercell of the ")
     end
     print("unit cell of size ")
-    join(io, rg.unitcell, " Å × ")
+    join(io, rg.csetup.unitcell, " Å × ")
     print(io, " Å")
 end
 
@@ -57,12 +50,12 @@ matrix of the framework.
 """
 function parse_grid(file, iscoulomb, mat=nothing)
     open(file) do io
-        spacing = read(io, Cdouble)
+        spacing = read(io, Cdouble)*u"Å"
         dims = @triplet read(io, Cint)
-        size = @triplet read(io, Cdouble)
-        shift = @triplet read(io, Cdouble)
-        Δ = @triplet read(io, Cdouble)
-        unitcell = @triplet read(io, Cdouble)
+        size = @triplet read(io, Cdouble).*u"Å"
+        shift = @triplet read(io, Cdouble).*u"Å"
+        Δ = @triplet read(io, Cdouble).*u"Å"
+        unitcell = @triplet read(io, Cdouble).*u"Å"
         num_unitcell = @triplet read(io, Cint)
 
         # @printf "ShiftGrid: %g %g %g\n" shift[1] shift[2] shift[3]
@@ -73,8 +66,10 @@ function parse_grid(file, iscoulomb, mat=nothing)
         grid = Array{Cfloat, 4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
         read!(io, grid)
         grid .*= NoUnits(ENERGY_TO_KELVIN/u"K")
-        newmat = if mat isa AbstractMatrix
+        newmat = if mat isa CellMatrix
             mat
+        elseif mat isa AbstractMatrix
+            CellMatrix(mat)
         else
             pos = position(io)
             seekend(io)
@@ -82,41 +77,39 @@ function parse_grid(file, iscoulomb, mat=nothing)
                 error("Missing `mat` argument to `parse_grid` not provided by the grid.")
             end
             seek(io, pos)
-            read(io, SMatrix{3,3,Float64,9})
+            CellMatrix(read(io, SMatrix{3,3,Float64,9}))
         end
-        EnergyGrid(spacing, dims, size, shift, Δ, unitcell, num_unitcell, ewald_precision, newmat, inv(newmat), true, grid)
+        EnergyGrid(GridCoordinatesSetup(newmat, spacing, dims, size, shift, unitcell, Δ), num_unitcell, ewald_precision, true, grid)
     end
 end
 
-function _create_grid_common(file, framework::AbstractSystem{3}, spacing::Float64, cutoff::Float64)
+macro write_no_unit(x)
+    return esc(quote
+        write(f, NoUnits(($x)[1]/u"Å"), NoUnits(($x)[2]/u"Å"), NoUnits(($x)[3]/u"Å"))
+    end)
+end
+
+function _create_grid_common(file, framework::AbstractSystem{3}, spacing::typeof(1.0u"Å"), cutoff::typeof(1.0u"Å"))
     # isfile(file) && error(lazy"File $file already exists, please remove it if you want to overwrite it.")
 
-    a, b, c = [NoUnits.(x./u"Å") for x in bounding_box(framework)]
-    unitcell = norm(a), norm(b), norm(c)
-    mat = stack3((a,b,c))
-    invmat = inv(mat)
-    size = SVector{3,Cdouble}(abs.(a)) + SVector{3,Cdouble}(abs.(b)) + SVector{3,Cdouble}(abs.(c))
-    shift = SVector{3,Cdouble}(min.(a, 0.0)) + SVector{3,Cdouble}(min.(b, 0.0)) + SVector{3,Cdouble}(min.(c, 0.0))
-    _dims = floor.(Cint, (size ./ spacing))
-    dims = _dims + iseven.(_dims)
-    Δ = size ./ dims
-    num_unitcell = Cint.(find_supercell((a, b, c), cutoff))
+    csetup = GridCoordinatesSetup(framework, spacing)
+    num_unitcell = Cint.(find_supercell(framework, cutoff))
 
     # @printf "ShiftGrid: %g %g %g\n" shift[1] shift[2] shift[3]
     # @printf "SizeGrid: %g %g %g\n" size[1] size[2] size[3]
     # @printf "Number of grid points: %d %d %d\n" dims[1] dims[2] dims[3]
 
     open(file, "w") do f
-        write(f, Cdouble(spacing))
-        write(f, dims[1], dims[2], dims[3])
-        write(f, size[1], size[2], size[3])
-        write(f, shift[1], shift[2], shift[3])
-        write(f, Δ[1], Δ[2], Δ[3])
-        write(f, unitcell[1], unitcell[2], unitcell[3])
+        write(f, Cdouble(NoUnits(spacing/u"Å")))
+        write(f, csetup.dims[1], csetup.dims[2], csetup.dims[3])
+        @write_no_unit csetup.size
+        @write_no_unit csetup.shift
+        @write_no_unit csetup.Δ
+        @write_no_unit csetup.unitcell
         write(f, num_unitcell[1], num_unitcell[2], num_unitcell[3])
     end
 
-    return size, shift, dims, Δ, num_unitcell, mat, invmat
+    return csetup, num_unitcell
 end
 
 function _set_gridpoint!(grid, i, j, k, Δ, λ, derivatives)
@@ -132,37 +125,39 @@ function _set_gridpoint!(grid, i, j, k, Δ, λ, derivatives)
     nothing
 end
 
-function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::Float64, atom::Symbol)
-    size, shift, dims, Δ, num_unitcell, mat, invmat = _create_grid_common(file, framework, spacing, NoUnits(forcefield.cutoff/u"Å"))
-    grid = Array{Cfloat,4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
+function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::typeof(1.0u"Å"), atom::Symbol)
+    cset, num_unitcell = _create_grid_common(file, framework, spacing, forcefield.cutoff)
+    grid = Array{Cfloat,4}(undef, cset.dims[3]+1, cset.dims[2]+1, cset.dims[1]+1, 8)
     probe_vdw = ProbeSystem(framework, forcefield, atom)
+    Δ = NoUnits.(cset.Δ/u"Å")
     λ = inv(NoUnits(ENERGY_TO_KELVIN/u"K"))
-    @threads for i in 0:dims[1]
-        for j in 0:dims[2], k in 0:dims[3]
-            pos = SVector{3,Float64}((i*size[1]/dims[1] + shift[1], j*size[2]/dims[2] + shift[2], k*size[3]/dims[3] + shift[3]))
+    @threads for i in 0:cset.dims[1]
+        for j in 0:cset.dims[2], k in 0:cset.dims[3]
+            pos = abc_to_xyz(cset, i, j, k)
             derivatives = compute_derivatives_vdw(probe_vdw, pos)
             _set_gridpoint!(grid, i, j, k, Δ, λ, derivatives)
         end
     end
     open(file, "a") do f
         write(f, grid)
-        write(f, mat) # not part of RASPA grids
+        write(f, NoUnits.(cset.cell.mat./u"Å")) # not part of RASPA grids
     end
     grid
 end
 
-function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::Float64, _ewald=nothing)
-    size, shift, dims, Δ, num_unitcell, mat, invmat = _create_grid_common(file, framework, spacing, 12.0)
+function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::typeof(1.0u"Å"), _ewald=nothing)
+    cset, num_unitcell = _create_grid_common(file, framework, spacing, 12.0u"Å")
     ewald = if _ewald isa EwaldFramework
         _ewald
     else
         initialize_ewald(framework, num_unitcell)
     end
-    grid = Array{Cfloat,4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
+    grid = Array{Cfloat,4}(undef, cset.dims[3]+1, cset.dims[2]+1, cset.dims[1]+1, 8)
     probe_coulomb = ProbeSystem(framework, forcefield)
-    @threads for i in 0:dims[1]
-        for j in 0:dims[2], k in 0:dims[3]
-            pos = SVector{3,Float64}((i*size[1]/dims[1] + shift[1], j*size[2]/dims[2] + shift[2], k*size[3]/dims[3] + shift[3]))
+    Δ = NoUnits.(cset.Δ/u"Å")
+    @threads for i in 0:cset.dims[1]
+        for j in 0:cset.dims[2], k in 0:cset.dims[3]
+            pos = abc_to_xyz(cset, i, j, k)
             derivatives = compute_derivatives_ewald(probe_coulomb, ewald, pos)
             _set_gridpoint!(grid, i, j, k, Δ, COULOMBIC_CONVERSION_FACTOR, derivatives)
         end
@@ -170,7 +165,7 @@ function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::For
     open(file, "a") do f
         write(f, ewald.precision)
         write(f, grid)
-        write(f, mat) # not part of RASPA grids
+        write(f, NoUnits.(cset.cell.mat./u"Å")) # not part of RASPA grids
     end
     grid
 end
@@ -182,9 +177,10 @@ Interpolate grid `g` at the given `point`, which should be a triplet of coordina
 their corresponding unit).
 """
 function interpolate_grid(g::EnergyGrid, point)
-    shifted = offsetpoint(point, g.mat, g.invmat, g.shift, g.size, g.dims)
+    shifted = offsetpoint(point, g.csetup)
     p0 = floor.(Int, shifted)
-    p1 = p0 .+ 1
+    # The following is p1 = p0 .+ 1 adapted to avoid BoundsError on numerical imprecision
+    p1 = p0 .+ (p0[1] != size(g.grid, 3), p0[2] != size(g.grid, 2), p0[3] != size(g.grid, 1))
     r = shifted .- p0
     x0, y0, z0 = p0
     x1, y1, z1 = p1
@@ -245,7 +241,7 @@ struct CrystalEnergySetup{TFramework,TMolecule}
     atomsidx::Vector{Int} # index of the grid corresponding to the atom
     ewald::EwaldFramework
     forcefield::ForceField
-    block::Union{Nothing, BitArray{3}}
+    block::BlockFile
 end
 
 """
@@ -292,9 +288,6 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     stepA = (axeA / norm(axeA)) * step
     stepB = (axeB / norm(axeB)) * step
     stepC = (axeC / norm(axeC)) * step
-    gr0 = setup.coulomb.ewald_precision == -Inf ? setup.grids[1] : setup.coulomb
-    mat = gr0.mat
-    invmat = gr0.invmat
     __pos = position(setup.molecule) / u"Å"
     rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == 0 || length(setup.molecule) == 1
         [[SVector{3}(p) for p in __pos]]
@@ -307,13 +300,9 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     Base.Threads.@threads for idx in CartesianIndices((numA, numB, numC))
         iA, iB, iC = Tuple(idx)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
-        if setup.block isa BitArray && num_rotate >= 0
-            a0, b0, c0 = floor.(Int, offsetpoint(thisofs, mat, invmat, gr0.shift, gr0.size, gr0.dims))
-            a1 = a0 + 1; b1 = b0 + 1; c1 = c0 + 1;
-            if setup.block[a0,b0,c0]+setup.block[a1,b0,c0]+setup.block[a0,b1,c0]+setup.block[a1,b1,c0]+setup.block[a0,b0,c1]+setup.block[a1,b0,c1]+setup.block[a0,b1,c1]+setup.block[a1,b1,c1] > 3
-                allvals[:,iA,iB,iC] .= 1e100
-                continue
-            end
+        if num_rotate >= 0 && setup.block[thisofs]
+            allvals[:,iA,iB,iC] .= 1e100
+            continue
         end
         for (k, pos) in enumerate(rotpos)
             ofs = if num_rotate < 0

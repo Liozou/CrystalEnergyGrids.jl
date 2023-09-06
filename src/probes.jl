@@ -68,7 +68,7 @@ function Base.show(io::IO, ::MIME"text/plain", x::ProbeSystem)
     nothing
 end
 
-function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,Float64})
+function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,typeof(1.0u"Å")})
     buffer, ortho, safemin = prepare_periodic_distance_computations(s.mat)
     safemin2 = safemin^2
     buffer2 = MVector{3,Float64}(undef)
@@ -78,7 +78,7 @@ function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,Float64})
     ∂2 = zero(MVector{3,Float64})
     ∂3 = 0.0
     for i in 1:length(s.positions)
-        buffer .= pos .- s.positions[i]
+        buffer .= NoUnits.(pos./u"Å") .- s.positions[i]
         d2 = periodic_distance2_fromcartesian!(buffer, s.mat, s.invmat, ortho, safemin2, buffer2)
         d2 ≥ cutoff2 && continue
         v, p1, p2, p3 = derivatives_nocutoff(s.forcefield, s.atomkinds[i], s.probe, d2)
@@ -91,7 +91,7 @@ function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,Float64})
     (value, ∂1, ∂2, ∂3)
 end
 
-function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,Float64})
+function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,typeof(1.0u"Å")})
     buffer, ortho, safemin = prepare_periodic_distance_computations(s.mat)
     safemin2 = safemin^2
     buffer2 = MVector{3,Float64}(undef)
@@ -102,7 +102,7 @@ function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,Float64
     ∂3 = 0.0
     smallest_d2 = Inf
     for i in 1:length(s.positions)
-        buffer .= pos .- s.positions[i]
+        buffer .= NoUnits.(pos./u"Å") .- s.positions[i]
         d2 = periodic_distance2_fromcartesian!(buffer, s.mat, s.invmat, ortho, safemin2, buffer2)
         d2 ≥ cutoff2 && continue
         smallest_d2 = min(smallest_d2, d2)

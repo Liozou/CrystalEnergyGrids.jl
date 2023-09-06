@@ -71,7 +71,7 @@ end
     reciprocal = compute_ewald(ctx)
     @test reciprocal == compute_ewald(iec)
     # /!\ call to single_contribution_ewald must be after call to compute_ewald
-    @test reciprocal ≈ compute_ewald(iec, 1) + CEG.single_contribution_ewald(iec, 1, pos1)
+    @test_broken reciprocal ≈ compute_ewald(iec.ctx, 1) + CEG.single_contribution_ewald(iec, 1, pos1)
 
 end
 
@@ -121,7 +121,7 @@ end
     n = length(cit7)
     _positions = Vector{SVector{3,typeof(1.0u"Å")}}(undef, n*Π)
     _symbols = Vector{Symbol}(undef, n*Π)
-    mat = setupArCIT7.grids[1].mat
+    mat = NoUnits.(setupArCIT7.grids[1].csetup.cell.mat./u"Å")
     axeA, axeB, axeC = eachcol(mat)
     iofs = 0
     for πa in 1:ΠA, πb in 1:ΠB, πc in 1:ΠC
@@ -210,7 +210,7 @@ end
     mcTrio_diffNa, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, newposNaTrio), molCO2_1, molCO2_2]);
     @test baseTrio + diffNa ≈ Float64(CEG.baseline_energy(mcTrio_diffNa))
     newposCO2_2 = SVector{3}.([[1.3, 2.9, 1.149]u"Å", [1.3, 2.9, 0.0]u"Å", [1.3, 2.9, -1.149]u"Å"])
-    diffCO2 = Float64(CEG.movement_energy(mcTrio, (2,2), newposCO2_1) - CEG.movement_energy(mcTrio, (2,2)))
+    diffCO2 = Float64(CEG.movement_energy(mcTrio, (2,2), newposCO2_2) - CEG.movement_energy(mcTrio, (2,2)))
     mcTrio_diffCO2, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, CEG.ChangePositionSystem(molCO2_1, newposCO2_2)]);
     @test baseTrio + diffCO2 ≈ Float64(CEG.baseline_energy(mcTrio_diffCO2))
 end

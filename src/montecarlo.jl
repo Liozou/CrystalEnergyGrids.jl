@@ -18,9 +18,9 @@ struct MonteCarloSimulation
     positions::Vector{Vector{Vector{SVector{3,typeof(1.0u"Å")}}}}
     # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
     isrigid::BitVector # always set to true
-    blocks::Vector{Tuple{BitArray{3},typeof(1.0u"Å")}}
-    # blocks[i][1][x,y,z] is set if (x,y,z) is blocked for any atom of a species of kind i.
-    # The block has a step size of blocks[i][2]
+    blocks::Vector{BlockFile}
+    # blocks[i][pos] is set if pos is blocked for any atom of a species of kind i.
+    # The block has a step size of 0.15 Å.
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i
 end
 
@@ -28,24 +28,32 @@ function SimulationStep(mc::MonteCarloSimulation)
     SimulationStep(mc.ff, mc.charges, mc.positions, mc.isrigid, mc.idx, mc.cell)
 end
 
-function setup_montecarlo(cell::CellMatrix, systems::Vector{T}, ff::ForceField,
-                          eframework::EwaldFramework, coulomb::EnergyGrid,
-                          grids::Vector{EnergyGrid}, num_framework_atoms::Vector{Int}) where {T<:AbstractSystem{3}}
+function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
+                          systems::Vector{T}, ff::ForceField, eframework::EwaldFramework,
+                          coulomb::EnergyGrid, grids::Vector{EnergyGrid},
+                          blocksetup::Vector{String},
+                          num_framework_atoms::Vector{Int}) where {T<:AbstractSystem{3}}
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
 
-    kindsdict = Dict{Vector{Symbol},Int}()
+    kindsdict = Dict{Tuple{Vector{Symbol},String},Int}()
     systemkinds = T[]
     U = Vector{SVector{3,typeof(1.0u"Å")}} # positions of the atoms of a system
     poss = Vector{U}[]
     indices = Tuple{Int,Int}[]
-    for system in systems
+    blocks = BlockFile[]
+    for (system, block) in zip(systems, blocksetup)
         n = length(kindsdict)+1
-        kind = get!(kindsdict, atomic_symbol(system), n)
+        kind = get!(kindsdict, (atomic_symbol(system), block), n)
         if kind === n
             push!(systemkinds, system)
             push!(poss, U[])
+            if isempty(block)
+                push!(blocks, BlockFile())
+            else
+                push!(blocks, parse_blockfile(joinpath(getdir_RASPA(), "structures", "block", block)*".block", csetup))
+            end
         end
         push!(poss[kind], position(system))
         push!(indices, (kind, length(poss[kind])))
@@ -106,14 +114,36 @@ function setup_montecarlo(cell::CellMatrix, systems::Vector{T}, ff::ForceField,
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, systems))
 
-    blocks = Tuple{BitArray{3},typeof(1.0u"Å")}[]
-
-    MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets, idx,
-                         charges, poss, trues(length(idx)), blocks, bead), indices
+    MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets,
+                         idx, charges, poss, trues(length(idx)), blocks, bead), indices
 end
 
+"""
+    setup_montecarlo(framework, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
+                     blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å", supercell=nothing, new=false)
+
+Prepare a Monte Carlo simulation of the input list of `systems` in a `framework` with the
+given force field.
+
+`blockfiles[i]` can be set to `false` to allow the molecule `systems[i]` to go everywhere in
+the framework.
+Or it can be set to the radical (excluding the ".block" extension) of the block file in the
+raspa directory to include it and prevent the molecule to go in the blocked spheres.
+Setting it to `true` is equivalent to using `blockfiles[i]=first(split(framework, '_'))`.
+If not provided, the default is to set it to `false` if the molecule is positively charged
+and monoatomic (considered to be a small cation), or to `true` otherwise.
+
+`gridstep` is the approximate energy grid step size used.
+
+`supercell` is a triplet of integer specifying the number of repetitions of unit cell to
+use. If unspecified, it is the smallest supercell such that the perpendicular lengths are
+all above 24.0 Å (i.e. twice the 12.0 Å cutoff).
+
+If `new` is set, force recomputing all the grids. Otherwise, existing grids will be used
+when available.
+"""
 function setup_montecarlo(framework, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
-                          gridstep=0.15, supercell=nothing, new=false)
+                          blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å", supercell=nothing, new=false)
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
     mat = stack3(bounding_box(syst_framework))
@@ -122,6 +152,9 @@ function setup_montecarlo(framework, forcefield_framework::String, systems::Vect
     end
     supercell::NTuple{3,Int}
     cell = CellMatrix(SMatrix{3,3,typeof(1.0u"Å"),9}(stack(bounding_box(syst_framework).*supercell)))
+
+    csetup = GridCoordinatesSetup(syst_framework, gridstep)
+    blocksetup = [decide_parse_block(file, syst, framework) for (file, syst) in zip(blockfiles, systems)]
 
     needcoulomb = false
     encountered_atoms = Set{Symbol}()
@@ -163,7 +196,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems::Vect
         num_framework_atoms[ff.sdict[Symbol(get_atom_name(atomic_symbol(at)))]] += Π
     end
 
-    setup_montecarlo(cell, systems, ff, eframework, coulomb, grids, num_framework_atoms)
+    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms)
 end
 
 function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
@@ -315,7 +348,11 @@ function update_mc!(mc::MonteCarloSimulation, idx, positions)
 end
 
 
-function inblockpocket(blocks, idx, newpos)
+function inblockpocket(block::BlockFile, newpos::Vector{SVector{3,typeof(1.0u"Å")}})
+    for pos in newpos
+        block[pos] && return true
+    end
+    return false
 end
 
 function random_translation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, dmax::typeof(1.0u"Å"))
@@ -374,7 +411,8 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
                 random_rotation(currentposition, 30.0u"°", mc.bead[idx[1]])
             end
         end
-        # inblockpocket(mc.blocks, idx[1], newpos) && continue
+        block = mc.blocks[idx[1]]
+        !isempty(block) && inblockpocket(block, newpos) && continue
         wait(running_update)
         if old_idx != idx
             before_task = @spawn movement_energy(mc, idx)
