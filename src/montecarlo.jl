@@ -1,4 +1,4 @@
-export setup_montecarlo, move_cost
+export setup_montecarlo, baseline_energy, movement_energy
 
 struct MonteCarloSimulation
     ff::ForceField
@@ -285,7 +285,10 @@ function framework_interactions(mc::MonteCarloSimulation, indices::Vector{Int}, 
         ix = indices[k]
         pos = positions[k]
         vdw += interpolate_grid(mc.grids[ix], pos)
-        hascoulomb && (direct += Float64(mc.charges[ix]/u"e_au")*interpolate_grid(mc.coulomb, pos))
+        if hascoulomb
+            coulomb = interpolate_grid(mc.coulomb, pos)
+            direct += ifelse(coulomb == 1e100u"K", coulomb, Float64(mc.charges[ix]/u"e_au")*coulomb)
+        end
     end
     return FrameworkEnergyReport(vdw, direct)
 end
@@ -427,11 +430,19 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
             running_update = @spawn update_mc!(mc, idx, oldpos)
             energy += after - before
 
-            # shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [ChangePositionSystem(na, mc.positions[1][1]), ChangePositionSystem(co2, mc.positions[2][1]), ChangePositionSystem(co2, mc.positions[2][2])])
+            # na = load_molecule_RASPA("Na", "TraPPE", "BoulfelfelSholl2021");
+            # co2 = load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
+            # shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [ChangePositionSystem(na, mc.positions[1][1]), ChangePositionSystem(co2, mc.positions[2][1]), ChangePositionSystem(co2, mc.positions[2][2])]; blockfiles=[false,false,false])
+            # println(Float64(energy), " vs ", Float64(baseline_energy(shadow)))
+            # @show shadow.ewald.ctx.Eiks[1][30]
+            # @show idx
             # display(energy)
             # display(baseline_energy(shadow))
+            # println(mc.positions)
         end
         push!(reports, energy)
     end
+    wait(running_update)
+    wait(before_task)
     reports
 end

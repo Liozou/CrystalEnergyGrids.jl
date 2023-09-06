@@ -30,6 +30,7 @@ struct EwaldKspace
     num_kvecs::Int
     kindices::Vector{Tuple{Int,Int,UnitRange{Int},Int}}
 end
+Base.:(==)(e1::EwaldKspace, e2::EwaldKspace) = e1.ks == e2.ks && e1.num_kvecs == e2.num_kvecs && e1.kindices == e2.kindices
 
 """
     EwaldFramework
@@ -50,6 +51,17 @@ end
 function EwaldFramework(mat::SMatrix{3,3,Float64,9})
     EwaldFramework(EwaldKspace((0,0,0), 0, Tuple{Int,Int,UnitRange{Int},Int}[]),
                    0.0, mat, inv(mat), Float64[], 0.0, ComplexF64[], 0.0, 0.0)
+end
+
+function Base.:(==)(e1::EwaldFramework, e2::EwaldFramework)
+    e1.kspace == e2.kspace && e1.α == e2.α &&
+                              e1.mat == e2.mat &&
+                              e1.invmat == e2.invmat &&
+                              e1.kfactors == e2.kfactors &&
+                              e1.UIon == e2.UIon &&
+                              e1.StoreRigidChargeFramework == e2.StoreRigidChargeFramework &&
+                              e1.net_charges_framework == e2.net_charges_framework &&
+                              e1.precision == e2.precision
 end
 
 
@@ -296,6 +308,14 @@ struct EwaldContext
     # offsets[i] is the number of charges before the start of the system at allcharges[i] minus 1
     static_contribution::Float64
     energy_net_charges::Float64
+end
+
+function Base.:(==)(e1::EwaldContext, e2::EwaldContext)
+    e1.eframework == e2.eframework && e1.Eiks == e2.Eiks &&
+                                      e1.allcharges == e2.allcharges &&
+                                      e1.offsets == e2.offsets &&
+                                      e1.static_contribution == e2.static_contribution &&
+                                      e1.energy_net_charges && e2.energy_net_charges
 end
 
 # function EwaldContext(invmat::SMatrix{3,3,Float64,9})
@@ -547,9 +567,10 @@ function update_ewald_context!(ewald::IncrementalEwaldContext)
     Eikx, Eiky, Eikz = ewald.ctx.Eiks
     newEikx, newEiky, newEikz = ewald.tmpEiks
     kx, ky, kz = ewald.ctx.eframework.kspace.ks
-    copyto!(Eikx, 1 + (k-1)*(kx+1), newEikx, 1, length(newEikx))
-    copyto!(Eiky, 1 + (k-1)*(ky+ky+1), newEiky, 1, length(newEiky))
-    copyto!(Eikz, 1 + (k-1)*(kz+kz+1), newEikz, 1, length(newEikz))
+    chargepos = 1 + ewald.ctx.offsets[k]
+    copyto!(Eikx, 1 + chargepos*(kx+1), newEikx, 1, length(newEikx))
+    copyto!(Eiky, 1 + chargepos*(ky+ky+1), newEiky, 1, length(newEiky))
+    copyto!(Eikz, 1 + chargepos*(kz+kz+1), newEikz, 1, length(newEikz))
     ewald.last[] = 0
     nothing
 end
