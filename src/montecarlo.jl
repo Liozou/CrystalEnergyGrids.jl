@@ -142,7 +142,7 @@ all above 24.0 Å (i.e. twice the 12.0 Å cutoff).
 If `new` is set, force recomputing all the grids. Otherwise, existing grids will be used
 when available.
 """
-function setup_montecarlo(framework, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
+function setup_montecarlo(framework, forcefield_framework::String, systems;
                           blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å", supercell=nothing, new=false)
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
@@ -198,6 +198,20 @@ function setup_montecarlo(framework, forcefield_framework::String, systems::Vect
     end
 
     setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms)
+end
+
+function setup_montecarlo(framework, forcefield_framework::String, systemkinds::Vector{Tuple{T,Int}} where T<:AbstractSystem{3};
+                          blockkinds=fill(nothing, length(systemkinds)), gridstep=0.15u"Å", supercell=nothing, new=false)
+    systems = [system for (system, i) in systemkinds for _ in 1:i]
+    blockfiles = [blockfile for (blockfile, (_, i)) in zip(blockkinds, systemkinds) for _ in 1:i]
+    mc, indices = setup_montecarlo(framework, forcefield_framework, systems; blockfiles, gridstep, supercell, new)
+    baseline_energy(mc)
+    for i in 1:length(mc.positions)
+        for j in 1:length(mc.positions[i])
+            randomize_position!(mc, (i,j))
+        end
+    end
+    indices
 end
 
 function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
@@ -360,13 +374,13 @@ function inblockpocket(block::BlockFile, newpos::Vector{SVector{3,typeof(1.0u"Å
 end
 
 function random_translation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, dmax::typeof(1.0u"Å"))
-    r = SVector{3}((rand()*dmax) for _ in 1:3)
+    r = SVector{3}(((2*rand()-1)*dmax) for _ in 1:3)
     [poss + r for poss in positions]
 end
-function random_rotation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, θmax, bead)
+function random_rotation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, θmax, bead, _r=nothing)
     θ = θmax*(2*rand()-1)
     s, c = sincos(θ)
-    r = rand(1:3)
+    r = _r isa Nothing ? rand(1:3) : _r
     mat = if r == 1
         SMatrix{3,3}(1, 0, 0, 0, c, s, 0, -s, c)
     elseif r == 2
@@ -392,7 +406,39 @@ function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T)
     return rand() < e
 end
 
+"""
+    randomize_position!(mc::MonteCarloSimulation, idx)
 
+Put the species at the given index to a random position and orientation.
+
+!!! warn
+    A prior call to [`baseline_energy(mc)`](@ref) is required.
+"""
+function randomize_position!(mc::MonteCarloSimulation, (i,j))
+    pos = mc.positions[i][j]
+    bead = mc.bead[i]
+    block = mc.blocks[i]
+    k = mc.offsets[i] + j
+    d = norm(sum(mc.cell.mat; dims=2))/4
+    for _ in 1:5
+        posr = random_rotation(random_rotation(random_rotation(pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
+        for _ in 1:100
+            post = random_translation(posr, d)
+            if !inblockpocket(block, post)
+                single_contribution_ewald(mc.ewald, k, post)
+                update_mc!(mc, (i,j), post)
+                return
+            end
+        end
+    end
+    error(lazy"Could not find a suitable position for molecule $((i,j))!")
+end
+
+"""
+    run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
+
+Run a Monte-Carlo simulation at temperature `T` (given in K) during `nsteps`.
+"""
 function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
     energy = baseline_energy(mc)
     reports = [energy]
@@ -433,7 +479,7 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
         accepted = compute_accept_move(before, after, T)
         oldpos = newpos
         if accepted
-            running_update = @spawn update_mc!(mc, idx, oldpos)
+            running_update = @spawn update_mc!(mc, idx, oldpos) # do not use newpos since it can be changed in the next iteration before the Task is run
             energy += after - before
 
             # @show idx

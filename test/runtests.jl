@@ -237,10 +237,7 @@ end
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])
 
-    # posNas = vec([SVector{3}([t[1]*9.0, t[2]*5.0, t[3]*3.0]u"Å") for t in CartesianIndices((3,5,9))]);
-    # posNas = 
-    # molNas = [CEG.ChangePositionSystem(na, [pos]) for pos in posNas];
-    # mc1, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [molNas; molCO2_1; molCO2_2]);
+    # mc1, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [(molNaTrio, 135), molCO2_1, molCO2_2]);
     # reports = CEG.run_montecarlo!(mc1, 300.0u"K", 100)
     # mc2
 end
