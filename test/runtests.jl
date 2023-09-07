@@ -231,9 +231,11 @@ end
                                                          [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
     mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
-    CEG.run_montecarlo!(mcTrio, 300u"K", 10000)
+    reportsTrio = CEG.run_montecarlo!(mcTrio, 300u"K", 40000)
     shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, mcTrio.positions[1][1]), CEG.ChangePositionSystem(co2, mcTrio.positions[2][1]), CEG.ChangePositionSystem(co2, mcTrio.positions[2][2])]; blockfiles=[false,false,false]);
-    @test Float64(baseline_energy(mcTrio)) ≈ Float64(baseline_energy(shadow))
+    baseTrio = Float64(baseline_energy(mcTrio))
+    @test baseTrio ≈ Float64(baseline_energy(shadow))
+    @test baseTrio ≈ Float64(reportsTrio[end])
 
     # posNas = vec([SVector{3}([t[1]*9.0, t[2]*5.0, t[3]*3.0]u"Å") for t in CartesianIndices((3,5,9))]);
     # posNas = 

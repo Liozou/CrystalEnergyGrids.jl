@@ -393,17 +393,16 @@ function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T)
 end
 
 
-
-
 function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
     energy = baseline_energy(mc)
     reports = [energy]
     running_update = @spawn nothing
     oldpos = SVector{3,typeof(1.0)}[]
     old_idx = (0,0)
-    before_task = @spawn nothing
+    before = 0.0u"K"
+    after = 0.0u"K"
     accepted = false
-    for _ in 1:nsteps
+    for k in 1:nsteps
         idx = choose_random_species(mc)
         currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.positions[idx[1]][idx[2]]
         newpos = if length(mc.idx[idx[1]]) == 1
@@ -418,24 +417,37 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
         block = mc.blocks[idx[1]]
         !isempty(block) && inblockpocket(block, newpos) && continue
         wait(running_update)
-        if old_idx != idx
+        if old_idx == idx
+            if accepted
+                before = after
+            # else
+            #     before = fetch(before_task) # simply keep its previous value
+            end
+            after = movement_energy(mc, idx, newpos)
+        else
             before_task = @spawn movement_energy(mc, idx)
+            after = movement_energy(mc, idx, newpos)
+            before = fetch(before_task)
         end
         old_idx = idx
-        after = movement_energy(mc, idx, newpos)
-        before = fetch(before_task)
         accepted = compute_accept_move(before, after, T)
         oldpos = newpos
         if accepted
             running_update = @spawn update_mc!(mc, idx, oldpos)
             energy += after - before
 
-            # na = load_molecule_RASPA("Na", "TraPPE", "BoulfelfelSholl2021");
-            # co2 = load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
+            # @show idx
+            # wait(running_update)
             # shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [ChangePositionSystem(na, mc.positions[1][1]), ChangePositionSystem(co2, mc.positions[2][1]), ChangePositionSystem(co2, mc.positions[2][2])]; blockfiles=[false,false,false])
+            # shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [ChangePositionSystem(na, mc.positions[1][1])]; blockfiles=[false])
+            # if !isapprox(Float64(baseline_energy(shadow)), Float64(energy), rtol=1e-4)
+            #     println("discrepancy ! ", Float64(baseline_energy(shadow)), " vs ", Float64(energy))
+            #     # @show k
+            #     push!(reports, energy)
+            #     return reports
+            # end
             # println(Float64(energy), " vs ", Float64(baseline_energy(shadow)))
             # @show shadow.ewald.ctx.Eiks[1][30]
-            # @show idx
             # display(energy)
             # display(baseline_energy(shadow))
             # println(mc.positions)
@@ -443,6 +455,5 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
         push!(reports, energy)
     end
     wait(running_update)
-    wait(before_task)
     reports
 end
