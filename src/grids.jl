@@ -170,6 +170,25 @@ function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::For
     grid
 end
 
+
+function BlockFile(g::EnergyGrid)
+    a, b, c = g.csetup.dims .+ 1
+    block = falses(a, b, c)
+    for i in 1:a-1, j in 1:b-1, k in 1:c-1
+        if g.grid[k,j,i,1] > 1e10
+            block[i  ,j  ,k  ] = true
+            block[i+1,j  ,k  ] = true
+            block[i  ,j+1,k  ] = true
+            block[i+1,j+1,k  ] = true
+            block[i  ,j  ,k+1] = true
+            block[i+1,j  ,k+1] = true
+            block[i  ,j+1,k+1] = true
+            block[i+1,j+1,k+1] = true
+        end
+    end
+    BlockFile(g.csetup, block)
+end
+
 """
     interpolate_grid(g::EnergyGrid, point)
 
@@ -200,13 +219,16 @@ function interpolate_grid(g::EnergyGrid, point)
             X[i*8-4] = g.grid[z0,y1,x1,i]
             X[i*8  ] = g.grid[z1,y1,x1,i]
         end
-        if any(>(1e10), X)
+        if g.ewald_precision == Inf && any(>(1e10), @view X[1:8])
             # release_buffers((X,a))
             return 1e100*u"K"
         end
         a = COEFF * X
-        for k in 0:3, j in 0:3, i in 0:3
-            ret += a[1+i+4*j+16*k]*(rx^i)*(ry^j)*(rz^k)
+        rx2 = rx*rx; rxs = SVector{4,Float64}((1.0, rx, rx2, rx2*rx))
+        ry2 = ry*ry; rys = SVector{4,Float64}((1.0, ry, ry2, ry2*ry))
+        rz2 = rz*rz; rzs = SVector{4,Float64}((1.0, rz, rz2, rz2*rz))
+        @inbounds for k in 0:3, j in 0:3, i in 0:3
+            ret += a[1+i+4*j+16*k]*rxs[1+i]*rys[1+j]*rzs[1+k]
         end
     else # no derivatives
         mrx = 1 - rx

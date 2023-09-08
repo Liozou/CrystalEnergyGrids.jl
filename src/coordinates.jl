@@ -29,9 +29,8 @@ GridCoordinatesSetup() = GridCoordinatesSetup(CellMatrix(),
                                               SVector{3}((0.0u"Å", 0.0u"Å", 0.0u"Å")),
                                               SVector{3}((0.0u"Å", 0.0u"Å", 0.0u"Å")))
 
-function GridCoordinatesSetup(framework::AbstractSystem{3}, spacing::typeof(1.0u"Å"))
-    a, b, c = bounding_box(framework)
-    cell = CellMatrix(framework)
+function GridCoordinatesSetup(cell::CellMatrix, spacing::typeof(1.0u"Å"))
+    a, b, c = eachcol(cell.mat)
     size = SVector{3,typeof(1.0u"Å")}(abs.(a)) + SVector{3,typeof(1.0u"Å")}(abs.(b)) + SVector{3,typeof(1.0u"Å")}(abs.(c))
     shift = SVector{3,typeof(1.0u"Å")}(min.(a, 0.0u"Å")) + SVector{3,typeof(1.0u"Å")}(min.(b, 0.0u"Å")) + SVector{3,typeof(1.0u"Å")}(min.(c, 0.0u"Å"))
     _dims = floor.(Cint, (size ./ spacing))
@@ -40,6 +39,11 @@ function GridCoordinatesSetup(framework::AbstractSystem{3}, spacing::typeof(1.0u
     Δ = size ./ dims
     GridCoordinatesSetup(cell, spacing, dims, size, shift, unitcell, Δ)
 end
+
+function GridCoordinatesSetup(framework::AbstractSystem{3}, spacing::typeof(1.0u"Å"))
+    GridCoordinatesSetup(CellMatrix(framework), spacing)
+end
+
 
 function wrap_atom(point, cell::CellMatrix)
     abc = cell.invmat * (point isa SVector ? point : SVector{3}(point))
@@ -51,8 +55,8 @@ function offsetpoint(point, csetup::GridCoordinatesSetup)
     @. (newpoint - csetup.shift)*csetup.dims/csetup.size + 1
 end
 
-function inverse_offsetpoint(ipoint, cset::GridCoordinatesSetup)
-    @. (ipoint - 1)*cset.size/cset.dims + cset.shift
+function inverse_offsetpoint(ipoint, csetup::GridCoordinatesSetup)
+    @. (ipoint - 1)*csetup.Δ + csetup.shift
 end
 
 function abc_to_xyz(cset::GridCoordinatesSetup, i, j, k)
@@ -71,12 +75,12 @@ struct BlockFile
     block::BitArray{3}
     empty::Bool
 end
-BlockFile() = BlockFile(GridCoordinatesSetup(), BitArray{3}(undef, 0, 0, 0), true)
+BlockFile(csetup) = BlockFile(csetup, BitArray{3}(undef, 0, 0, 0), true)
 function BlockFile(csetup::GridCoordinatesSetup, block::BitArray{3})
     if any(block)
         BlockFile(csetup, block, false)
     else
-        BlockFile()
+        BlockFile(csetup)
     end
 end
 Base.isempty(x::BlockFile) = x.empty
@@ -97,7 +101,7 @@ Return a [`BlockFile`](@ref)
 function parse_blockfile(file, csetup)
     lines = readlines(file)
     num = parse(Int, popfirst!(lines))
-    num == 0 && return BlockFile()
+    num == 0 && return BlockFile(csetup)
     a, b, c = csetup.dims .+ 1
     # δmax = Int.(cld.(csetup.dims, 2))
     block = falses(a, b, c)

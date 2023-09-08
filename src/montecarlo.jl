@@ -6,22 +6,23 @@ struct MonteCarloSimulation
     cell::CellMatrix
     tailcorrection::Base.RefValue{typeof(1.0u"K")}
     coulomb::EnergyGrid
-    grids::Vector{EnergyGrid} # grids[i] is the VdW grid for atom i in ff
+    grids::Vector{EnergyGrid} # grids[i] is the VdW grid for atom i in ff.
     offsets::Vector{Int}
-    # offsets[i] is the number of molecules belonging to a kind strictly lower than i
+    # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
     idx::Vector{Vector{Int}}
     # idx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
-    # in the force field for the k-th atom in a system of kind i
+    # in the force field for the k-th atom in a system of kind i.
     charges::Vector{typeof(1.0u"e_au")}
     # charges[ix] is the charge of the atom whose of index ix in ff, i.e. the charge of the
     # k-th atom in a system of kind i is charges[idx[i][k]].
     positions::Vector{Vector{Vector{SVector{3,typeof(1.0u"Å")}}}}
-    # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
+    # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i.
     isrigid::BitVector # always set to true
-    blocks::Vector{BlockFile}
-    # blocks[i][pos] is set if pos is blocked for any atom of a species of kind i.
-    # The block has a step size of 0.15 Å.
-    bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i
+    speciesblocks::Vector{BlockFile}
+    # speciesblocks[i][pos] is set if pos is blocked for any atom of a species of kind i.
+    atomblocks::Vector{BlockFile}
+    # atomblock[ix][pos] is set if pos is blocked for all atoms of index ix in ff.
+    bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
 end
 
 function SimulationStep(mc::MonteCarloSimulation)
@@ -42,7 +43,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     U = Vector{SVector{3,typeof(1.0u"Å")}} # positions of the atoms of a system
     poss = Vector{U}[]
     indices = Tuple{Int,Int}[]
-    blocks = BlockFile[]
+    speciesblocks = BlockFile[]
     for (system, block) in zip(systems, blocksetup)
         n = length(kindsdict)+1
         kind = get!(kindsdict, (atomic_symbol(system), block), n)
@@ -50,9 +51,9 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
             push!(systemkinds, system)
             push!(poss, U[])
             if isempty(block)
-                push!(blocks, BlockFile())
+                push!(speciesblocks, BlockFile(csetup))
             else
-                push!(blocks, parse_blockfile(joinpath(getdir_RASPA(), "structures", "block", block)*".block", csetup))
+                push!(speciesblocks, parse_blockfile(joinpath(getdir_RASPA(), "structures", "block", block)*".block", csetup))
             end
         end
         push!(poss[kind], position(system))
@@ -112,10 +113,18 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         bead[i] = thisbead
     end
 
+    atomblocks = Vector{BlockFile}(undef, length(grids))
+    @inbounds for ix in 1:length(grids)
+        if isassigned(grids, ix)
+            atomblocks[ix] = BlockFile(grids[ix])
+        end
+    end
+
     ewald = IncrementalEwaldContext(EwaldContext(eframework, systems))
 
     MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets,
-                         idx, charges, poss, trues(length(idx)), blocks, bead), indices
+                         idx, charges, poss, trues(length(idx)), speciesblocks, atomblocks,
+                         bead), indices
 end
 
 """
@@ -366,9 +375,11 @@ function update_mc!(mc::MonteCarloSimulation, idx, positions)
 end
 
 
-function inblockpocket(block::BlockFile, newpos::Vector{SVector{3,typeof(1.0u"Å")}})
-    for pos in newpos
+function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, idx::Vector{Int}, newpos::Vector{SVector{3,typeof(1.0u"Å")}})
+    for (j, pos) in enumerate(newpos)
         block[pos] && return true
+        ablock = atomblocks[idx[j]]
+        ablock[pos + ablock.csetup.Δ./2] && return true
     end
     return false
 end
@@ -406,6 +417,22 @@ function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T)
     return rand() < e
 end
 
+
+function randomize_position!(positioni, j, bead, block, idx, atomblocks, d)
+    pos = positioni[j]
+    for _ in 1:30
+        posr = random_rotation(random_rotation(random_rotation(pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
+        for _ in 1:1000
+            post = random_translation(posr, d)
+            if !inblockpocket(block, atomblocks, idx, post)
+                positioni[j] = post
+                return post
+            end
+        end
+    end
+    error(lazy"Could not find a suitable position for molecule $((i,j))!")
+end
+
 """
     randomize_position!(mc::MonteCarloSimulation, idx)
 
@@ -420,19 +447,17 @@ function randomize_position!(mc::MonteCarloSimulation, (i,j))
     block = mc.blocks[i]
     k = mc.offsets[i] + j
     d = norm(sum(mc.cell.mat; dims=2))/4
-    for _ in 1:5
-        posr = random_rotation(random_rotation(random_rotation(pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
-        for _ in 1:100
-            post = random_translation(posr, d)
-            if !inblockpocket(block, post)
-                single_contribution_ewald(mc.ewald, k, post)
-                update_mc!(mc, (i,j), post)
-                return
-            end
-        end
+    post = randomize_position!(mc.positions[i], j, mc.bead[i], mc.speciesblocks[i], mc.idx[i], mc.atomblocks, d)
+    if update_ewald
+        single_contribution_ewald(mc.ewald, mc.offsets[i] + j, post)
+        update_mc!(mc, (i,j), post)
+    else
+        mc.ewald.last[] = -1 # signal the inconsistent state
     end
     error(lazy"Could not find a suitable position for molecule $((i,j))!")
 end
+
+
 
 """
     run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
@@ -451,7 +476,8 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
     for k in 1:nsteps
         idx = choose_random_species(mc)
         currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.positions[idx[1]][idx[2]]
-        newpos = if length(mc.idx[idx[1]]) == 1
+        idxi = mc.idx[idx[1]]
+        newpos = if length(idxi) == 1
             random_translation(currentposition, 1.3u"Å")
         else
             if rand() < 0.5
@@ -460,8 +486,7 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
                 random_rotation(currentposition, 30.0u"°", mc.bead[idx[1]])
             end
         end
-        block = mc.blocks[idx[1]]
-        !isempty(block) && inblockpocket(block, newpos) && continue
+        inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, idxi, newpos) && continue
         wait(running_update)
         if old_idx == idx
             if accepted

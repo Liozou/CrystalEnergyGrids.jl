@@ -297,8 +297,8 @@ end
 
 function parse_block(blockfile, framework_name, framework, molecule, spacing)
     blockpath = decide_parse_block(blockfile, molecule, framework_name)
-    isempty(blockpath) && return BlockFile()
     csetup = GridCoordinatesSetup(framework, spacing)
+    isempty(blockpath) && return BlockFile(csetup)
     block = parse_blockfile(joinpath(getdir_RASPA(), "structures", "block", blockpath)*".block", csetup)
     return block
 end
