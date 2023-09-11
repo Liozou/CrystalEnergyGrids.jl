@@ -216,7 +216,6 @@ AtomsBase.atomkeys(::RASPASystem) = (:position, :atomic_symbol, :atomic_number, 
 AtomsBase.hasatomkey(system::RASPASystem, x::Symbol)      = x in atomkeys(system)
 Base.getindex(system::RASPASystem, i::Integer, x::Symbol) = getfield(system, x)[i]
 Base.getindex(system::RASPASystem, ::Colon, x::Symbol)    = getfield(system, x)
-atomic_charge(s::RASPASystem) = s.atomic_charge
 
 """
     load_framework_RASPA(name::AbstractString, forcefield::AbstractString)
