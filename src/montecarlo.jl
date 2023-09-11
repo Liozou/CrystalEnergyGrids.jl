@@ -1,4 +1,4 @@
-export setup_montecarlo, baseline_energy, movement_energy
+export setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
 struct MonteCarloSimulation
     ff::ForceField
@@ -12,6 +12,7 @@ struct MonteCarloSimulation
     indexof::Vector{Tuple{Int,Int}}
     # indexof[m] is the index of the m-th species of the system. In particular, if there
     # are at least `j` species of kind `i`, then indexof[offsets[i]+j] == (i,j)
+    numatoms::Base.RefValue{Int} # number of atoms
     idx::Vector{Vector{Int}}
     # idx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
     # in the force field for the k-th atom in a system of kind i.
@@ -95,11 +96,13 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     end
 
     num_atoms = copy(num_framework_atoms)
+    species_numatoms = 0 # number of atoms in the mobile species
     for (i, indices) in enumerate(idx)
         mult = length(poss[i])
         for id in indices
             num_atoms[id] += mult
         end
+        species_numatoms += mult*length(indices)
     end
     tcorrection = 0.0u"K"
     for (i, ni) in enumerate(num_atoms)
@@ -169,8 +172,9 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
-    MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets, indexof,
-                         idx, charges, poss, trues(length(idx)), speciesblocks, atomblocks, beads), indices
+    MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets,
+                         indexof, Ref(species_numatoms), idx, charges, poss,
+                         trues(length(idx)), speciesblocks, atomblocks, beads), indices
 end
 
 """
@@ -284,8 +288,9 @@ function MonteCarloSimulation(mc::MonteCarloSimulation)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     MonteCarloSimulation(mc.ff, ewald, mc.cell, Ref(mc.tailcorrection[]), mc.coulomb,
-                         mc.grids, mc.offsets, mc.indexof, mc.idx, mc.charges, positions,
-                         mc.isrigid, mc.speciesblocks, mc.atomblocks, mc.bead)
+                         mc.grids, mc.offsets, mc.indexof, Ref(mc.numatoms[]), mc.idx,
+                         mc.charges, positions, mc.isrigid, mc.speciesblocks, mc.atomblocks,
+                         mc.bead)
 end
 
 function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
@@ -520,80 +525,4 @@ function randomize_position!(mc::MonteCarloSimulation, (i,j), update_ewald=true)
         mc.ewald.last[] = -1 # signal the inconsistent state
     end
     post
-end
-
-
-
-"""
-    run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
-
-Run a Monte-Carlo simulation at temperature `T` (given in K) during `nsteps`.
-"""
-function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
-    energy = baseline_energy(mc)
-    reports = [energy]
-    running_update = @spawn nothing
-    oldpos = SVector{3,typeof(1.0)}[]
-    old_idx = (0,0)
-    before = 0.0u"K"
-    after = 0.0u"K"
-    accepted = false
-    for k in 1:nsteps
-        idx = choose_random_species(mc)
-        currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.positions[idx[1]][idx[2]]
-        idxi = mc.idx[idx[1]]
-        newpos = if length(idxi) == 1
-            random_translation(currentposition, 1.3u"Å")
-        else
-            if rand() < 0.5
-                random_translation(currentposition, 1.3u"Å")
-            else
-                random_rotation(currentposition, 30.0u"°", mc.bead[idx[1]])
-            end
-        end
-        inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, idxi, newpos) && continue
-        accepted && wait(running_update)
-        if old_idx == idx
-            if accepted
-                before = after
-            # else
-            #     before = fetch(before_task) # simply keep its previous value
-            end
-            after = movement_energy(mc, idx, newpos)
-        else
-            before_task = @spawn movement_energy(mc, idx)
-            after = movement_energy(mc, idx, newpos)
-            before = fetch(before_task)
-        end
-        old_idx = idx
-        accepted = compute_accept_move(before, after, T)
-        oldpos = newpos
-        if accepted
-            running_update = @spawn update_mc!(mc, idx, oldpos) # do not use newpos since it can be changed in the next iteration before the Task is run
-            diff = after - before
-            if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
-                wait(running_update)
-                energy = baseline_energy(mc) # to avoid underflows
-            else
-                energy += diff
-            end
-
-            # wait(running_update)
-            # shadow = MonteCarloSimulation(mc)
-            # if !isapprox(Float64(baseline_energy(shadow)), Float64(energy), rtol=1e-4)
-            #     println("discrepancy ! ", Float64(baseline_energy(shadow)), " vs ", Float64(energy))
-            #     @show idx, k
-            #     push!(reports, energy)
-            #     return reports
-            # end
-            # println(Float64(energy), " vs ", Float64(baseline_energy(shadow)))
-            # @show shadow.ewald.ctx.Eiks[1][30]
-            # display(energy)
-            # display(baseline_energy(shadow))
-            # println(mc.positions)
-        end
-        push!(reports, energy)
-    end
-    accepted && wait(running_update)
-    reports
 end

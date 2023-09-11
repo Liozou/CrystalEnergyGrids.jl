@@ -563,7 +563,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
             end)
         end
     end
-    ForceField(ff.interactions, ff.sdict, ff.cutoff, name)
+    ForceField(ff.interactions, ff.sdict, ff.symbols, ff.cutoff, name)
 end
 
 function setup_probe_RASPA(framework, forcefield_framework, atom)

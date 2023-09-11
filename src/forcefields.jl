@@ -5,6 +5,7 @@ export ForceField
 struct ForceField
     interactions::Matrix{Union{InteractionRule,InteractionRuleSum}}
     sdict::IdDict{Symbol,Int}
+    symbols::Vector{Symbol}
     cutoff::typeof(1.0u"Å")
     name::String
 end
@@ -206,6 +207,10 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å
         IdDict([s => i for (i,s) in enumerate(allatoms)])
     end
     n = length(smap)
+    symbols = Vector{Symbol}(undef, n)
+    for (s, i) in smap
+        symbols[i] = Symbol(identify_atom(s))
+    end
     interactions = Matrix{Union{InteractionRule,InteractionRuleSum}}(undef, n, n)
     done = falses(n, n)
     for ((a, b), rule) in input
@@ -246,7 +251,7 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å
         end
     end
 
-    ForceField(interactions, sdict, cutoff, name)
+    ForceField(interactions, smap, symbols, cutoff, name)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", ff::ForceField)
