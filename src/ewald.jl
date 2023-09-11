@@ -166,21 +166,24 @@ function ewald_main_loop!(sums::T, allcharges, kspace::EwaldKspace, Eiks, skipco
             iz += tkzp
             # if !iszero(c) # TODO: remove zero charges when constructing EwaldContext
                 for (jy, jz, jxrange, rangeidx) in kspace.kindices
-                    Eik_xy = c*Eiky[iy+jy]*Eikz[iz+jz]
+                    Eik_yz = c*Eiky[iy+jy]*Eikz[iz+jz]
                     n = length(jxrange)
                     ofs = first(jxrange) + ix
                     if T === Vector{ComplexF64}
                         @simd for I in 1:n
-                            sums[rangeidx+I] += Eikx[ofs+I]*Eik_xy
+                            sums[rangeidx+I] += Eikx[ofs+I]*Eik_yz
                         end
                     else
                         @simd for I in 1:n
-                            sums[rangeidx+I,idxsystem] += Eikx[ofs+I]*Eik_xy
+                            sums[rangeidx+I,idxsystem] += Eikx[ofs+I]*Eik_yz
                         end
                     end
                 end
             # end
         end
+    end
+    if T !== Vector{ComplexF64}
+        sums[:,end] .= sum(sums; dims=2)
     end
     nothing
 end
@@ -442,7 +445,7 @@ function IncrementalEwaldContext(ctx::EwaldContext)
     Eiky = Vector{ComplexF64}(undef, tkyp)
     Eikz = Vector{ComplexF64}(undef, tkzp)
     tmpsums = Vector{ComplexF64}(undef, m)
-    IncrementalEwaldContext(ctx, Matrix{ComplexF64}(undef, m, n), (Eikx, Eiky, Eikz), tmpsums, Ref(-1))
+    IncrementalEwaldContext(ctx, Matrix{ComplexF64}(undef, m, n+1), (Eikx, Eiky, Eikz), tmpsums, Ref(-1))
 end
 
 """
@@ -461,7 +464,7 @@ function compute_ewald(ewald::IncrementalEwaldContext)
     framework_adsorbate = 0.0
     adsorbate_adsorbate = 0.0
     for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
-        adsorbate_contribution = sum(@view ewald.sums[idxkvec,:]; init=zero(ComplexF64))
+        adsorbate_contribution = ewald.sums[idxkvec,end]
         _re_a, _im_a = reim(adsorbate_contribution)
         temp = ewald.ctx.eframework.kfactors[idxkvec]
         _re_f, _im_f = reim(ewald.ctx.eframework.StoreRigidChargeFramework[idxkvec])
@@ -542,7 +545,7 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
     n = length(ewald.ctx.allcharges)
     @inbounds for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
         rest = ewald.ctx.eframework.StoreRigidChargeFramework[idxkvec]
-        rest += sum(@view ewald.sums[idxkvec,:]; init=zero(ComplexF64)) - ewald.sums[idxkvec,k]
+        rest += ewald.sums[idxkvec,end] - ewald.sums[idxkvec,k]
         _re_f, _im_f = reim(rest)
         _re_a, _im_a = reim(contribution[idxkvec])
         temp = ewald.ctx.eframework.kfactors[idxkvec]
@@ -563,7 +566,8 @@ Note that this modifies the underlying [`EwaldContext`](@ref) `ewald.ctx`.
 """
 function update_ewald_context!(ewald::IncrementalEwaldContext)
     k = ewald.last[]
-    ewald.sums[:,k] = ewald.tmpsums
+    ewald.sums[:,end] .+= ewald.tmpsums .- ewald.sums[:,k]
+    ewald.sums[:,k] .= ewald.tmpsums
     Eikx, Eiky, Eikz = ewald.ctx.Eiks
     newEikx, newEiky, newEikz = ewald.tmpEiks
     kx, ky, kz = ewald.ctx.eframework.kspace.ks

@@ -552,7 +552,7 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
             end
         end
         inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, idxi, newpos) && continue
-        wait(running_update)
+        accepted && wait(running_update)
         if old_idx == idx
             if accepted
                 before = after
@@ -572,7 +572,7 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
             running_update = @spawn update_mc!(mc, idx, oldpos) # do not use newpos since it can be changed in the next iteration before the Task is run
             diff = after - before
             if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
-                fetch(running_update)
+                wait(running_update)
                 energy = baseline_energy(mc) # to avoid underflows
             else
                 energy += diff
@@ -594,6 +594,6 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
         end
         push!(reports, energy)
     end
-    wait(running_update)
+    accepted && wait(running_update)
     reports
 end
