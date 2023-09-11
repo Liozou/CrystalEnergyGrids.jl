@@ -260,6 +260,33 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
     setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms)
 end
 
+"""
+    MonteCarloSimulation(mc::MonteCarloSimulation)
+
+Create a copy of `mc` that does not share its modifiable internal states (the positions and
+the Ewald state). For example, the copy and the original can be used to run Monte-Carlo
+simulations in parallel, and the state of one will not influence that of the other.
+
+!!! warn
+    Internal states that are semantically immutable are shared, although some of them are
+    technically mutable, like the value of the atom charges for instance. Modifying such a
+    state on the original or the copy can thus also modify that of the other: use
+    `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
+    modifying states outside of the API.
+"""
+function MonteCarloSimulation(mc::MonteCarloSimulation)
+    positions = [[[pos for pos in poss] for poss in positioni] for positioni in mc.positions]
+    ewaldsystems = EwaldSystem[]
+    for (i, positioni) in enumerate(positions)
+        idxi = mc.idx[i]
+        charge = [mc.charges[k] for k in idxi]
+        append!(ewaldsystems, EwaldSystem(poss, charge) for poss in positioni)
+    end
+    ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
+    MonteCarloSimulation(mc.ff, ewald, mc.cell, Ref(mc.tailcorrection[]), mc.coulomb,
+                         mc.grids, mc.offsets, mc.indexof, mc.idx, mc.charges, positions,
+                         mc.isrigid, mc.speciesblocks, mc.atomblocks, mc.bead)
+end
 
 function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
     mc.positions[i][j] = if eltype(positions) <: AbstractVector{<:AbstractFloat}
@@ -551,13 +578,11 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
                 energy += diff
             end
 
-            # @show idx
             # wait(running_update)
-            # shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [ChangePositionSystem(na, mc.positions[1][1]), ChangePositionSystem(co2, mc.positions[2][1]), ChangePositionSystem(co2, mc.positions[2][2])]; blockfiles=[false,false,false])
-            # shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [ChangePositionSystem(na, mc.positions[1][1])]; blockfiles=[false])
+            # shadow = MonteCarloSimulation(mc)
             # if !isapprox(Float64(baseline_energy(shadow)), Float64(energy), rtol=1e-4)
             #     println("discrepancy ! ", Float64(baseline_energy(shadow)), " vs ", Float64(energy))
-            #     # @show k
+            #     @show idx, k
             #     push!(reports, energy)
             #     return reports
             # end
