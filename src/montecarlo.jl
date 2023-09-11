@@ -32,43 +32,65 @@ function SimulationStep(mc::MonteCarloSimulation)
     SimulationStep(mc.ff, mc.charges, mc.positions, mc.isrigid, mc.idx, mc.cell)
 end
 
+
+struct EwaldSystem # pseudo-AbstractSystem with only positions and charges
+    position::Vector{SVector{3,typeof(1.0u"Å")}}
+    atomic_charge::Vector{typeof(1.0u"e_au")}
+end
+AtomsBase.position(x::EwaldSystem) = x.position
+AtomsBase.position(x::EwaldSystem, i::Int) = x.position[i]
+Base.getindex(x::EwaldSystem, ::Colon, s::Symbol) = getproperty(x, s)
+Base.getindex(x::EwaldSystem, i::Int, s::Symbol) = getproperty(x, s)[i]
+Base.length(x::EwaldSystem) = length(x.position)
+
+struct IdSystem # pseudo-AbstractSystem with only atomic symbols and charges
+    atomic_symbol::Vector{Symbol}
+    atomic_charge::Vector{typeof(1.0u"e_au")}
+end
+IdSystem(s::AbstractSystem{3}) = IdSystem(atomic_symbol(s), s[:,:atomic_charge])
+Base.length(s::IdSystem) = length(s.atomic_charge)
+
 function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
-                          systems::Vector{T}, ff::ForceField, eframework::EwaldFramework,
+                          systems, ff::ForceField, eframework::EwaldFramework,
                           coulomb::EnergyGrid, grids::Vector{EnergyGrid},
                           blocksetup::Vector{String},
-                          num_framework_atoms::Vector{Int}) where {T<:AbstractSystem{3}}
+                          num_framework_atoms::Vector{Int})
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
 
     kindsdict = Dict{Tuple{Vector{Symbol},String},Int}()
-    systemkinds = T[]
+    systemkinds = IdSystem[]
     U = Vector{SVector{3,typeof(1.0u"Å")}} # positions of the atoms of a system
     poss = Vector{U}[]
     indices = Tuple{Int,Int}[]
+    rev_indices = Vector{Int}[]
     speciesblocks = BlockFile[]
-    for (system, block) in zip(systems, blocksetup)
-        n = length(kindsdict)+1
-        kind = get!(kindsdict, (atomic_symbol(system), block), n)
-        if kind === n
-            push!(systemkinds, system)
+    for (i, (s, block)) in enumerate(zip(systems, blocksetup))
+        system, n = s isa Tuple ? s : (s, 1)
+        m = length(kindsdict)+1
+        kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block), m)
+        if kind === m
+            push!(systemkinds, IdSystem(system)::IdSystem)
             push!(poss, U[])
+            push!(rev_indices, Int[])
             if isempty(block)
                 push!(speciesblocks, BlockFile(csetup))
             else
                 push!(speciesblocks, parse_blockfile(joinpath(getdir_RASPA(), "structures", "block", block)*".block", csetup))
             end
         end
-        push!(poss[kind], position(system))
-        push!(indices, (kind, length(poss[kind])))
+        push!(indices, (kind, length(poss[kind])+1))
+        append!(rev_indices[kind], i for _ in 1:n)
+        append!(poss[kind], copy(position(system)::Vector{SVector{3,typeof(1.0u"Å")}}) for _ in 1:n)
     end
 
-    idx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
+    idx = [[ff.sdict[s.atomic_symbol[k]] for k in 1:length(s)] for s in systemkinds]
     charges = fill(NaN*u"e_au", length(ff.sdict))
     for (i, ids) in enumerate(idx)
         kindi = systemkinds[i]
         for (k, ix) in enumerate(ids)
-            charges[ix] = kindi[k,:atomic_charge]
+            charges[ix] = kindi.atomic_charge[k]
         end
     end
 
@@ -127,18 +149,40 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         end
     end
 
-    ewald = IncrementalEwaldContext(EwaldContext(eframework, systems))
+    ewaldsystems = EwaldSystem[]
+    for (i, positioni) in enumerate(poss)
+        idxi = idx[i]
+        charge = [charges[k] for k in idxi]
+        rev_idx = rev_indices[i]
+        bead = beads[i]
+        block = speciesblocks[i]
+        d = norm(sum(cell.mat; dims=2))/4
+        for j in 1:length(positioni)
+            s = systems[rev_idx[j]]
+            n = s isa Tuple ? s[2]::Int : 1
+            if n > 1
+                randomize_position!(positioni, j, bead, block, idxi, atomblocks, d)
+            end
+            push!(ewaldsystems, EwaldSystem(positioni[j], charge))
+        end
+    end
+
+    ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
     MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets, indexof,
                          idx, charges, poss, trues(length(idx)), speciesblocks, atomblocks, beads), indices
 end
 
 """
-    setup_montecarlo(framework, forcefield_framework::String, systems::Vector{<:AbstractSystem{3}};
+    setup_montecarlo(framework, forcefield_framework::String, systems;
                      blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å", supercell=nothing, new=false)
 
 Prepare a Monte Carlo simulation of the input list of `systems` in a `framework` with the
 given force field.
+
+A system can be either an `AbstractSystem`, or a pair `(s, n)` where `s` is an
+`AbstractSystem` and `n` is an integer. In that case, `n` systems identical to `s` will be
+added and their position and orientations randomized.
 
 `blockfiles[i]` can be set to `false` to allow the molecule `systems[i]` to go everywhere in
 the framework.
@@ -170,11 +214,12 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
 
     csetup = GridCoordinatesSetup(syst_framework, gridstep)
     length(blockfiles) == length(systems) || error("Please provide one blockfiles element per system")
-    blocksetup = [decide_parse_block(file, syst, framework) for (file, syst) in zip(blockfiles, systems)]
+    blocksetup = [decide_parse_block(file, s isa Tuple ? s[1] : s, framework) for (file, s) in zip(blockfiles, systems)]
 
     needcoulomb = false
     encountered_atoms = Set{Symbol}()
-    for system in systems
+    for s in systems
+        system = s isa Tuple ? s[1] : s
         if !needcoulomb
             needcoulomb = any(!iszero(system[i,:atomic_charge])::Bool for i in 1:length(system))
         end
@@ -215,19 +260,6 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
     setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms)
 end
 
-# function setup_montecarlo(framework, forcefield_framework::String, systemkinds::Vector{Tuple{T,Int}} where T<:AbstractSystem{3};
-#                           blockkinds=fill(nothing, length(systemkinds)), gridstep=0.15u"Å", supercell=nothing, new=false)
-#     systems = [system for (system, i) in systemkinds for _ in 1:i]
-#     blockfiles = [blockfile for (blockfile, (_, i)) in zip(blockkinds, systemkinds) for _ in 1:i]
-#     mc, indices = setup_montecarlo(framework, forcefield_framework, systems; blockfiles, gridstep, supercell, new)
-#     baseline_energy(mc)
-#     for i in 1:length(mc.positions)
-#         for j in 1:length(mc.positions[i])
-#             randomize_position!(mc, (i,j))
-#         end
-#     end
-#     indices
-# end
 
 function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
     mc.positions[i][j] = if eltype(positions) <: AbstractVector{<:AbstractFloat}
@@ -512,7 +544,7 @@ function run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
         if accepted
             running_update = @spawn update_mc!(mc, idx, oldpos) # do not use newpos since it can be changed in the next iteration before the Task is run
             diff = after - before
-            if abs(Float64(diff.framework)) > 1e99 # an atom left a blocked pocket
+            if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
                 fetch(running_update)
                 energy = baseline_energy(mc) # to avoid underflows
             else
