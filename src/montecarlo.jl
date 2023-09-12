@@ -55,7 +55,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
                           systems, ff::ForceField, eframework::EwaldFramework,
                           coulomb::EnergyGrid, grids::Vector{EnergyGrid},
                           blocksetup::Vector{String},
-                          num_framework_atoms::Vector{Int})
+                          num_framework_atoms::Vector{Int},
+                          restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,typeof(1.0u"Å")}}}}})
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
@@ -63,7 +64,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     kindsdict = Dict{Tuple{Vector{Symbol},String},Int}()
     systemkinds = IdSystem[]
     U = Vector{SVector{3,typeof(1.0u"Å")}} # positions of the atoms of a system
-    poss = Vector{U}[]
+    poss = restartpositions isa Nothing ? Vector{U}[] : restartpositions
     indices = Tuple{Int,Int}[]
     rev_indices = Vector{Int}[]
     speciesblocks = BlockFile[]
@@ -73,7 +74,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block), m)
         if kind === m
             push!(systemkinds, IdSystem(system)::IdSystem)
-            push!(poss, U[])
+            restartpositions isa Nothing && push!(poss, U[])
             push!(rev_indices, Int[])
             if isempty(block)
                 push!(speciesblocks, BlockFile(csetup))
@@ -83,7 +84,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         end
         push!(indices, (kind, length(poss[kind])+1))
         append!(rev_indices[kind], i for _ in 1:n)
-        append!(poss[kind], copy(position(system)::Vector{SVector{3,typeof(1.0u"Å")}}) for _ in 1:n)
+        restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,typeof(1.0u"Å")}}) for _ in 1:n)
     end
 
     idx = [[ff.sdict[s.atomic_symbol[k]] for k in 1:length(s)] for s in systemkinds]
@@ -162,7 +163,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         d = norm(sum(cell.mat; dims=2))/4
         for j in 1:length(positioni)
             s = systems[rev_idx[j]]
-            n = s isa Tuple ? s[2]::Int : 1
+            n = restartpositions isa Nothing && s isa Tuple ? s[2]::Int : 1
             if n > 1
                 randomize_position!(positioni, j, bead, block, idxi, atomblocks, d)
             end
@@ -179,7 +180,8 @@ end
 
 """
     setup_montecarlo(framework, forcefield_framework::String, systems;
-                     blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å", supercell=nothing, new=false)
+                     blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
+                     supercell=nothing, new=false, restart=nothing)
 
 Prepare a Monte Carlo simulation of the input list of `systems` in a `framework` with the
 given force field.
@@ -204,9 +206,12 @@ all above 24.0 Å (i.e. twice the 12.0 Å cutoff).
 
 If `new` is set, force recomputing all the grids. Otherwise, existing grids will be used
 when available.
+
+If `restart` is the path of a raspa restart file, the positions will be taken from the file.
 """
 function setup_montecarlo(framework, forcefield_framework::String, systems;
-                          blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å", supercell=nothing, new=false)
+                          blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
+                          supercell=nothing, new=false, restart=nothing)
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
     mat = stack3(bounding_box(syst_framework))
@@ -261,7 +266,9 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
         num_framework_atoms[ff.sdict[Symbol(get_atom_name(atomic_symbol(at)))]] += Π
     end
 
-    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms)
+    restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
+
+    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms, restartpositions)
 end
 
 """

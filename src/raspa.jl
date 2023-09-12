@@ -571,3 +571,34 @@ function setup_probe_RASPA(framework, forcefield_framework, atom)
     forcefield = parse_forcefield_RASPA(forcefield_framework)
     ProbeSystem(system::AbstractSystem{3}, forcefield::ForceField, atom::Symbol)
 end
+
+function read_restart_RASPA(file)
+    open(file) do io
+        for _ in 1:56; readline(io); end
+        positions = Vector{Vector{SVector{3,typeof(1.0u"Å")}}}[]
+        l = readline(io)
+        while !isempty(l)
+            num_mol = parse(Int, split(l)[4])
+            readline(io)
+            pos = position(io)
+            readline(io)
+            num_atoms = 1
+            while num_atoms < num_mol
+                parse(Int, split(readline(io))[2]) == 0 || break
+                num_atoms += 1
+            end
+            newpos = [Vector{SVector{3,typeof(1.0u"Å")}}(undef, num_atoms) for _ in 1:num_mol]
+            push!(positions, newpos)
+            seek(io, pos)
+            for j in 1:num_mol, k in 1:num_atoms
+                splits = split(readline(io))
+                @assert j == parse(Int, splits[2]) + 1
+                @assert k == parse(Int, splits[3]) + 1
+                newpos[j][k] = SVector{3,Float64}(parse.(Float64, @view splits[4:6]))*u"Å"
+            end
+            for _ in 1:(5*num_mol*num_atoms+1); readline(io); end
+            l = readline(io)
+        end
+        positions
+    end
+end
