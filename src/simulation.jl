@@ -6,11 +6,11 @@ struct SimulationSetup
 end
 
 """
-    run_montecarlo!(mc::MonteCarloSimulation, T, nsteps::Int)
+    run_montecarlo!(mc::MonteCarloSetup, T, nsteps::Int)
 
 Run a Monte-Carlo simulation at temperature `T` (given in K) during `nsteps`.
 """
-function run_montecarlo!(mc::MonteCarloSimulation, simu::SimulationSetup)
+function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     nummol = max(20, length(mc.indexof))
     energy = baseline_energy(mc)
     reports = [energy]
@@ -69,7 +69,7 @@ function run_montecarlo!(mc::MonteCarloSimulation, simu::SimulationSetup)
             end
 
             # wait(running_update)
-            # shadow = MonteCarloSimulation(mc)
+            # shadow = MonteCarloSetup(mc)
             # if !isapprox(Float64(baseline_energy(shadow)), Float64(energy), rtol=1e-4)
             #     println("discrepancy ! ", Float64(baseline_energy(shadow)), " vs ", Float64(energy))
             #     @show idx, k, idnummol

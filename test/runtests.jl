@@ -75,7 +75,7 @@ end
 
 end
 
-@testset "MonteCarloSimulation" begin
+@testset "MonteCarloSetup" begin
     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
     na = CEG.load_molecule_RASPA("Na", "TraPPE", "BoulfelfelSholl2021");
     ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");

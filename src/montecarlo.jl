@@ -1,6 +1,6 @@
 export setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
-struct MonteCarloSimulation
+struct MonteCarloSetup
     ff::ForceField
     ewald::IncrementalEwaldContext
     cell::CellMatrix
@@ -29,7 +29,7 @@ struct MonteCarloSimulation
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
 end
 
-function SimulationStep(mc::MonteCarloSimulation)
+function SimulationStep(mc::MonteCarloSetup)
     SimulationStep(mc.ff, mc.charges, mc.positions, mc.isrigid, mc.idx, mc.cell)
 end
 
@@ -172,7 +172,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
-    MonteCarloSimulation(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets,
+    MonteCarloSetup(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets,
                          indexof, Ref(species_numatoms), idx, charges, poss,
                          trues(length(idx)), speciesblocks, atomblocks, beads), indices
 end
@@ -265,7 +265,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
 end
 
 """
-    MonteCarloSimulation(mc::MonteCarloSimulation)
+    MonteCarloSetup(mc::MonteCarloSetup)
 
 Create a copy of `mc` that does not share its modifiable internal states (the positions and
 the Ewald state). For example, the copy and the original can be used to run Monte-Carlo
@@ -278,7 +278,7 @@ simulations in parallel, and the state of one will not influence that of the oth
     `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
     modifying states outside of the API.
 """
-function MonteCarloSimulation(mc::MonteCarloSimulation)
+function MonteCarloSetup(mc::MonteCarloSetup)
     positions = [[[pos for pos in poss] for poss in positioni] for positioni in mc.positions]
     ewaldsystems = EwaldSystem[]
     for (i, positioni) in enumerate(positions)
@@ -287,13 +287,13 @@ function MonteCarloSimulation(mc::MonteCarloSimulation)
         append!(ewaldsystems, EwaldSystem(poss, charge) for poss in positioni)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
-    MonteCarloSimulation(mc.ff, ewald, mc.cell, Ref(mc.tailcorrection[]), mc.coulomb,
+    MonteCarloSetup(mc.ff, ewald, mc.cell, Ref(mc.tailcorrection[]), mc.coulomb,
                          mc.grids, mc.offsets, mc.indexof, Ref(mc.numatoms[]), mc.idx,
                          mc.charges, positions, mc.isrigid, mc.speciesblocks, mc.atomblocks,
                          mc.bead)
 end
 
-function set_position!(mc::MonteCarloSimulation, (i, j), newpositions, newEiks=nothing)
+function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
     mc.positions[i][j] = if eltype(positions) <: AbstractVector{<:AbstractFloat}
         newpositions
     else
@@ -377,12 +377,12 @@ function framework_interactions(grids::Vector{EnergyGrid}, coulombgrid::EnergyGr
     end
     return FrameworkEnergyReport(vdw, direct)
 end
-function framework_interactions(mc::MonteCarloSimulation, indices::Vector{Int}, positions)
+function framework_interactions(mc::MonteCarloSetup, indices::Vector{Int}, positions)
     framework_interactions(mc.grids, mc.coulomb, mc.charges, indices, positions)
 end
 
 """
-    framework_interactions(mc::MonteCarloSimulation, i, positions)
+    framework_interactions(mc::MonteCarloSetup, i, positions)
 
 Energy contribution of the interaction between the framework and a molecule of system kind
 `i` at the given `positions`.
@@ -390,16 +390,16 @@ Energy contribution of the interaction between the framework and a molecule of s
 Only return the Van der Waals and the direct part of the Ewald summation. The reciprocal
 part can be obtained with [`compute_ewald`](@ref).
 """
-function framework_interactions(mc::MonteCarloSimulation, i::Int, positions)
+function framework_interactions(mc::MonteCarloSetup, i::Int, positions)
     framework_interactions(mc, mc.idx[i], positions)
 end
 
 """
-    baseline_energy(mc::MonteCarloSimulation)
+    baseline_energy(mc::MonteCarloSetup)
 
 Compute the energy of the current configuration.
 """
-function baseline_energy(mc::MonteCarloSimulation)
+function baseline_energy(mc::MonteCarloSetup)
     reciprocal = compute_ewald(mc.ewald)
     vdw = compute_vdw(SimulationStep(mc))
     fer = FrameworkEnergyReport()
@@ -414,7 +414,7 @@ function baseline_energy(mc::MonteCarloSimulation)
 end
 
 """
-    movement_energy(mc::MonteCarloSimulation, (i, j), positions=nothing)
+    movement_energy(mc::MonteCarloSetup, (i, j), positions=nothing)
 
 Compute the energy contribution of the `j`-th molecule of kind `i` when placed at
 `positions`. If not provided, `positions` is the current position for that molecule.
@@ -427,7 +427,7 @@ The energy difference between the new position for the molecule and the current 
     computation of the Ewald part will error.
     See also [`single_contribution_ewald`](@ref).
 """
-function movement_energy(mc::MonteCarloSimulation, idx, positions=nothing)
+function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     i, j = idx
     k = mc.offsets[i]+j
     poss = positions isa Nothing ? mc.positions[idx[1]][idx[2]] : positions
@@ -438,12 +438,12 @@ function movement_energy(mc::MonteCarloSimulation, idx, positions=nothing)
 end
 
 """
-    update_mc!(mc::MonteCarloSimulation, idx, positions)
+    update_mc!(mc::MonteCarloSetup, idx, positions)
 
 Following a call to [`movement_energy(mc, idx, positions)`](@ref), update the internal
 state of `mc` so that the species of index `idx` is now at `positions`.
 """
-function update_mc!(mc::MonteCarloSimulation, idx, positions)
+function update_mc!(mc::MonteCarloSetup, idx, positions)
     update_ewald_context!(mc.ewald)
     mc.positions[idx[1]][idx[2]] = positions
     nothing
@@ -478,7 +478,7 @@ function random_rotation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, θmax, 
     [refpos + mat*(poss - refpos) for poss in positions]
 end
 
-choose_random_species(mc::MonteCarloSimulation) = rand(mc.indexof)
+choose_random_species(mc::MonteCarloSetup) = rand(mc.indexof)
 function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T)
     b = Float64(before)
     a = Float64(after)
@@ -504,7 +504,7 @@ function randomize_position!(positioni, j, bead, block, idx, atomblocks, d)
 end
 
 """
-    randomize_position!(mc::MonteCarloSimulation, idx, update_ewald=true)
+    randomize_position!(mc::MonteCarloSetup, idx, update_ewald=true)
 
 Put the species at the given index to a random position and orientation.
 
@@ -515,7 +515,7 @@ Put the species at the given index to a random position and orientation.
 !!! warn
     `update_ewald=true` requires a prior call to [`baseline_energy(mc)`](@ref).
 """
-function randomize_position!(mc::MonteCarloSimulation, (i,j), update_ewald=true)
+function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
     d = norm(sum(mc.cell.mat; dims=2))/4
     post = randomize_position!(mc.positions[i], j, mc.bead[i], mc.blocks[i], d)
     if update_ewald

@@ -8,7 +8,7 @@ struct OutputSimulationStep
     idx::Vector{Vector{Int}}
 end
 
-function OutputSimulationStep(mc::MonteCarloSimulation)
+function OutputSimulationStep(mc::MonteCarloSetup)
     positions = Vector{SVector{3,typeof(1.0u"Å")}}(undef, mc.numatoms[])
     nummol = Vector{Int}(undef, length(mc.positions))
     k = 0
@@ -25,7 +25,7 @@ function OutputSimulationStep(mc::MonteCarloSimulation)
 end
 
 # Signal that the channel should be closed
-function OutputSimulationStep(mc::MonteCarloSimulation, ::Nothing)
+function OutputSimulationStep(mc::MonteCarloSetup, ::Nothing)
     OutputSimulationStep(mc.cell, mc.ff, SVector{3,typeof(1.0u"Å")}[], Int[], Vector{Int}[])
 end
 
