@@ -1,4 +1,4 @@
-using Test
+using Test, Random
 using CrystalEnergyGrids
 import CrystalEnergyGrids as CEG
 
@@ -231,15 +231,17 @@ end
                                                          [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
     mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
-    reportsTrio = CEG.run_montecarlo!(mcTrio, 300u"K", 40000)
+    reportsTrio = run_montecarlo!(mcTrio, SimulationSetup(300u"K", 40000))
     shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, mcTrio.positions[1][1]), CEG.ChangePositionSystem(co2, mcTrio.positions[2][1]), CEG.ChangePositionSystem(co2, mcTrio.positions[2][2])]; blockfiles=[false,false,false]);
     baseTrio = Float64(baseline_energy(mcTrio))
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])
 
-    # mc1, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [(molNaTrio, 135), molCO2_1, molCO2_2]);
-    # reports = CEG.run_montecarlo!(mc1, 300.0u"K", 100)
-    # mc2
+    Random.seed!(1);
+    mc2, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [(na, 135),]);
+    reports = run_montecarlo!(mc2, SimulationSetup(300.0u"K", 1000, "", 1000))
+    @test length(reports) == 3
+    @test Float64(reports[end]) ≈ -133235450.254986986518 rtol=0.001
 end
 
 rm(GRIDDIR; recursive=true)

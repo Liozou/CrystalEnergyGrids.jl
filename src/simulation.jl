@@ -1,9 +1,12 @@
+export SimulationSetup
+
 struct SimulationSetup
     T::typeof(1.0u"K")
     ncycles::Int
     outdir::String
     printevery::Int
 end
+SimulationSetup(T, ncycles) = SimulationSetup(T, ncycles, "", 1000)
 
 """
     run_montecarlo!(mc::MonteCarloSetup, T, nsteps::Int)

@@ -81,7 +81,9 @@ Components: """, length(o.idx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
             im1 = i-1
             println(io, "Component ", im1, " (", name, ')')
             println(io, "	Fractional-molecule-id component ", im1, ": -1")
-            println(io, "	Lambda-factors component ", im1, ":  0.000000")
+            print(io, "	Lambda-factors component ", im1, ": ")
+            join(io, " 0.000000" for _ in o.idx[i])
+            println(io)
             println(io, "	Number-of-biasing-factors component ", im1, ": 21")
             println(io, "	Biasing-factors component ", im1, ":  0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000")
             println(io, "	Maximum-CF-Lambda-change component ", im1, ": 0.500000")
@@ -90,9 +92,7 @@ Components: """, length(o.idx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
             println(io, "	Maximum-translation-in-plane-change component ", im1, ": 0.000000,0.000000,0.000000")
             println(io, "	Maximum-rotation-change component ", im1, ": 0.123456 0.123456 0.123456")
         end
-        println(io, """
-Reactions: 0
-""")
+        println(io, "\nReactions: 0\n")
         t = 0
         for (i, (name, num)) in enumerate(zip(molnames, o.nummol))
             idxi = o.idx[i]
@@ -130,12 +130,20 @@ function output_restart(file, mc::MonteCarloSetup)
 end
 
 function pdb_output_handler(file, cell::CellMatrix)
-    lengths, angles = cell_parameters(cell.mat)
-    Channel{OutputSimulationStep}(100) do channel
-        for (i, o) in enumerate(channel)
-            isempty(o.idx) && break
-            output_pdb(file, o, lengths, angles, i)
+    if isempty(file)
+        Channel{OutputSimulationStep}(1) do channel
+            for o in channel
+                isempty(o.idx) && break
+            end
         end
-        nothing
+    else
+        lengths, angles = cell_parameters(cell.mat)
+        Channel{OutputSimulationStep}(100) do channel
+            for (i, o) in enumerate(channel)
+                isempty(o.idx) && break
+                output_pdb(file, o, lengths, angles, i)
+            end
+            nothing
+        end
     end
 end
