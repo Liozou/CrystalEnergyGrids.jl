@@ -85,7 +85,7 @@ function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,typeof(1.0u"Å"
         value += v
         ∂1 .+= p1 .* buffer
         d13 = buffer[1]*buffer[3]
-        ∂2 .+= p2 .* SVector{3,Float64}((buffer[1]*buffer[2], d13, d13))
+        ∂2 .+= p2 .* SVector{3,Float64}((buffer[1]*buffer[2], d13, buffer[2]*buffer[3]))
         ∂3 += p3 * d13 * buffer[2]
     end
     (value, ∂1, ∂2, ∂3)
@@ -111,7 +111,7 @@ function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,typeof(
         value += v
         ∂1 .+= p1 .* buffer
         d13 = buffer[1]*buffer[3]
-        ∂2 .+= p2 .* SVector{3,Float64}((buffer[1]*buffer[2], d13, d13))
+        ∂2 .+= p2 .* SVector{3,Float64}((buffer[1]*buffer[2], d13, buffer[2]*buffer[3]))
         ∂3 += p3 * d13 * buffer[2]
     end
     (value, SVector{3,Float64}(∂1), SVector{3,Float64}(∂2), ∂3)

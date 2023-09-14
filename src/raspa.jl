@@ -376,8 +376,12 @@ function setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15u"â
         get!(Returns(length(atomdict)+1), atomdict, atom)
     end
     atomsidx = [atomdict[atom] for atom in atoms]
+    rev_atomdict = Vector{Symbol}(undef, length(atomdict))
+    for (at, i) in atomdict
+        rev_atomdict[i] = at
+    end
 
-    coulomb_grid_path, vdws = grid_locations(framework, forcefield_framework, keys(atomdict), gridstep, supercell)
+    coulomb_grid_path, vdws = grid_locations(framework, forcefield_framework, rev_atomdict, gridstep, supercell)
 
     needcoulomb = any(!iszero(syst_mol[i,:atomic_charge])::Bool for i in 1:length(syst_mol))
     coulomb, ewald = if needcoulomb
