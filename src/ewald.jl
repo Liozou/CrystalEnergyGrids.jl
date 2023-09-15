@@ -566,6 +566,7 @@ Note that this modifies the underlying [`EwaldContext`](@ref) `ewald.ctx`.
 """
 function update_ewald_context!(ewald::IncrementalEwaldContext)
     k = ewald.last[]
+    k ≤ 0 && return # last moved molecule bears no charge TODO: check
     ewald.sums[:,end] .+= ewald.tmpsums .- ewald.sums[:,k]
     ewald.sums[:,k] .= ewald.tmpsums
     Eikx, Eiky, Eikz = ewald.ctx.Eiks

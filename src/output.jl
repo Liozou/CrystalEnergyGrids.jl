@@ -101,8 +101,9 @@ Components: """, length(o.idx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
             println(io, "------------------------------------------------------------------------")
             for j in 0:num-1, k in 0:m-1
                 t += 1
-                pos = o.positions[t]
-                @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" j k NoUnits(pos[1]/u"Å") NoUnits(pos[2]/u"Å") NoUnits(pos[3]/u"Å")
+                abc = o.cell.invmat * o.positions[t]
+                pos = NoUnits.(o.cell.mat*(abc .- floor.(abc))./u"Å")
+                @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" j k pos[1] pos[2] pos[3]
             end
             for s in ("velocity:", "force:   "), j in 0:num-1, k in 0:m-1
                 @printf io "Adsorbate-atom-%s: %d %d     0.000000000000     0.000000000000     0.000000000000\n" s j k

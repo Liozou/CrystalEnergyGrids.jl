@@ -322,8 +322,8 @@ end
 function retrieve_or_create_grid(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework, mat, new)
     isempty(grid_path) && return EnergyGrid()
     iscoulomb = atom_or_eframework isa EwaldFramework
-    text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
     if new || !isfile(grid_path)
+        text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
         mkpath(dirname(grid_path))
         printstyled("Creating $text at $grid_path... "; color=:cyan)
         if iscoulomb

@@ -114,6 +114,12 @@ end
 
 function _set_gridpoint!(grid, i, j, k, Δ, λ, derivatives)
     value, ∂1, ∂2, ∂3 = derivatives
+    if value > 1.202723550011625e7
+        value = 2.40544710002325e7
+        ∂1 = clamp.(∂1, -1.202723550011625e7, 1.202723550011625e7)
+        ∂2 = zero(SVector{3,Float64})
+        ∂3 = 0.0
+    end
     grid[k+1,j+1,i+1,1] = value * λ
     grid[k+1,j+1,i+1,2] = ∂1[1]*Δ[1] * λ
     grid[k+1,j+1,i+1,3] = ∂1[2]*Δ[2] * λ
