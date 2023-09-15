@@ -184,7 +184,7 @@ function BlockFile(g::EnergyGrid)
     a, b, c = g.csetup.dims .+ 1
     block = falses(a, b, c)
     for i in 1:a-1, j in 1:b-1, k in 1:c-1
-        if g.grid[k,j,i,1] > 1e10
+        if g.grid[k,j,i,1] > 5e6
             block[i  ,j  ,k  ] = true
             block[i+1,j  ,k  ] = true
             block[i  ,j+1,k  ] = true
@@ -228,7 +228,7 @@ function interpolate_grid(g::EnergyGrid, point)
             X[i*8-4] = g.grid[z0,y1,x1,i]
             X[i*8  ] = g.grid[z1,y1,x1,i]
         end
-        if g.ewald_precision == Inf && any(>(1e10), @view X[1:8])
+        if g.ewald_precision == Inf && any(>(5e6), @view X[1:8])
             # release_buffers((X,a))
             return 1e100*u"K"
         end
