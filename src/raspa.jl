@@ -578,7 +578,9 @@ end
 
 function read_restart_RASPA(file)
     open(file) do io
-        for _ in 1:56; readline(io); end
+        for _ in 1:29; readline(io); end
+        numcomponents = parse(Int, split(readline(io))[2])
+        for _ in 1:(4+11*numcomponents); readline(io); end
         positions = Vector{Vector{SVector{3,typeof(1.0u"Å")}}}[]
         l = readline(io)
         while !isempty(l)
@@ -587,8 +589,8 @@ function read_restart_RASPA(file)
             pos = position(io)
             readline(io)
             num_atoms = 1
-            while num_atoms < num_mol
-                parse(Int, split(readline(io))[2]) == 0 || break
+            while true
+                parse(Int, split(readline(io))[3]) == 0 && break
                 num_atoms += 1
             end
             newpos = [Vector{SVector{3,typeof(1.0u"Å")}}(undef, num_atoms) for _ in 1:num_mol]
