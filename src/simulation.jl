@@ -4,9 +4,9 @@ export SimulationSetup
     SimulationSetup{T}
 
 Definition of the simulation setup, which must provide the following information:
-- `T` the temperature. Either a number (in K) or a function. If a function, it must take
-  two parameters: `k` the number of the current iteration and `n` the total number of
-  iterations, and must return a number (in K).
+- `T` the temperature. Either a number (in K), a list of temperatures (in K, one per cycle)
+  or a function. If a function, it must take two parameters: `k` the number of the current
+  cycle and `n` the total number of cycles, and return a temperature (in K).
 - `ncycles` the number of cycles of the simulation. Each cycle consists in `N` steps, where
   a step is a Monte-Carlo movement attempt on a random species, and `N` is the number of
   species.
@@ -15,14 +15,21 @@ Definition of the simulation setup, which must provide the following information
 - `printevery`: one record of the positions is stored every `printevery` cycles. Default to
   1000.
 """
-struct SimulationSetup{T}
-    T::T
+struct SimulationSetup
+    temperatures::Vector{typeof(1.0u"K")}
     ncycles::Int
     outdir::String
     printevery::Int
 end
-function SimulationSetup(T::Number, ncycles::Int, outdir::String, printevery::Int)
-    SimulationSetup(Returns(T), ncycles, outdir, printevery)
+function SimulationSetup(T, ncycles::Int, outdir::String, printevery::Int)
+    temperatures = if T isa Number
+        fill(T, ncycles)
+    elseif T isa Vector
+        convert(Vector{typeof(1.0u"K")}, T)
+    else
+        T.(1:ncycles, ncycles)
+    end
+    SimulationSetup(temperatures, ncycles, outdir, printevery)
 end
 SimulationSetup(T, ncycles, outdir="") = SimulationSetup(T, ncycles, outdir, 1000)
 
@@ -36,8 +43,8 @@ struct TRamp <: TemperatureFunction
         new(start, Δ)
     end
 end
-function TRamp(start::typeof(1.0u"K"), stop::typeof(1.0u"K"))
-    TRamp(start, stop-start, nothing)
+function TRamp(start, stop)
+    TRamp(convert(typeof(1.0u"K"), start), convert(typeof(1.0u"K"), stop-start), nothing)
 end
 function (tf::TRamp)(k, n)
     tf.start + tf.Δ*(k-1)/(n-1)
@@ -68,7 +75,7 @@ function (tf::TParts{N})(k, n) where N
     for i in 1:N
         frac = tf.fractions[i]
         if frac ≥ ρ
-            num_start = i==1 ? -1 : floor(Int, tf.fractions[i-1])-1
+            num_start = i==1 ? -1 : floor(Int, n*tf.fractions[i-1])-1
             num_stop = floor(Int, n*frac)
             num_current = floor(Int, n*ρ)
             return tf.parts[i](num_current - num_start, num_stop - num_start)
@@ -85,6 +92,20 @@ function TAnneal(bottom::typeof(1.0u"K"), top::typeof(1.0u"K"), wait::Float64)
         TRamp(top, bottom)
     ))
 end
+function TAnneal(sequence, wait::Number)
+    N = length(sequence)
+    TParts(ntuple(i -> begin
+                        j, o = fldmod(i, 2)
+                        (j + o*(1-wait))/(N-1)
+                       end, 2*(N-1)),
+           ntuple(i -> begin
+                        j, o = fldmod1(i, 2)
+                        seqjp1 = sequence[j+1]
+                        o == 1 ? TRamp(sequence[j], seqjp1) : Returns(seqjp1)
+                       end, 2*(N-1))
+    )
+end
+
 
 
 """
@@ -105,10 +126,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     mkpath(simu.outdir)
     output = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.cell)
     launch_output_task = @spawn put!(output, OutputSimulationStep(mc))
-    temperatures = Vector{typeof(1.0u"K")}(undef, length(simu.ncycles))
     for k in 1:simu.ncycles
-        T::typeof(1.0u"K") = simu.T(k, simu.ncycles)
-        temperatures[k] = T
+        temperature = simu.temperatures[k]
         for idnummol in 1:nummol
             if idnummol==1 && k%simu.printevery == 0
                 launch_output_task = @spawn put!(output, OutputSimulationStep(mc))
@@ -141,7 +160,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 before = fetch(before_task)::MCEnergyReport
             end
             old_idx = idx
-            accepted = compute_accept_move(before, after, T)
+            accepted = compute_accept_move(before, after, temperature)
             oldpos = newpos
             if accepted
                 wait(launch_output_task)
@@ -174,5 +193,5 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     push!(reports, energy)
     wait(launch_output_task)
     put!(output, OutputSimulationStep(mc, nothing))
-    reports, temperatures
+    reports
 end
