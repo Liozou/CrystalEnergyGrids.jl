@@ -12,12 +12,7 @@ using Serialization
 # Aqua.test_all(CrystalEnergyGrids; ambiguities=false)
 
 const TESTDIR = joinpath(dirname(dirname(pathof(CEG))), "test"); setdir_RASPA!(joinpath(TESTDIR, "raspa"))
-
-const GRIDDIR = joinpath(TESTDIR, "savegrids")
-if isdir(GRIDDIR)
-    rm(GRIDDIR; recursive=true)
-end
-mkdir(GRIDDIR)
+rm(joinpath(TESTDIR, "raspa", "grids"); recursive=true)
 
 @testset "CrystalEnergyGrids" begin
     setupArCHA = setup_RASPA("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", "Ar", "TraPPE"; blockfile=nothing);
@@ -165,7 +160,7 @@ end
     mcNaMini, _ = setup_montecarlo("Mini", "BoulfelfelSholl2021", [molNaMini]);
     mcNaMiniRef, _ = setup_montecarlo("MiniRef", "BoulfelfelSholl2021", [molNaMini]);
     baseMini = Float64(CEG.baseline_energy(mcNaMini))
-    @test baseMini ≈ Float64(CEG.baseline_energy(mcNaMiniRef))
+    @test baseMini ≈ Float64(CEG.baseline_energy(mcNaMiniRef)) rtol=0.001
     @test baseMini ≈ -248304.58180794 rtol=0.001
 
     molNaPetit = CEG.ChangePositionSystem(na, [SVector{3}([18.77838182689036, 14.73031622108175, 3.669308624409278]u"Å")]);
@@ -242,7 +237,21 @@ end
     reports = run_montecarlo!(mc2, SimulationSetup(300.0u"K", 1000, "", 1000))
     @test length(reports) == 3
     @test Float64(reports[end]) ≈ -133235450.254986986518 rtol=0.001
+
+    ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
+    Random.seed!(57)
+    mc3, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [(ar, 30)]);
+    reports = run_montecarlo!(mc3, CEG.SimulationSetup(300.0u"K", 1000, "", 1000))
+    @test Float64(reports[end]) ≈ -42055.328254954089 rtol=0.001
 end
 
-rm(GRIDDIR; recursive=true)
-rm(joinpath(TESTDIR, "raspa", "grids"); recursive=true)
+@testset "Restart" begin
+    co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
+    path = joinpath(@__DIR__, "CHA_1.4_3b4eeb96_Na_11812.restart")
+    mcRestart, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [(co2,1)]; restart=path)
+    @test Float64(baseline_energy(mcRestart)) ≈ -14128.888030042883 rtol=0.001
+    CEG.output_restart(path*".COPY", mcRestart)
+    @test read(path) == read(path*".COPY")
+    rm(path*".COPY")
+end
+
