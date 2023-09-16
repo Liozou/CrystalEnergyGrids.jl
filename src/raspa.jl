@@ -280,7 +280,7 @@ function load_molecule_RASPA(name::AbstractString, forcefield::AbstractString, f
     RASPASystem(bbox, positions, symbols, atom_numbers, mass, charges, true)
 end
 
-function decide_parse_block(blockfile, molecule, framework_name)
+function decide_parse_block(blockfile, molecule, framework_name)::String
     framework_name isa AbstractMatrix && return ""
     newblockfile = if blockfile isa Union{Bool,AbstractString}
         blockfile

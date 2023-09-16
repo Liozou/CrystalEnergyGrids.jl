@@ -445,12 +445,12 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
 end
 
 """
-    update_mc!(mc::MonteCarloSetup, idx, positions)
+    update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,typeof(1.0u"Å")}})
 
 Following a call to [`movement_energy(mc, idx, positions)`](@ref), update the internal
 state of `mc` so that the species of index `idx` is now at `positions`.
 """
-function update_mc!(mc::MonteCarloSetup, idx, positions)
+function update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,typeof(1.0u"Å")}})
     update_ewald_context!(mc.ewald)
     mc.positions[idx[1]][idx[2]] = positions
     nothing

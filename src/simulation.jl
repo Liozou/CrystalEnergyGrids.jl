@@ -18,13 +18,14 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     energy = baseline_energy(mc)
     reports = [energy]
     running_update = @spawn nothing
-    oldpos = SVector{3,typeof(1.0)}[]
+    local oldpos::Vector{SVector{3,typeof(1.0u"Å")}}
     old_idx = (0,0)
-    before = 0.0u"K"
-    after = 0.0u"K"
+    local before::MCEnergyReport
+    local after::MCEnergyReport
+    local T::typeof(1.0u"K")
     accepted = false
     mkpath(simu.outdir)
-    output = pdb_output_handler(joinpath(simu.outdir, "trajectory.pdb"), mc.cell)
+    output = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.cell)
     launch_output_task = @spawn put!(output, OutputSimulationStep(mc))
     for k in 1:simu.ncycles, idnummol in 1:nummol
         if idnummol==1 && k%simu.printevery == 0
@@ -55,7 +56,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         else
             before_task = @spawn movement_energy(mc, idx)
             after = movement_energy(mc, idx, newpos)
-            before = fetch(before_task)
+            before = fetch(before_task)::MCEnergyReport
         end
         old_idx = idx
         accepted = compute_accept_move(before, after, simu.T)
