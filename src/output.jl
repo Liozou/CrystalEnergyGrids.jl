@@ -1,5 +1,7 @@
 using Printf, Serialization
 
+export output_pdb, output_restart
+
 struct OutputSimulationStep
     cell::CellMatrix
     ff::ForceField
@@ -29,8 +31,8 @@ function OutputSimulationStep(mc::MonteCarloSetup, ::Nothing)
     OutputSimulationStep(mc.cell, mc.ff, SVector{3,typeof(1.0u"Å")}[], Int[], Vector{Int}[])
 end
 
-function output_pdb(file, o::OutputSimulationStep, (a, b, c), (α, β, γ), i)
-    open(file, "a") do io
+function output_pdb(path, o::OutputSimulationStep, (a, b, c), (α, β, γ), i)
+    open(path, "a") do io
         @printf io "MODEL %4d\n" i
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
         k = 0
@@ -46,8 +48,25 @@ function output_pdb(file, o::OutputSimulationStep, (a, b, c), (α, β, γ), i)
     end
 end
 
-function output_restart(file, o::OutputSimulationStep, (a, b, c), (α, β, γ), molnames, charges)
-    open(file, "w") do io
+"""
+    output_pdb(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc), i=0)
+
+Output a .pdb at the given `path` representing the positions of the atoms for the given
+output `o`, which corresponds to the `i`-th simulation step of the input `mc`.
+If not provided, the output `o` corresponds to the current status of `mc`.
+
+The output is appended to the file at the given `path`, if any.
+
+See also [`output_restart`](@ref).
+"""
+function output_pdb(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc), i=0)
+    lengths, angles = cell_parameters(mc.cell.mat)
+    output_pdb(path, o, lengths, angles, i)
+end
+
+
+function output_restart(path, o::OutputSimulationStep, (a, b, c), (α, β, γ), molnames, charges)
+    open(path, "w") do io
         println(io, """Cell info:
 ========================================================================
 number-of-unit-cells: 1 1 1""")
@@ -124,27 +143,37 @@ Components: """, length(o.idx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
     end
 end
 
-function output_restart(file, mc::MonteCarloSetup)
+"""
+    function output_restart(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc))
+
+Output a restart file compatible with RASPA at the given `path` for the given output `o`,
+which represents a simulation step of the input `mc`.
+If not provided, the output `o` corresponds to the current status of `mc`.
+
+See also [`output_pdb`](@ref).
+"""
+function output_restart(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc))
     lengths, angles = cell_parameters(mc.cell.mat)
     molnames = [identify_molecule([mc.ff.symbols[ix] for ix in idxi]) for idxi in mc.idx]
-    output_restart(file, OutputSimulationStep(mc), lengths, angles, molnames, mc.charges)
+    output_restart(path, o, lengths, angles, molnames, mc.charges)
 end
 
-function pdb_output_handler(file, cell::CellMatrix)
-    if isempty(file)
-        Channel{OutputSimulationStep}(1) do channel
+function pdb_output_handler(path, cell::CellMatrix)
+    taskref = Ref{Task}()
+    if isempty(path)
+        Channel{OutputSimulationStep}(1; taskref) do channel
             for o in channel
                 isempty(o.idx) && break
             end
         end
     else
         lengths, angles = cell_parameters(cell.mat)
-        Channel{OutputSimulationStep}(100) do channel
+        Channel{OutputSimulationStep}(100; taskref) do channel
             for (i, o) in enumerate(channel)
                 isempty(o.idx) && break
-                output_pdb(file, o, lengths, angles, i)
+                output_pdb(path, o, lengths, angles, i)
             end
             nothing
         end
-    end
+    end, taskref
 end

@@ -1,4 +1,4 @@
-export setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
+export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
 struct MonteCarloSetup
     ff::ForceField
@@ -335,6 +335,7 @@ struct MCEnergyReport
     inter::typeof(1.0u"K")
     reciprocal::typeof(1.0u"K")
 end
+MCEnergyReport(v, d, i, r) = MCEnergyReport(FrameworkEnergyReport(v, d), i, r)
 Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
 Base.show(io::IO, e::MCEnergyReport) = show(io, Float64(e)*u"K")
 function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
@@ -346,6 +347,7 @@ struct BaselineEnergyReport
     tailcorrection::typeof(1.0u"K")
 end
 BaselineEnergyReport(f, i, r, t) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
+BaselineEnergyReport(v, d, i, r, t) = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t)
 Base.Float64(ber::BaselineEnergyReport) = Float64(ber.er) + Float64(ber.tailcorrection/u"K")
 Base.show(io::IO, ber::BaselineEnergyReport) = show(io, Float64(ber)*u"K")
 function Base.show(io::IO, ::MIME"text/plain", b::BaselineEnergyReport)
