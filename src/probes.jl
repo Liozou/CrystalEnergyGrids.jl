@@ -106,7 +106,6 @@ function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,typeof(
         d2 = periodic_distance2_fromcartesian!(buffer, s.mat, s.invmat, ortho, safemin2, buffer2)
         d2 ≥ cutoff2 && continue
         smallest_d2 = min(smallest_d2, d2)
-        smallest_d2 < 1.0 && return (2e8, zero(SVector{3,Float64}), zero(SVector{3,Float64}), 0.0)
         v, p1, p2, p3 = derivatives_ewald(ewald, s.charges[i], d2)
         value += v
         ∂1 .+= p1 .* buffer
@@ -114,5 +113,5 @@ function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,typeof(
         ∂2 .+= p2 .* SVector{3,Float64}((buffer[1]*buffer[2], d13, buffer[2]*buffer[3]))
         ∂3 += p3 * d13 * buffer[2]
     end
-    (value, SVector{3,Float64}(∂1), SVector{3,Float64}(∂2), ∂3)
+    ((smallest_d2 < 1.0 ? Inf : value), SVector{3,Float64}(∂1), SVector{3,Float64}(∂2), ∂3)
 end

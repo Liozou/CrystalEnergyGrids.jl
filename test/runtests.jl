@@ -243,6 +243,11 @@ end
     mc3, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [(ar, 30)]);
     reports = run_montecarlo!(mc3, CEG.SimulationSetup(300.0u"K", 1000, "", 1000))
     @test Float64(reports[end]) ≈ -42055.328254954089 rtol=0.001
+
+    Random.seed!(12)
+    mc4, _ = setup_montecarlo("FAU_1.4_03f7b3ba", "BoulfelfelSholl2021", [(na, 80)])
+    reports = run_montecarlo!(mc4, SimulationSetup(300.0u"K", 1000, "", 0))
+    @test Float64(reports[end]) ≈ -5.616071362109395e7 rtol=0.001
 end
 
 @testset "Restart" begin
