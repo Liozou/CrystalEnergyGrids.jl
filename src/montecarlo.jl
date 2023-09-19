@@ -50,12 +50,10 @@ end
 struct InputChannels{MCS}
     framework::Channel{Tuple{MCS,Int,Vector{SVector{3,typeof(1.0u"Å")}}}}
     vdw::Channel{Tuple{MCS,Tuple{Int,Int},Vector{SVector{3,typeof(1.0u"Å")}}}}
-    ewald::Channel{Tuple{MCS,Int,Union{Nothing,Vector{SVector{3,typeof(1.0u"Å")}}}}}
 end
 struct OutputChannels
     framework::Channel{FrameworkEnergyReport}
     vdw::Channel{typeof(1.0u"K")}
-    ewald::Channel{typeof(1.0u"K")}
 end
 
 struct MonteCarloSetup
@@ -93,10 +91,8 @@ end
 function setup_channels()
     input_framework = Channel{Tuple{MonteCarloSetup,Int,Vector{SVector{3,typeof(1.0u"Å")}}}}(1)
     input_vdw = Channel{Tuple{MonteCarloSetup,Tuple{Int,Int},Vector{SVector{3,typeof(1.0u"Å")}}}}(1)
-    input_ewald = Channel{Tuple{MonteCarloSetup,Int,Union{Nothing,Vector{SVector{3,typeof(1.0u"Å")}}}}}(1)
     output_framework = Channel{FrameworkEnergyReport}(1)
     output_vdw = Channel{typeof(1.0u"K")}(1)
-    output_ewald = Channel{typeof(1.0u"K")}(1)
     @spawn begin # Framework task
         while true
             mc, i, poss = take!(input_framework)
@@ -109,13 +105,7 @@ function setup_channels()
             put!(output_vdw, single_contribution_vdw(SimulationStep(mc), idx, poss))
         end
     end
-    @spawn begin # Ewald task
-        while true
-            mc, k, positions = take!(input_ewald)
-            put!(output_ewald, single_contribution_ewald(mc.ewald, k, positions))
-        end
-    end
-    InputChannels(input_framework, input_vdw, input_ewald), OutputChannels(output_framework, output_vdw, output_ewald)
+    InputChannels(input_framework, input_vdw), OutputChannels(output_framework, output_vdw)
 end
 
 
@@ -493,19 +483,13 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     # never be useful in the hot loop
     isready(c_output.framework) && take!(c_output.framework)
     isready(c_output.vdw) && take!(c_output.vdw)
-    isready(c_output.ewald) && take!(c_output.ewald)
 
-    put!(c_input.ewald, (mc, k, positions))
     put!(c_input.vdw, (mc, idx, poss))
     put!(c_input.framework, (mc, i, poss))
 
     singleframework = take!(c_output.framework)
     singlevdw = take!(c_output.vdw)
-    singlereciprocal = take!(c_output.ewald)
-    # singlevdw = @spawn single_contribution_vdw(SimulationStep(mc), (i,j), poss)
-    # fer = @spawn framework_interactions(mc, i, poss)
-    # singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
-    # MCEnergyReport(fetch(fer), fetch(singlevdw), singlereciprocal)
+    singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
     MCEnergyReport(singleframework, singlevdw, singlereciprocal)
 end
 
