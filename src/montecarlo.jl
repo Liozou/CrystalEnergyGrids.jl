@@ -440,10 +440,10 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     i, j = idx
     k = mc.offsets[i]+j
     poss = positions isa Nothing ? mc.positions[idx[1]][idx[2]] : positions
-    singlevdw = @spawn single_contribution_vdw(SimulationStep(mc), (i,j), poss)
+    singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, positions)
     fer = @spawn framework_interactions(mc, i, poss)
-    singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
-    MCEnergyReport(fetch(fer), fetch(singlevdw), singlereciprocal)
+    singlevdw = single_contribution_vdw(SimulationStep(mc), (i,j), poss)
+    MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
 end
 
 """
