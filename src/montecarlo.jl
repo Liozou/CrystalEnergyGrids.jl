@@ -1,5 +1,63 @@
 export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
+
+struct FrameworkEnergyReport
+    vdw::typeof(1.0u"K")
+    direct::typeof(1.0u"K")
+end
+FrameworkEnergyReport() = FrameworkEnergyReport(0.0u"K", 0.0u"K")
+Base.Float64(f::FrameworkEnergyReport) = Float64((f.vdw + f.direct)/u"K")
+
+struct MCEnergyReport
+    framework::FrameworkEnergyReport
+    inter::typeof(1.0u"K")
+    reciprocal::typeof(1.0u"K")
+end
+MCEnergyReport(v, d, i, r) = MCEnergyReport(FrameworkEnergyReport(v, d), i, r)
+Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
+Base.show(io::IO, e::MCEnergyReport) = show(io, Float64(e)*u"K")
+function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
+    println(io, Float64(e), " = [", e.framework.vdw, " (f VdW) + ", e.framework.direct, " (f direct)] + [", e.inter, " (internal) + ", e.reciprocal, " (reciprocal)]")
+end
+
+struct BaselineEnergyReport
+    er::MCEnergyReport
+    tailcorrection::typeof(1.0u"K")
+end
+BaselineEnergyReport(f, i, r, t) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
+BaselineEnergyReport(v, d, i, r, t) = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t)
+Base.Float64(ber::BaselineEnergyReport) = Float64(ber.er) + Float64(ber.tailcorrection/u"K")
+Base.show(io::IO, ber::BaselineEnergyReport) = show(io, Float64(ber)*u"K")
+function Base.show(io::IO, ::MIME"text/plain", b::BaselineEnergyReport)
+    println(io, Float64(b), " = [", b.er.framework.vdw, " (f VdW) + ", b.er.framework.direct, " (f direct)] + [", b.er.inter, " (internal) + ", b.er.reciprocal, " (reciprocal)] + ", b.tailcorrection, " (tailcorrection)")
+end
+
+for op in (:+, :-)
+    @eval begin
+        function Base.$(op)(f1::FrameworkEnergyReport, f2::FrameworkEnergyReport)
+            FrameworkEnergyReport($op(f1.vdw, f2.vdw), $op(f1.direct, f2.direct))
+        end
+        function Base.$(op)(e1::MCEnergyReport, e2::MCEnergyReport)
+            MCEnergyReport($op(e1.framework, e2.framework), $op(e1.inter, e2.inter), $op(e1.reciprocal, e2.reciprocal))
+        end
+        function Base.$(op)(b1::BaselineEnergyReport, e2::MCEnergyReport)
+            BaselineEnergyReport($op(b1.er, e2), b1.tailcorrection)
+        end
+    end
+end
+
+
+struct InputChannels{MCS}
+    framework::Channel{Tuple{MCS,Int,Vector{SVector{3,typeof(1.0u"Å")}}}}
+    vdw::Channel{Tuple{MCS,Tuple{Int,Int},Vector{SVector{3,typeof(1.0u"Å")}}}}
+    ewald::Channel{Tuple{MCS,Int,Union{Nothing,Vector{SVector{3,typeof(1.0u"Å")}}}}}
+end
+struct OutputChannels
+    framework::Channel{FrameworkEnergyReport}
+    vdw::Channel{typeof(1.0u"K")}
+    ewald::Channel{typeof(1.0u"K")}
+end
+
 struct MonteCarloSetup
     ff::ForceField
     ewald::IncrementalEwaldContext
@@ -27,7 +85,39 @@ struct MonteCarloSetup
     atomblocks::Vector{BlockFile}
     # atomblock[ix][pos] is set if pos is blocked for all atoms of index ix in ff.
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
+    channels1::Tuple{InputChannels{MonteCarloSetup},OutputChannels}
+    channels2::Tuple{InputChannels{MonteCarloSetup},OutputChannels}
 end
+
+
+function setup_channels()
+    input_framework = Channel{Tuple{MonteCarloSetup,Int,Vector{SVector{3,typeof(1.0u"Å")}}}}(1)
+    input_vdw = Channel{Tuple{MonteCarloSetup,Tuple{Int,Int},Vector{SVector{3,typeof(1.0u"Å")}}}}(1)
+    input_ewald = Channel{Tuple{MonteCarloSetup,Int,Union{Nothing,Vector{SVector{3,typeof(1.0u"Å")}}}}}(1)
+    output_framework = Channel{FrameworkEnergyReport}(1)
+    output_vdw = Channel{typeof(1.0u"K")}(1)
+    output_ewald = Channel{typeof(1.0u"K")}(1)
+    @spawn begin # Framework task
+        while true
+            mc, i, poss = take!(input_framework)
+            put!(output_framework, framework_interactions(mc, i, poss))
+        end
+    end
+    @spawn begin # VdW task
+        while true
+            mc, idx, poss = take!(input_vdw)
+            put!(output_vdw, single_contribution_vdw(SimulationStep(mc), idx, poss))
+        end
+    end
+    @spawn begin # Ewald task
+        while true
+            mc, k, positions = take!(input_ewald)
+            put!(output_ewald, single_contribution_ewald(mc.ewald, k, positions))
+        end
+    end
+    InputChannels(input_framework, input_vdw, input_ewald), OutputChannels(output_framework, output_vdw, output_ewald)
+end
+
 
 function SimulationStep(mc::MonteCarloSetup)
     SimulationStep(mc.ff, mc.charges, mc.positions, mc.isrigid, mc.idx, mc.cell)
@@ -175,7 +265,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     MonteCarloSetup(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets,
                          indexof, Ref(species_numatoms), idx, charges, poss,
-                         trues(length(idx)), speciesblocks, atomblocks, beads), indices
+                         trues(length(idx)), speciesblocks, atomblocks, beads,
+                         setup_channels(), setup_channels()), indices
 end
 
 """
@@ -297,7 +388,7 @@ function MonteCarloSetup(mc::MonteCarloSetup)
     MonteCarloSetup(mc.ff, ewald, mc.cell, Ref(mc.tailcorrection[]), mc.coulomb,
                          mc.grids, mc.offsets, mc.indexof, Ref(mc.numatoms[]), mc.idx,
                          mc.charges, positions, mc.isrigid, mc.speciesblocks, mc.atomblocks,
-                         mc.bead)
+                         mc.bead, setup_channels(), setup_channels())
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
@@ -322,51 +413,6 @@ function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothin
     nothing
 end
 
-
-struct FrameworkEnergyReport
-    vdw::typeof(1.0u"K")
-    direct::typeof(1.0u"K")
-end
-FrameworkEnergyReport() = FrameworkEnergyReport(0.0u"K", 0.0u"K")
-Base.Float64(f::FrameworkEnergyReport) = Float64((f.vdw + f.direct)/u"K")
-
-struct MCEnergyReport
-    framework::FrameworkEnergyReport
-    inter::typeof(1.0u"K")
-    reciprocal::typeof(1.0u"K")
-end
-MCEnergyReport(v, d, i, r) = MCEnergyReport(FrameworkEnergyReport(v, d), i, r)
-Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
-Base.show(io::IO, e::MCEnergyReport) = show(io, Float64(e)*u"K")
-function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
-    println(io, Float64(e), " = [", e.framework.vdw, " (f VdW) + ", e.framework.direct, " (f direct)] + [", e.inter, " (internal) + ", e.reciprocal, " (reciprocal)]")
-end
-
-struct BaselineEnergyReport
-    er::MCEnergyReport
-    tailcorrection::typeof(1.0u"K")
-end
-BaselineEnergyReport(f, i, r, t) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
-BaselineEnergyReport(v, d, i, r, t) = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t)
-Base.Float64(ber::BaselineEnergyReport) = Float64(ber.er) + Float64(ber.tailcorrection/u"K")
-Base.show(io::IO, ber::BaselineEnergyReport) = show(io, Float64(ber)*u"K")
-function Base.show(io::IO, ::MIME"text/plain", b::BaselineEnergyReport)
-    println(io, Float64(b), " = [", b.er.framework.vdw, " (f VdW) + ", b.er.framework.direct, " (f direct)] + [", b.er.inter, " (internal) + ", b.er.reciprocal, " (reciprocal)] + ", b.tailcorrection, " (tailcorrection)")
-end
-
-for op in (:+, :-)
-    @eval begin
-        function Base.$(op)(f1::FrameworkEnergyReport, f2::FrameworkEnergyReport)
-            FrameworkEnergyReport($op(f1.vdw, f2.vdw), $op(f1.direct, f2.direct))
-        end
-        function Base.$(op)(e1::MCEnergyReport, e2::MCEnergyReport)
-            MCEnergyReport($op(e1.framework, e2.framework), $op(e1.inter, e2.inter), $op(e1.reciprocal, e2.reciprocal))
-        end
-        function Base.$(op)(b1::BaselineEnergyReport, e2::MCEnergyReport)
-            BaselineEnergyReport($op(b1.er, e2), b1.tailcorrection)
-        end
-    end
-end
 
 
 function framework_interactions(grids::Vector{EnergyGrid}, coulombgrid::EnergyGrid, charges::Vector{typeof(1.0u"e_au")}, indices::Vector{Int}, positions)
@@ -440,10 +486,27 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     i, j = idx
     k = mc.offsets[i]+j
     poss = positions isa Nothing ? mc.positions[idx[1]][idx[2]] : positions
-    singlevdw = @spawn single_contribution_vdw(SimulationStep(mc), (i,j), poss)
-    fer = @spawn framework_interactions(mc, i, poss)
-    singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
-    MCEnergyReport(fetch(fer), fetch(singlevdw), singlereciprocal)
+    c_input, c_output = positions isa Nothing ? mc.channels1 : mc.channels2
+
+    # unclog the channels if need be
+    # Note that this should only be necessary if an interrupt occured before, it should
+    # never be useful in the hot loop
+    isready(c_output.framework) && take!(c_output.framework)
+    isready(c_output.vdw) && take!(c_output.vdw)
+    isready(c_output.ewald) && take!(c_output.ewald)
+
+    put!(c_input.ewald, (mc, k, positions))
+    put!(c_input.vdw, (mc, idx, poss))
+    put!(c_input.framework, (mc, i, poss))
+
+    singleframework = take!(c_output.framework)
+    singlevdw = take!(c_output.vdw)
+    singlereciprocal = take!(c_output.ewald)
+    # singlevdw = @spawn single_contribution_vdw(SimulationStep(mc), (i,j), poss)
+    # fer = @spawn framework_interactions(mc, i, poss)
+    # singlereciprocal = single_contribution_ewald(mc.ewald, k, positions)
+    # MCEnergyReport(fetch(fer), fetch(singlevdw), singlereciprocal)
+    MCEnergyReport(singleframework, singlevdw, singlereciprocal)
 end
 
 """
