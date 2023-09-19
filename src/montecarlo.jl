@@ -13,12 +13,12 @@ struct MonteCarloSetup
     # indexof[m] is the index of the m-th species of the system. In particular, if there
     # are at least `j` species of kind `i`, then indexof[offsets[i]+j] == (i,j)
     numatoms::Base.RefValue{Int} # number of atoms
-    idx::Vector{Vector{Int}}
-    # idx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
+    ffidx::Vector{Vector{Int}}
+    # ffidx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
     # in the force field for the k-th atom in a system of kind i.
     charges::Vector{typeof(1.0u"e_au")}
     # charges[ix] is the charge of the atom whose of index ix in ff, i.e. the charge of the
-    # k-th atom in a system of kind i is charges[idx[i][k]].
+    # k-th atom in a system of kind i is charges[ffidx[i][k]].
     positions::Vector{Vector{Vector{SVector{3,typeof(1.0u"Å")}}}}
     # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i.
     isrigid::BitVector # always set to true
@@ -30,7 +30,7 @@ struct MonteCarloSetup
 end
 
 function SimulationStep(mc::MonteCarloSetup)
-    SimulationStep(mc.ff, mc.charges, mc.positions, mc.isrigid, mc.idx, mc.cell)
+    SimulationStep(mc.ff, mc.charges, mc.positions, mc.isrigid, mc.ffidx, mc.cell)
 end
 
 
@@ -87,9 +87,9 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,typeof(1.0u"Å")}}) for _ in 1:n)
     end
 
-    idx = [[ff.sdict[s.atomic_symbol[k]] for k in 1:length(s)] for s in systemkinds]
+    ffidx = [[ff.sdict[s.atomic_symbol[k]] for k in 1:length(s)] for s in systemkinds]
     charges = fill(NaN*u"e_au", length(ff.sdict))
-    for (i, ids) in enumerate(idx)
+    for (i, ids) in enumerate(ffidx)
         kindi = systemkinds[i]
         for (k, ix) in enumerate(ids)
             charges[ix] = kindi.atomic_charge[k]
@@ -98,7 +98,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     num_atoms = copy(num_framework_atoms)
     species_numatoms = 0 # number of atoms in the mobile species
-    for (i, indices) in enumerate(idx)
+    for (i, indices) in enumerate(ffidx)
         mult = length(poss[i])
         for id in indices
             num_atoms[id] += mult
@@ -155,8 +155,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     ewaldsystems = EwaldSystem[]
     for (i, positioni) in enumerate(poss)
-        idxi = idx[i]
-        charge = [charges[k] for k in idxi]
+        ffidxi = ffidx[i]
+        charge = [charges[k] for k in ffidxi]
         rev_idx = rev_indices[i]
         bead = beads[i]
         block = speciesblocks[i]
@@ -165,7 +165,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
             s = systems[rev_idx[j]]
             n = restartpositions isa Nothing && s isa Tuple ? s[2]::Int : 1
             if n > 1
-                randomize_position!(positioni, j, bead, block, idxi, atomblocks, d)
+                randomize_position!(positioni, j, bead, block, ffidxi, atomblocks, d)
             end
             push!(ewaldsystems, EwaldSystem(positioni[j], charge))
         end
@@ -174,8 +174,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
     MonteCarloSetup(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets,
-                         indexof, Ref(species_numatoms), idx, charges, poss,
-                         trues(length(idx)), speciesblocks, atomblocks, beads), indices
+                         indexof, Ref(species_numatoms), ffidx, charges, poss,
+                         trues(length(ffidx)), speciesblocks, atomblocks, beads), indices
 end
 
 """
@@ -289,13 +289,13 @@ function MonteCarloSetup(mc::MonteCarloSetup)
     positions = [[[pos for pos in poss] for poss in positioni] for positioni in mc.positions]
     ewaldsystems = EwaldSystem[]
     for (i, positioni) in enumerate(positions)
-        idxi = mc.idx[i]
-        charge = [mc.charges[k] for k in idxi]
+        ffidxi = mc.ffidx[i]
+        charge = [mc.charges[k] for k in ffidxi]
         append!(ewaldsystems, EwaldSystem(poss, charge) for poss in positioni)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     MonteCarloSetup(mc.ff, ewald, mc.cell, Ref(mc.tailcorrection[]), mc.coulomb,
-                         mc.grids, mc.offsets, mc.indexof, Ref(mc.numatoms[]), mc.idx,
+                         mc.grids, mc.offsets, mc.indexof, Ref(mc.numatoms[]), mc.ffidx,
                          mc.charges, positions, mc.isrigid, mc.speciesblocks, mc.atomblocks,
                          mc.bead)
 end
@@ -400,7 +400,7 @@ Only return the Van der Waals and the direct part of the Ewald summation. The re
 part can be obtained with [`compute_ewald`](@ref).
 """
 function framework_interactions(mc::MonteCarloSetup, i::Int, positions)
-    framework_interactions(mc, mc.idx[i], positions)
+    framework_interactions(mc, mc.ffidx[i], positions)
 end
 
 """
@@ -413,7 +413,7 @@ function baseline_energy(mc::MonteCarloSetup)
     vdw = compute_vdw(SimulationStep(mc))
     fer = FrameworkEnergyReport()
     isempty(mc.grids) && return BaselineEnergyReport(fer, vdw, reciprocal, mc.tailcorrection[])
-    for (i, indices) in enumerate(mc.idx)
+    for (i, indices) in enumerate(mc.ffidx)
         poss_i = mc.positions[i]
         for poss in poss_i
             fer += framework_interactions(mc, indices, poss)
@@ -459,10 +459,10 @@ function update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{
 end
 
 
-function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, idx::Vector{Int}, newpos::Vector{SVector{3,typeof(1.0u"Å")}})
+function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::Vector{Int}, newpos::Vector{SVector{3,typeof(1.0u"Å")}})
     for (j, pos) in enumerate(newpos)
         block[pos] && return true
-        ablock = atomblocks[idx[j]]
+        ablock = atomblocks[ffidxi[j]]
         ablock[pos + ablock.csetup.Δ./2] && return true
     end
     return false
@@ -497,13 +497,13 @@ function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T)
 end
 
 
-function randomize_position!(positioni, j, bead, block, idx, atomblocks, d)
+function randomize_position!(positioni, j, bead, block, ffidxi, atomblocks, d)
     pos = positioni[j]
     for _ in 1:30
         posr = random_rotation(random_rotation(random_rotation(pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
         for _ in 1:1000
             post = random_translation(posr, d)
-            if !inblockpocket(block, atomblocks, idx, post)
+            if !inblockpocket(block, atomblocks, ffidxi, post)
                 positioni[j] = post
                 return post
             end
@@ -526,12 +526,12 @@ Put the species at the given index to a random position and orientation.
 """
 function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
     d = norm(sum(mc.cell.mat; dims=2))/4
-    post = randomize_position!(mc.positions[i], j, mc.bead[i], mc.blocks[i], d)
+    newpos = randomize_position!(mc.positions[i], j, mc.bead[i], mc.blocks[i], d)
     if update_ewald
-        single_contribution_ewald(mc.ewald, mc.offsets[i] + j, mc.speciesblocks[i], mc.idx[i], mc.atomblocks, d)
-        update_mc!(mc, (i,j), post)
+        single_contribution_ewald(mc.ewald, mc.offsets[i] + j, newpos)
+        update_mc!(mc, (i,j), newpos)
     else
         mc.ewald.last[] = -1 # signal the inconsistent state
     end
-    post
+    newpos
 end

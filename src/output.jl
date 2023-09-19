@@ -7,7 +7,7 @@ struct OutputSimulationStep
     ff::ForceField
     positions::Vector{SVector{3,typeof(1.0u"Å")}}
     nummol::Vector{Int}
-    idx::Vector{Vector{Int}}
+    ffidx::Vector{Vector{Int}}
 end
 
 function OutputSimulationStep(mc::MonteCarloSetup)
@@ -23,7 +23,7 @@ function OutputSimulationStep(mc::MonteCarloSetup)
             end
         end
     end
-    OutputSimulationStep(mc.cell, mc.ff, positions, nummol, mc.idx)
+    OutputSimulationStep(mc.cell, mc.ff, positions, nummol, mc.ffidx)
 end
 
 # Signal that the channel should be closed
@@ -36,7 +36,7 @@ function output_pdb(path, o::OutputSimulationStep, (a, b, c), (α, β, γ), i)
         @printf io "MODEL %4d\n" i
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
         k = 0
-        for (idxi, nummoli) in zip(o.idx, o.nummol), _ in 1:nummoli, ix in idxi
+        for (ffidxi, nummoli) in zip(o.ffidx, o.nummol), _ in 1:nummoli, ix in ffidxi
             symb = String(o.ff.symbols[ix])
             k += 1
             abc = o.cell.invmat * o.positions[k]
@@ -94,14 +94,14 @@ Target-box-shape-change: 0.500000
 Target-Gibbs-volume-change: 0.500000
 
 
-Components: """, length(o.idx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
+Components: """, length(o.ffidx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
 ========================================================================""")
         for (i, name) in enumerate(molnames)
             im1 = i-1
             println(io, "Component ", im1, " (", name, ')')
             println(io, "	Fractional-molecule-id component ", im1, ": -1")
             print(io, "	Lambda-factors component ", im1, ": ")
-            join(io, " 0.000000" for _ in o.idx[i])
+            join(io, " 0.000000" for _ in o.ffidx[i])
             println(io)
             println(io, "	Number-of-biasing-factors component ", im1, ": 21")
             println(io, "	Biasing-factors component ", im1, ":  0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000")
@@ -114,8 +114,8 @@ Components: """, length(o.idx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
         println(io, "\nReactions: 0\n")
         t = 0
         for (i, (name, num)) in enumerate(zip(molnames, o.nummol))
-            idxi = o.idx[i]
-            m = length(idxi)
+            ffidxi = o.ffidx[i]
+            m = length(ffidxi)
             println(io, "Component: ", i-1, "     Adsorbate    ", num, " molecules of ", name)
             println(io, "------------------------------------------------------------------------")
             for j in 0:num-1, k in 0:m-1
@@ -127,7 +127,7 @@ Components: """, length(o.idx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
             for s in ("velocity:", "force:   "), j in 0:num-1, k in 0:m-1
                 @printf io "Adsorbate-atom-%s %d %d     0.000000000000     0.000000000000     0.000000000000\n" s j k
             end
-            for j in 0:num-1, (k, ix) in enumerate(idxi)
+            for j in 0:num-1, (k, ix) in enumerate(ffidxi)
                 @printf io "Adsorbate-atom-charge:   %d %d%19.12f\n" j (k-1) NoUnits(charges[ix]/u"e_au")
             end
             for j in 0:num-1, k in 0:m-1
@@ -154,7 +154,7 @@ See also [`output_pdb`](@ref).
 """
 function output_restart(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc))
     lengths, angles = cell_parameters(mc.cell.mat)
-    molnames = [identify_molecule([mc.ff.symbols[ix] for ix in idxi]) for idxi in mc.idx]
+    molnames = [identify_molecule([mc.ff.symbols[ix] for ix in ffidxi]) for ffidxi in mc.ffidx]
     output_restart(path, o, lengths, angles, molnames, mc.charges)
 end
 
@@ -163,14 +163,14 @@ function pdb_output_handler(path, cell::CellMatrix)
     if isempty(path)
         Channel{OutputSimulationStep}(1; taskref) do channel
             for o in channel
-                isempty(o.idx) && break
+                isempty(o.ffidx) && break
             end
         end
     else
         lengths, angles = cell_parameters(cell.mat)
         Channel{OutputSimulationStep}(100; taskref) do channel
             for (i, o) in enumerate(channel)
-                isempty(o.idx) && break
+                isempty(o.ffidx) && break
                 output_pdb(path, o, lengths, angles, i)
             end
             nothing

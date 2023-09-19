@@ -333,8 +333,8 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     end
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
     allvals .= NaN
-    Base.Threads.@threads for idx in CartesianIndices((numA, numB, numC))
-        iA, iB, iC = Tuple(idx)
+    Base.Threads.@threads for iABC in CartesianIndices((numA, numB, numC))
+        iA, iB, iC = Tuple(iABC)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         for (k, pos) in enumerate(rotpos)
             ofs = if num_rotate < 0

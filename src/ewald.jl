@@ -341,7 +341,7 @@ function move_one_system!(Eiks, ctx::EwaldContext, positions, ofs)
         make_line_neg!(Eikz, 1 + jofs*tkzp, kz, cispi(2*pz))
     end
 end
-move_one_system!(ctx::EwaldContext, idx::Int, positions) = move_one_system!(ctx.Eiks, ctx, positions, ctx.offsets[idx])
+move_one_system!(ctx::EwaldContext, k::Int, positions) = move_one_system!(ctx.Eiks, ctx, positions, ctx.offsets[k])
 
 """
     EwaldContext(eframework::EwaldFramework, systems)
@@ -409,10 +409,10 @@ function compute_ewald(ctx::EwaldContext, skipcontribution=0)
     ewald_main_loop!(newcharges, ctx.allcharges, ctx.eframework.kspace, ctx.Eiks, skipcontribution)
     framework_adsorbate = 0.0
     adsorbate_adsorbate = 0.0
-    for idx in 1:ctx.eframework.kspace.num_kvecs
-        temp = ctx.eframework.kfactors[idx]
-        _re_f, _im_f = reim(ctx.eframework.StoreRigidChargeFramework[idx])
-        _re_a, _im_a = reim(newcharges[idx])
+    for i_kvec in 1:ctx.eframework.kspace.num_kvecs
+        temp = ctx.eframework.kfactors[i_kvec]
+        _re_f, _im_f = reim(ctx.eframework.StoreRigidChargeFramework[i_kvec])
+        _re_a, _im_a = reim(newcharges[i_kvec])
         framework_adsorbate += temp*(_re_f*_re_a + _im_f*_im_a)
         adsorbate_adsorbate += temp*(_re_a*_re_a + _im_a*_im_a)
     end

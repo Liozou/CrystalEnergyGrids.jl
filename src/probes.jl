@@ -43,10 +43,10 @@ function ProbeSystem(framework::AbstractSystem{3}, forcefield::ForceField, atom:
                 iyz = iy*nnz + izn
                 stepyz = iy*wy + stepz
                 for ix in (iz==iy==0):(nx-1)
-                    idx = ix*nnynz + iyz
+                    ixyz = ix*nnynz + iyz
                     stepxyz = ix*wx + stepyz
                     for i in 1:n
-                        newpositions[idx + i] = newpositions[i] + stepxyz
+                        newpositions[ixyz + i] = newpositions[i] + stepxyz
                     end
                 end
             end

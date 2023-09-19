@@ -59,9 +59,6 @@ end
 Run a Monte-Carlo simulation at temperature `T` (given in K) during `nsteps`.
 """
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
-    # constants
-    nummol = max(20, length(mc.indexof))
-
     # report
     energy = baseline_energy(mc)
     reports = [energy]
@@ -73,6 +70,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     local after::MCEnergyReport
 
     # value initialisations
+    nummol = max(20, length(mc.indexof))
     old_idx = (0,0)
     accepted = false
     translation_dmax = 1.3u"Å"
@@ -94,7 +92,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         for idnummol in 1:nummol
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
-            idxi = mc.idx[idx[1]]
+            ffidxi = mc.ffidx[idx[1]]
 
             # currentposition is the position of that species
             currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.positions[idx[1]][idx[2]]
@@ -102,7 +100,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             istranslation = false
             isrotation = false
             # newpos is the position after the trial move
-            newpos = if length(idxi) == 1
+            newpos = if length(ffidxi) == 1
                 istranslation = true
                 attempted_translations += 1
                 random_translation(currentposition, translation_dmax)
@@ -119,7 +117,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             end
 
             # check blocking pockets to refuse the trial early when possible
-            if inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, idxi, newpos)
+            if inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, ffidxi, newpos)
                 # note that if the move is blocked here, neither oldpos, old_idx nor
                 # accepted are updated.
                 # This is allows waiting for the next cycle before waiting on the

@@ -21,8 +21,8 @@ struct SimulationStep{N}
     positions::Vector{Vector{Vector{SVector{N,typeof(1.0u"Å")}}}}
     # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
     isrigid::BitVector # isrigid[i] applies to all systems of kind i
-    idx::Vector{Vector{Int}}
-    # idx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
+    ffidx::Vector{Vector{Int}}
+    # ffidx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
     # in the force field for the k-th atom in a system of kind i
     cell::CellMatrix
 end
@@ -56,9 +56,9 @@ function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:Abstract
                         cell::CellMatrix,
                         isrigid::BitVector=trues(length(systemkinds)))
     @assert length(systemkinds) == length(positions) == length(isrigid)
-    idx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
+    ffidx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
     charges = [[uconvert(u"e_au", s[k,:atomic_charge])::typeof(1.0u"e_au") for k in 1:length(s)] for s in systemkinds]
-    SimulationStep(ff, charges, positions, isrigid, idx, cell)
+    SimulationStep(ff, charges, positions, isrigid, ffidx, cell)
 end
 
 """
@@ -141,7 +141,7 @@ function update_position(step::SimulationStep, (i,j), args...)
     newpositions = copy(step.positions)
     newpositions[i] = copy(step.positions[i])
     length(args) == 2 && (newpositions[i][j] = copy(newpositions[i][j]))
-    x = SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.idx, step.cell)
+    x = SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.ffidx, step.cell)
     update_position!(x, (i,j), args...)
     x
 end
@@ -166,7 +166,7 @@ function unalias_position(step, (i,j))
     newpositions = copy(step.positions)
     newpositions[i] = copy(step.positions[i])
     newpositions[i][j] = copy(newpositions[i][j])
-    SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.idx, step.cell)
+    SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.ffidx, step.cell)
 end
 
 function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,typeof(1.0u"Å")}}) where N
@@ -174,7 +174,7 @@ function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,
     energy = 0.0u"K"
     cutoff2 = step.ff.cutoff^2
     isinf(step.ff.cutoff) || error("finite cutoff not implemented")
-    indices = step.idx[i]
+    indices = step.ffidx[i]
     for k1 in 1:n
         ix1 = indices[k1]
         for k2 in (i+1):n
@@ -190,16 +190,16 @@ end
 
 function energy_nocutoff(step::SimulationStep)
     energy = 0.0u"K"
-    nkinds = length(step.idx)
+    nkinds = length(step.ffidx)
     for i1 in 1:nkinds
         poskind1 = step.positions[i1]
-        idx1 = step.idx[i1]
+        idx1 = step.ffidx[i1]
         rigid1 = step.isrigid[i1]
         for (j1, pos1) in enumerate(poskind1)
             rigid1 || (energy += energy_intra(step, i1, pos1))
             for i2 in i1:nkinds
                 poskind2 = step.positions[i2]
-                idx2 = step.idx[i2]
+                idx2 = step.ffidx[i2]
                 for j2 in (j1*(i1==i2)+1):length(poskind2)
                     pos2 = poskind2[j2]
                     for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
@@ -214,19 +214,19 @@ end
 
 function compute_vdw(step::SimulationStep)
     energy = 0.0u"K"
-    nkinds = length(step.idx)
+    nkinds = length(step.ffidx)
     cutoff2 = step.ff.cutoff^2
     buffer = MVector{3,typeof(1.0u"Å")}(undef)
     buffer2 = MVector{3,Float64}(undef)
     for i1 in 1:nkinds
         poskind1 = step.positions[i1]
-        idx1 = step.idx[i1]
+        idx1 = step.ffidx[i1]
         rigid1 = step.isrigid[i1]
         for (j1, pos1) in enumerate(poskind1)
             rigid1 || (energy += energy_intra(step, i1, pos1))
             for i2 in i1:nkinds
                 poskind2 = step.positions[i2]
-                idx2 = step.idx[i2]
+                idx2 = step.ffidx[i2]
                 for j2 in (j1*(i1==i2)+1):length(poskind2)
                     pos2 = poskind2[j2]
                     for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
@@ -245,14 +245,14 @@ end
 
 function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, positions::Vector{SVector{N,typeof(1.0u"Å")}}) where N
     energy = step.isrigid[i1] ? 0.0u"K" : energy_intra(step, i1, positions)
-    nkinds = length(step.idx)
+    nkinds = length(step.ffidx)
     cutoff2 = step.ff.cutoff^2
     buffer = MVector{3,typeof(1.0u"Å")}(undef)
     buffer2 = MVector{3,Float64}(undef)
-    idx1 = step.idx[i1]
+    idx1 = step.ffidx[i1]
     for i2 in 1:nkinds
         poskind2 = step.positions[i2]
-        idx2 = step.idx[i2]
+        idx2 = step.ffidx[i2]
         for j2 in 1:length(poskind2)
             i1 == i2 && j1 == j2 && continue
             pos2 = poskind2[j2]
