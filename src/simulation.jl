@@ -59,36 +59,80 @@ end
 Run a Monte-Carlo simulation at temperature `T` (given in K) during `nsteps`.
 """
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
+    # constants
     nummol = max(20, length(mc.indexof))
+
+    # report
     energy = baseline_energy(mc)
     reports = [energy]
+
+    # idle initialisations
     running_update = @spawn nothing
     local oldpos::Vector{SVector{3,typeof(1.0u"Å")}}
-    old_idx = (0,0)
     local before::MCEnergyReport
     local after::MCEnergyReport
+
+    # value initialisations
+    old_idx = (0,0)
     accepted = false
+    translation_dmax = 1.3u"Å"
+    rotation_θmax = 30.0u"°"
+
+    # record and outputs
     mkpath(simu.outdir)
     output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.cell)
     record_task = @spawn simu.record(OutputSimulationStep(mc), energy, 0, mc, simu)
-    pos_min_energy = OutputSimulationStep(mc)
+
+    # main loop
     for k in 1:simu.ncycles
         temperature = simu.temperatures[k]
+        accepted_translations = 0
+        accepted_rotations = 0
+        attempted_translations = 0
+        attempted_rotations = 0
+
         for idnummol in 1:nummol
+            # choose the species on which to attempt a move
             idx = choose_random_species(mc)
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.positions[idx[1]][idx[2]]
             idxi = mc.idx[idx[1]]
+
+            # currentposition is the position of that species
+            currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.positions[idx[1]][idx[2]]
+
+            istranslation = false
+            isrotation = false
+            # newpos is the position after the trial move
             newpos = if length(idxi) == 1
-                random_translation(currentposition, 1.3u"Å")
+                istranslation = true
+                attempted_translations += 1
+                random_translation(currentposition, translation_dmax)
             else
                 if rand() < 0.5
-                    random_translation(currentposition, 1.3u"Å")
+                    istranslation = true
+                    attempted_translations += 1
+                    random_translation(currentposition, translation_dmax)
                 else
-                    random_rotation(currentposition, 30.0u"°", mc.bead[idx[1]])
+                    isrotation = true
+                    attempted_rotations += 1
+                    random_rotation(currentposition, rotation_θmax, mc.bead[idx[1]])
                 end
             end
-            inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, idxi, newpos) && continue
+
+            # check blocking pockets to refuse the trial early when possible
+            if inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, idxi, newpos)
+                # note that if the move is blocked here, neither oldpos, old_idx nor
+                # accepted are updated.
+                # This is allows waiting for the next cycle before waiting on the
+                # running_update task.
+                # However it will still be taken it into account for the translation and
+                # rotation trial values updates.
+                continue
+            end
+
+            # if the previous move was accepted, wait for mc to be completely up to date
+            # before computing
             accepted && wait(running_update)
+
             if old_idx == idx
                 if accepted
                     before = after
@@ -107,6 +151,11 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             if accepted
                 running_update = @spawn update_mc!(mc, idx, oldpos) # do not use newpos since it can be changed in the next iteration before the Task is run
                 diff = after - before
+                if istranslation
+                    accepted_translations += 1
+                elseif isrotation
+                    accepted_rotations += 1
+                end
                 if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
                     wait(running_update)
                     energy = baseline_energy(mc) # to avoid underflows
@@ -130,6 +179,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             end
         end
         # end of cycle
+        translation_ratio = accepted_translations / attempted_translations
         report_now = k%simu.printevery == 0
         if !(simu.record isa Returns) || report_now
             accepted && wait(running_update)
@@ -144,15 +194,19 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 record_task = @spawn simu.record(o, energy, k, mc, simu)
             end
         end
+
+        rotation_ratio = accepted_rotations / attempted_rotations
+        if !isnan(translation_ratio)
+            translation_dmax *= 1 + (translation_ratio - 0.5)*(1.0 + 3*translation_ratio)*100/(99+k)
+        end
+        if !isnan(rotation_ratio)
+            rotation_θmax = (k-1)/k*rotation_θmax + rotation_ratio/k*120u"°"
+        end
     end
     wait(record_task)
     accepted && wait(running_update)
     push!(reports, energy)
     put!(output, OutputSimulationStep(mc, nothing))
-    if !isempty(simu.outdir)
-        output_pdb(joinpath(simu.outdir, "min_energy.pdb"), mc, pos_min_energy)
-        output_restart(joinpath(simu.outdir, "min_energy.restart"), mc, pos_min_energy)
-    end
     wait(output_task[])
     reports
 end

@@ -80,10 +80,15 @@ mutable struct RMinimumEnergy <: RecordFunction
     minpos::OutputSimulationStep
     RMinimumEnergy() = new(BaselineEnergyReport(Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
 end
-function (record::RMinimumEnergy)(o::OutputSimulationStep, e::BaselineEnergyReport, _, _, _)
+function (record::RMinimumEnergy)(o::OutputSimulationStep, e::BaselineEnergyReport, k::Int,
+                                  mc::MonteCarloSetup, simu::SimulationSetup)
     if Float64(e) < Float64(record.mine)
         record.mine = e
         record.minpos = o
+    end
+    if k == simu.ncycles && !isempty(simu.outdir)
+        output_pdb(joinpath(simu.outdir, "min_energy.pdb"), mc, record.minpos)
+        output_restart(joinpath(simu.outdir, "min_energy.restart"), mc, record.minpos)
     end
     nothing
 end
