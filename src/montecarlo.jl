@@ -1,36 +1,23 @@
 export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
 struct MonteCarloSetup
-    ff::ForceField
+    step::SimulationStep{3}
+    # step contains all the information that is not related to the framework nor to Ewald.
+    # It contains all the information necessary to compute the species-species VdW energy.
     ewald::IncrementalEwaldContext
-    cell::CellMatrix
     tailcorrection::Base.RefValue{typeof(1.0u"K")}
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[i] is the VdW grid for atom i in ff.
     offsets::Vector{Int}
     # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
-    indexof::Vector{Tuple{Int,Int}}
-    # indexof[m] is the index of the m-th species of the system. In particular, if there
-    # are at least `j` species of kind `i`, then indexof[offsets[i]+j] == (i,j)
+    indices::Set{Tuple{Int,Int}}
+    # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
     numatoms::Base.RefValue{Int} # number of atoms
-    ffidx::Vector{Vector{Int}}
-    # ffidx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
-    # in the force field for the k-th atom in a system of kind i.
-    charges::Vector{typeof(1.0u"e_au")}
-    # charges[ix] is the charge of the atom whose of index ix in ff, i.e. the charge of the
-    # k-th atom in a system of kind i is charges[ffidx[i][k]].
-    positions::Vector{Vector{Vector{SVector{3,typeof(1.0u"Å")}}}}
-    # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i.
-    isrigid::BitVector # always set to true
     speciesblocks::Vector{BlockFile}
     # speciesblocks[i][pos] is set if pos is blocked for any atom of a species of kind i.
     atomblocks::Vector{BlockFile}
     # atomblock[ix][pos] is set if pos is blocked for all atoms of index ix in ff.
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
-end
-
-function SimulationStep(mc::MonteCarloSetup)
-    SimulationStep(mc.ff, mc.charges, mc.positions, mc.isrigid, mc.ffidx, mc.cell)
 end
 
 
@@ -118,13 +105,13 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     n = length(poss)
     offsets = Vector{Int}(undef, n)
     offsets[1] = 0
-    indexof = Tuple{Int,Int}[]
+    indices_list = Tuple{Int,Int}[]
     for i in 1:(n-1)
         numi = length(poss[i])
         offsets[i+1] = offsets[i] + numi
-        append!(indexof, (i,j) for j in 1:length(poss[i]))
+        append!(indices_list, (i,j) for j in 1:length(poss[i]))
     end
-    append!(indexof, (n,j) for j in 1:length(poss[n]))
+    append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
     buffer = MVector{3,typeof(1.0u"Å")}(undef)
     buffer2 = MVector{3,Float64}(undef)
@@ -173,9 +160,9 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
-    MonteCarloSetup(ff, ewald, cell, Ref(tcorrection), coulomb, grids, offsets,
-                         indexof, Ref(species_numatoms), ffidx, charges, poss,
-                         trues(length(ffidx)), speciesblocks, atomblocks, beads), indices
+    MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell),
+                    ewald, Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
+                    Ref(species_numatoms), speciesblocks, atomblocks, beads), indices
 end
 
 """
@@ -286,22 +273,21 @@ simulations in parallel, and the state of one will not influence that of the oth
     modifying states outside of the API.
 """
 function MonteCarloSetup(mc::MonteCarloSetup)
-    positions = [[[pos for pos in poss] for poss in positioni] for positioni in mc.positions]
+    positions = [[[pos for pos in poss] for poss in positioni] for positioni in mc.step.positions]
     ewaldsystems = EwaldSystem[]
     for (i, positioni) in enumerate(positions)
-        ffidxi = mc.ffidx[i]
-        charge = [mc.charges[k] for k in ffidxi]
+        ffidxi = mc.step.ffidx[i]
+        charge = [mc.step.charges[k] for k in ffidxi]
         append!(ewaldsystems, EwaldSystem(poss, charge) for poss in positioni)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
-    MonteCarloSetup(mc.ff, ewald, mc.cell, Ref(mc.tailcorrection[]), mc.coulomb,
-                         mc.grids, mc.offsets, mc.indexof, Ref(mc.numatoms[]), mc.ffidx,
-                         mc.charges, positions, mc.isrigid, mc.speciesblocks, mc.atomblocks,
-                         mc.bead)
+    MonteCarloSetup(SimulationStep(mc.step.ff, mc.step.charges, positions, mc.step.isrigid, mc.step.ffidx),
+                    ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
+                    mc.indices, Ref(mc.numatoms[]), mc.speciesblocks, mc.atomblocks, mc.bead)
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
-    mc.positions[i][j] = if eltype(positions) <: AbstractVector{<:AbstractFloat}
+    mc.step.positions[i][j] = if eltype(positions) <: AbstractVector{<:AbstractFloat}
         newpositions
     else
         (NoUnits.(newpositions[j]/u"Å") for j in 1:length(newpositions))
@@ -387,7 +373,7 @@ function framework_interactions(grids::Vector{EnergyGrid}, coulombgrid::EnergyGr
     return FrameworkEnergyReport(vdw, direct)
 end
 function framework_interactions(mc::MonteCarloSetup, indices::Vector{Int}, positions)
-    framework_interactions(mc.grids, mc.coulomb, mc.charges, indices, positions)
+    framework_interactions(mc.grids, mc.coulomb, mc.step.charges, indices, positions)
 end
 
 """
@@ -400,7 +386,7 @@ Only return the Van der Waals and the direct part of the Ewald summation. The re
 part can be obtained with [`compute_ewald`](@ref).
 """
 function framework_interactions(mc::MonteCarloSetup, i::Int, positions)
-    framework_interactions(mc, mc.ffidx[i], positions)
+    framework_interactions(mc, mc.step.ffidx[i], positions)
 end
 
 """
@@ -410,11 +396,11 @@ Compute the energy of the current configuration.
 """
 function baseline_energy(mc::MonteCarloSetup)
     reciprocal = compute_ewald(mc.ewald)
-    vdw = compute_vdw(SimulationStep(mc))
+    vdw = compute_vdw(mc.step)
     fer = FrameworkEnergyReport()
     isempty(mc.grids) && return BaselineEnergyReport(fer, vdw, reciprocal, mc.tailcorrection[])
-    for (i, indices) in enumerate(mc.ffidx)
-        poss_i = mc.positions[i]
+    for (i, indices) in enumerate(mc.step.ffidx)
+        poss_i = mc.step.positions[i]
         for poss in poss_i
             fer += framework_interactions(mc, indices, poss)
         end
@@ -439,10 +425,10 @@ The energy difference between the new position for the molecule and the current 
 function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     i, j = idx
     k = mc.offsets[i]+j
-    poss = positions isa Nothing ? mc.positions[idx[1]][idx[2]] : positions
+    poss = positions isa Nothing ? mc.step.positions[idx[1]][idx[2]] : positions
     singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, positions)
     fer = @spawn framework_interactions(mc, i, poss)
-    singlevdw = single_contribution_vdw(SimulationStep(mc), (i,j), poss)
+    singlevdw = single_contribution_vdw(mc.step, (i,j), poss)
     MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
 end
 
@@ -454,7 +440,7 @@ state of `mc` so that the species of index `idx` is now at `positions`.
 """
 function update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,typeof(1.0u"Å")}})
     update_ewald_context!(mc.ewald)
-    mc.positions[idx[1]][idx[2]] = positions
+    mc.step.positions[idx[1]][idx[2]] = positions
     nothing
 end
 
@@ -487,7 +473,7 @@ function random_rotation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, θmax, 
     [refpos + mat*(poss - refpos) for poss in positions]
 end
 
-choose_random_species(mc::MonteCarloSetup) = rand(mc.indexof)
+choose_random_species(mc::MonteCarloSetup) = rand(mc.indices)
 function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T)
     b = Float64(before)
     a = Float64(after)
@@ -525,8 +511,8 @@ Put the species at the given index to a random position and orientation.
     `update_ewald=true` requires a prior call to [`baseline_energy(mc)`](@ref).
 """
 function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
-    d = norm(sum(mc.cell.mat; dims=2))/4
-    newpos = randomize_position!(mc.positions[i], j, mc.bead[i], mc.blocks[i], d)
+    d = norm(sum(mc.step.cell.mat; dims=2))/4
+    newpos = randomize_position!(mc.step.positions[i], j, mc.bead[i], mc.blocks[i], d)
     if update_ewald
         single_contribution_ewald(mc.ewald, mc.offsets[i] + j, newpos)
         update_mc!(mc, (i,j), newpos)

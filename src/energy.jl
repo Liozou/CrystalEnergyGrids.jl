@@ -17,7 +17,8 @@ systems of kind "water".
 struct SimulationStep{N}
     ff::ForceField
     charges::Vector{typeof(1.0u"e_au")}
-    # charges[i][k] is the charge of the k-th atom in a system of kind i
+    # charges[ix] is the charge of the atom whose of index ix in ff, i.e. the charge of the
+    # k-th atom in a system of kind i is charges[ffidx[i][k]].
     positions::Vector{Vector{Vector{SVector{N,typeof(1.0u"Å")}}}}
     # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
     isrigid::BitVector # isrigid[i] applies to all systems of kind i

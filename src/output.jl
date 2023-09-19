@@ -12,9 +12,9 @@ end
 
 function OutputSimulationStep(mc::MonteCarloSetup)
     positions = Vector{SVector{3,typeof(1.0u"Å")}}(undef, mc.numatoms[])
-    nummol = Vector{Int}(undef, length(mc.positions))
+    nummol = Vector{Int}(undef, length(mc.step.positions))
     k = 0
-    for (i, positioni) in enumerate(mc.positions)
+    for (i, positioni) in enumerate(mc.step.positions)
         nummol[i] = length(positioni)
         for poss in positioni
             for pos in poss
@@ -23,12 +23,12 @@ function OutputSimulationStep(mc::MonteCarloSetup)
             end
         end
     end
-    OutputSimulationStep(mc.cell, mc.ff, positions, nummol, mc.ffidx)
+    OutputSimulationStep(mc.step.cell, mc.step.ff, positions, nummol, mc.step.ffidx)
 end
 
 # Signal that the channel should be closed
 function OutputSimulationStep(mc::MonteCarloSetup, ::Nothing)
-    OutputSimulationStep(mc.cell, mc.ff, SVector{3,typeof(1.0u"Å")}[], Int[], Vector{Int}[])
+    OutputSimulationStep(mc.step.cell, mc.step.ff, SVector{3,typeof(1.0u"Å")}[], Int[], Vector{Int}[])
 end
 
 function output_pdb(path, o::OutputSimulationStep, (a, b, c), (α, β, γ), i)
@@ -60,7 +60,7 @@ The output is appended to the file at the given `path`, if any.
 See also [`output_restart`](@ref).
 """
 function output_pdb(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc), i=0)
-    lengths, angles = cell_parameters(mc.cell.mat)
+    lengths, angles = cell_parameters(mc.step.cell.mat)
     output_pdb(path, o, lengths, angles, i)
 end
 
@@ -153,9 +153,9 @@ If not provided, the output `o` corresponds to the current status of `mc`.
 See also [`output_pdb`](@ref).
 """
 function output_restart(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc))
-    lengths, angles = cell_parameters(mc.cell.mat)
-    molnames = [identify_molecule([mc.ff.symbols[ix] for ix in ffidxi]) for ffidxi in mc.ffidx]
-    output_restart(path, o, lengths, angles, molnames, mc.charges)
+    lengths, angles = cell_parameters(mc.step.cell.mat)
+    molnames = [identify_molecule([mc.step.ff.symbols[ix] for ix in ffidxi]) for ffidxi in mc.step.ffidx]
+    output_restart(path, o, lengths, angles, molnames, mc.step.charges)
 end
 
 function pdb_output_handler(path, cell::CellMatrix)

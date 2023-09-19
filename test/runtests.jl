@@ -227,7 +227,7 @@ end
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
     mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
     reportsTrio = run_montecarlo!(mcTrio, SimulationSetup(300u"K", 40000))
-    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, mcTrio.positions[1][1]), CEG.ChangePositionSystem(co2, mcTrio.positions[2][1]), CEG.ChangePositionSystem(co2, mcTrio.positions[2][2])]; blockfiles=[false,false,false]);
+    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, mcTrio.step.positions[1][1]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[2][1]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[2][2])]; blockfiles=[false,false,false]);
     baseTrio = Float64(baseline_energy(mcTrio))
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])
@@ -236,18 +236,18 @@ end
     mc2, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [(na, 135),]);
     reports = run_montecarlo!(mc2, SimulationSetup(300.0u"K", 1000, "", 1000))
     @test length(reports) == 3
-    @test Float64(reports[end]) ≈ -133235450.254986986518 rtol=0.001
+    @test Float64(reports[end]) ≈ -133115043.982755839825 rtol=0.001
 
     ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
     Random.seed!(57)
     mc3, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [(ar, 30)]);
-    reports = run_montecarlo!(mc3, CEG.SimulationSetup(300.0u"K", 1000, "", 1000))
-    @test Float64(reports[end]) ≈ -42055.328254954089 rtol=0.001
+    reports = run_montecarlo!(mc3, CEG.SimulationSetup(300.0u"K", 1000, "", 0))
+    @test Float64(reports[end]) ≈ -43070.529261282158 rtol=0.001
 
     Random.seed!(12)
-    mc4, _ = setup_montecarlo("FAU_1.4_03f7b3ba", "BoulfelfelSholl2021", [(na, 80)])
+    mc4, _ = setup_montecarlo("FAU_1.4_03f7b3ba", "BoulfelfelSholl2021", [(na, 80)]);
     reports = run_montecarlo!(mc4, SimulationSetup(300.0u"K", 1000, "", 0))
-    @test Float64(reports[end]) ≈ -5.616071362109395e7 rtol=0.001
+    @test Float64(reports[end]) ≈ -56085371.993412926793 rtol=0.001
 end
 
 @testset "Restart" begin

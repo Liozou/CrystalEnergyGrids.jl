@@ -70,7 +70,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     local after::MCEnergyReport
 
     # value initialisations
-    nummol = max(20, length(mc.indexof))
+    nummol = max(20, length(mc.indices))
     old_idx = (0,0)
     accepted = false
     translation_dmax = 1.3u"Å"
@@ -78,7 +78,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     # record and outputs
     mkpath(simu.outdir)
-    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.cell)
+    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.cell)
     record_task = @spawn simu.record(OutputSimulationStep(mc), energy, 0, mc, simu)
 
     # main loop
@@ -92,10 +92,10 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         for idnummol in 1:nummol
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
-            ffidxi = mc.ffidx[idx[1]]
+            ffidxi = mc.step.ffidx[idx[1]]
 
             # currentposition is the position of that species
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.positions[idx[1]][idx[2]]
+            currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.step.positions[idx[1]][idx[2]]
 
             istranslation = false
             isrotation = false
@@ -173,7 +173,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 # @show shadow.ewald.ctx.Eiks[1][30]
                 # display(energy)
                 # display(baseline_energy(shadow))
-                # println(mc.positions)
+                # println(mc.step.positions)
             end
         end
         # end of cycle
