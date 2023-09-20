@@ -17,10 +17,20 @@ systems of kind "water".
 struct SimulationStep{N}
     ff::ForceField
     charges::Vector{Te_au}
-    # charges[ix] is the charge of the atom whose of index ix in ff, i.e. the charge of the
-    # k-th atom in a system of kind i is charges[ffidx[i][k]].
-    positions::Vector{Vector{Vector{SVector{N,TÅ}}}}
-    # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
+    # charges[ix] is the charge of the atom of index ix in ff, i.e. the charge of the k-th
+    # atom in a system of kind i is charges[ffidx[i][k]].
+    positions::Vector{SVector{N,TÅ}} # one position per atom
+    atoms::Vector{Tuple{Int,Int,Int}} # one index per atom
+    posidx::Vector{Vector{Vector{Int}}}
+    # the position of the k-th atom in the j-th system of kind i is positions[l] where
+    # atoms[l] == (i,j,k) and posidx[i][j][k] == l
+    freespecies::Vector{Vector{Int}}
+    # freespecies[i] is a list of indices j that indicate that posidx[i][j] are not to be
+    # taken into account. For example, if there used to be 3 species of kind i, and the 2nd
+    # was removed, then 2 is added to the list freespecies[i]. If a new species of kind i
+    # is added, the last element j of freespecies[i] is removed from the list and the
+    # positions of the new species are given by posidx[i][j]. If freespecies[i] is empty,
+    # take j = length(posidx[i]) + 1.
     isrigid::BitVector # isrigid[i] applies to all systems of kind i
     ffidx::Vector{Vector{Int}}
     # ffidx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
@@ -28,11 +38,36 @@ struct SimulationStep{N}
     cell::CellMatrix
 end
 
+function SimulationStep(ff::ForceField, charges::Vector{Te_au},
+                        inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
+                        isrigid::BitVector, ffidx::Vector{Vector{Int}}, cell::CellMatrix) where N
+
+    numatoms = sum(x -> sum(length, x; init=0), inputpos; init=0)
+    positions = Vector{SVector{N,TÅ}}(undef, numatoms)
+    atoms = Vector{Tuple{Int,Int,Int}}(undef, numatoms)
+    posidx = Vector{Vector{Vector{Int}}}(undef, length(inputpos))
+    l = 0
+    for (i, posi) in enumerate(inputpos)
+        posidxi = Vector{Vector{Int}}(undef, length(posi))
+        posidx[i] = posidxi
+        for (j, poss) in enumerate(posi)
+            posidxi[j] = collect(l+1:l+length(poss))
+            for (k, pos) in enumerate(poss)
+                l += 1
+                atoms[l] = (i,j,k)
+                positions[l] = pos
+            end
+        end
+    end
+    freespecies = [Int[] for _ in inputpos]
+    SimulationStep(ff, charges, positions, atoms, posidx, freespecies, isrigid, ffidx, cell)
+end
+
 """
     SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
-                   positions::Vector{Vector{Vector{SVector{N,TÅ}}}} where N,
+                   inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
                    cell::CellMatrix,
-                   isrigid::BitVector=trues(length(systemkinds)))
+                   isrigid::BitVector=trues(length(systemkinds))) where N
 
 Create a `SimulationStep` from a force field `ff`, a list of system kinds, the cell matrix
 and the positions of all atoms for all systems.
@@ -40,7 +75,7 @@ and the positions of all atoms for all systems.
 `systemkinds[i]` is a system that represents all systems of kind `i`. This means that all
 its properties are shared with other systems of kind `i`, except the positions of its atoms.
 
-`positions[i][j]` is the list of positions of all atoms in the `j`-th system of kind `i`.
+`inputpos[i][j]` is the list of positions of all atoms in the `j`-th system of kind `i`.
 The `k`-th element of such a list should correspond to the same atom as the `k`-th one of
 `systemkinds[i]`.
 
@@ -53,13 +88,13 @@ See also [`make_step`](@ref) for an alternative way of constructing a `Simulatio
 without having to specify the system kinds.
 """
 function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
-                        positions::Vector{Vector{Vector{SVector{N,TÅ}}}} where N,
+                        inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
                         cell::CellMatrix,
-                        isrigid::BitVector=trues(length(systemkinds)))
-    @assert length(systemkinds) == length(positions) == length(isrigid)
+                        isrigid::BitVector=trues(length(systemkinds))) where N
+    @assert length(systemkinds) == length(inputpos) == length(isrigid)
     ffidx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
     charges = [[uconvert(u"e_au", s[k,:atomic_charge])::Te_au for k in 1:length(s)] for s in systemkinds]
-    SimulationStep(ff, charges, positions, isrigid, ffidx, cell)
+    SimulationStep(ff, charges, inputpos, isrigid, ffidx, cell)
 end
 
 """
@@ -105,6 +140,31 @@ function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatr
 end
 
 """
+    SimulationStep(step::SimulationStep, mode=:all)
+
+Copy of the input on which the positions and number of species can be modified without
+affecting the original `step`.
+
+If `mode === :output`, only the `positions` and `atoms` fields are copied.
+If `mode === :zero`, create a `SimulationStep` with an empty `ffidx` field.
+"""
+function SimulationStep(step::SimulationStep, mode=:all)
+    if mode === :all
+        SimulationStep(step.ff, step.charges, copy(step.positions), copy(step.atoms),
+                       [[copy(js) for js in is] for is in step.posidx],
+                       [copy(x) for x in step.freespecies], step.isrigid, step.ffidx, step.cell)
+    elseif mode === :output
+        SimulationStep(step.ff, step.charges, copy(step.positions), copy(step.atoms),
+                       step.posidx, step.freespecies, step.isrigid, step.ffidx, step.cell)
+    elseif mode === :zero
+        SimulationStep(step.ff, step.charges, step.positions, step.atoms, step.posidx,
+                       step.freespecies, step.isrigid, Vector{Int}[], step.cell)
+    else
+        error("Please use either :all, :output or :zero as value for argument mode")
+    end
+end
+
+"""
     update_position!(step::SimulationStep, idx, newpos)
 
 Modifies the position of the system of index `idx` in `step` to `newpos`.
@@ -113,19 +173,10 @@ Return `newpos`.
 See also [`update_position!(step::SimulationStep, idx, op, arg)`](@ref) and [`update_position`](@ref).
 """
 function update_position!(step::SimulationStep, (i,j), newpos)
-    step.positions[i][j] = newpos
-end
-
-"""
-    update_position!(step::SimulationStep, idx, op, arg)
-
-Modifies the position `p` of system of index `idx` in `step` into `op.(p, arg)`.
-Return `op.(p, arg)`.
-
-See also [`update_position!(step::SimulationStep, idx, newpos)`](@ref) and [`update_position`](@ref).
-"""
-function update_position!(step::SimulationStep, (i,j), op, arg)
-    step.positions[i][j] .= op.(step.positions[i][j], arg)
+    molpos = step.posidx[i][j]
+    for (k, pos) in enumerate(newpos)
+        step.positions[molpos[k]] = pos
+    end
 end
 
 """
@@ -133,136 +184,105 @@ end
 
 Return a new `SimulationStep` where the system of index `idx` has a new position `newpos`.
 
-`idx` can be the index returned by [`make_step`](@ref) or a tuple `(i,j)` which designated
+`idx` can be the index returned by [`make_step`](@ref) or a tuple `(i,j)` which designates
 the `j`-th system of kind `i` in `step`.
 
 See also [`update_position!`](@ref) to modify `step` in-place.
 """
-function update_position(step::SimulationStep, (i,j), args...)
+function update_position(step::SimulationStep, (i,j), newpos)
     newpositions = copy(step.positions)
-    newpositions[i] = copy(step.positions[i])
-    length(args) == 2 && (newpositions[i][j] = copy(newpositions[i][j]))
-    x = SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.ffidx, step.cell)
-    update_position!(x, (i,j), args...)
+    x = SimulationStep(step.ff, step.charges, newpositions, step.atoms, step.posidx, step.freespecies, step.isrigid, step.ffidx, step.cell)
+    update_position!(x, (i,j), newpos)
     x
 end
 
-"""
-    update_position(step::SimulationStep, idx, op, arg)
+# function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,TÅ}}) where N
+#     n = length(positions)
+#     energy = 0.0u"K"
+#     cutoff2 = step.ff.cutoff^2
+#     isinf(step.ff.cutoff) || error("finite cutoff not implemented")
+#     indices = step.ffidx[i]
+#     for k1 in 1:n
+#         ix1 = indices[k1]
+#         for k2 in (i+1):n
+#             ix2 = indices[k2]
+#             r2 = norm2(positions[k1], positions[k2])
+#             r2 > cutoff2 && error("Flexible molecule cannot be larger than the cutoff")
+#             rule = step.ff[ix1, ix2]
+#             energy += rule(r2)# + tailcorrection(rule, step.ff.cutoff)
+#         end
+#     end
+#     energy
+# end
 
-Return a new `SimulationStep` where the system of index `idx` has a new position
-`op.(p, arg)` where `p` is the current position.
-
-See also [`update_position!`](@ref), [`unalias_position`](@ref)
-"""
-update_position(step::SimulationStep, idx, op, arg)
-
-"""
-    unalias_position(step, idx)
-
-Return a new `SimulationStep` identical to `step` except that the system of index `idx` can
-have its position mutated by [`update_position!`](@ref) without modifying `step`.
-"""
-function unalias_position(step, (i,j))
-    newpositions = copy(step.positions)
-    newpositions[i] = copy(step.positions[i])
-    newpositions[i][j] = copy(newpositions[i][j])
-    SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.ffidx, step.cell)
-end
-
-function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,TÅ}}) where N
-    n = length(positions)
-    energy = 0.0u"K"
-    cutoff2 = step.ff.cutoff^2
-    isinf(step.ff.cutoff) || error("finite cutoff not implemented")
-    indices = step.ffidx[i]
-    for k1 in 1:n
-        ix1 = indices[k1]
-        for k2 in (i+1):n
-            ix2 = indices[k2]
-            r2 = norm2(positions[k1], positions[k2])
-            r2 > cutoff2 && error("Flexible molecule cannot be larger than the cutoff")
-            rule = step.ff[ix1, ix2]
-            energy += rule(r2)# + tailcorrection(rule, step.ff.cutoff)
-        end
-    end
-    energy
-end
-
-function energy_nocutoff(step::SimulationStep)
-    energy = 0.0u"K"
-    nkinds = length(step.ffidx)
-    for i1 in 1:nkinds
-        poskind1 = step.positions[i1]
-        idx1 = step.ffidx[i1]
-        rigid1 = step.isrigid[i1]
-        for (j1, pos1) in enumerate(poskind1)
-            rigid1 || (energy += energy_intra(step, i1, pos1))
-            for i2 in i1:nkinds
-                poskind2 = step.positions[i2]
-                idx2 = step.ffidx[i2]
-                for j2 in (j1*(i1==i2)+1):length(poskind2)
-                    pos2 = poskind2[j2]
-                    for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
-                        energy += step.ff[idx1[k1], idx2[k2]](norm2(p1, p2))
-                    end
-                end
-            end
-        end
-    end
-    energy
-end
+# function energy_nocutoff(step::SimulationStep)
+#     energy = 0.0u"K"
+#     nkinds = length(step.ffidx)
+#     for i1 in 1:nkinds
+#         poskind1 = step.positions[i1]
+#         idx1 = step.ffidx[i1]
+#         rigid1 = step.isrigid[i1]
+#         for (j1, pos1) in enumerate(poskind1)
+#             rigid1 || (energy += energy_intra(step, i1, pos1))
+#             for i2 in i1:nkinds
+#                 poskind2 = step.positions[i2]
+#                 idx2 = step.ffidx[i2]
+#                 for j2 in (j1*(i1==i2)+1):length(poskind2)
+#                     pos2 = poskind2[j2]
+#                     for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
+#                         energy += step.ff[idx1[k1], idx2[k2]](norm2(p1, p2))
+#                     end
+#                 end
+#             end
+#         end
+#     end
+#     energy
+# end
 
 function compute_vdw(step::SimulationStep)
     energy = 0.0u"K"
-    nkinds = length(step.ffidx)
     cutoff2 = step.ff.cutoff^2
     buffer = MVector{3,TÅ}(undef)
     buffer2 = MVector{3,Float64}(undef)
-    for i1 in 1:nkinds
-        poskind1 = step.positions[i1]
-        idx1 = step.ffidx[i1]
-        rigid1 = step.isrigid[i1]
-        for (j1, pos1) in enumerate(poskind1)
-            rigid1 || (energy += energy_intra(step, i1, pos1))
-            for i2 in i1:nkinds
-                poskind2 = step.positions[i2]
-                idx2 = step.ffidx[i2]
-                for j2 in (j1*(i1==i2)+1):length(poskind2)
-                    pos2 = poskind2[j2]
-                    for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
-                        buffer .= p2 .- p1
-                        d2 = unsafe_periodic_distance2!(buffer, buffer2, step.cell)
-                        if d2 < cutoff2
-                            energy += step.ff[idx1[k1], idx2[k2]](d2)
-                        end
-                    end
-                end
+    for (l1, pos1) in enumerate(step.positions)
+        i1, j1, k1 = step.atoms[l1]
+        ix1 = step.ffidx[i1][k1]
+        for l2 in (l1+1):length(step.positions)
+            i2, j2, k2 = step.atoms[l2]
+            i1 == i2 && j1 == j2 && continue # no intra energy considered here
+            pos2 = step.positions[l2]
+            buffer .= pos2 .- pos1
+            d2 = unsafe_periodic_distance2!(buffer, buffer2, step.cell)
+            if d2 < cutoff2
+                energy += step.ff[ix1, step.ffidx[i2][k2]](d2)
             end
+        end
+    end
+    for (i, rigid) in enumerate(step.isrigid)
+        rigid && continue
+        posidxi = step.posidx[i]
+        for molpos in posidxi
+            energy += energy_intra(step, i, @view step.positions[molpos])
         end
     end
     energy
 end
 
-function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, positions::Vector{SVector{N,TÅ}}) where N
-    energy = step.isrigid[i1] ? 0.0u"K" : energy_intra(step, i1, positions)
-    nkinds = length(step.ffidx)
+function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, poss1::AbstractVector{SVector{N,TÅ}}) where N
+    energy = step.isrigid[i1] ? 0.0u"K" : energy_intra(step, i1, poss1)
     cutoff2 = step.ff.cutoff^2
     buffer = MVector{3,TÅ}(undef)
     buffer2 = MVector{3,Float64}(undef)
     idx1 = step.ffidx[i1]
-    for i2 in 1:nkinds
-        poskind2 = step.positions[i2]
-        idx2 = step.ffidx[i2]
-        for j2 in 1:length(poskind2)
+    for (k1, pos1) in enumerate(poss1)
+        ix1 = idx1[k1]
+        for (l2, pos2) in enumerate(step.positions)
+            i2, j2, k2 = step.atoms[l2]
             i1 == i2 && j1 == j2 && continue
-            pos2 = poskind2[j2]
-            for (k1, p1) in enumerate(positions), (k2, p2) in enumerate(pos2)
-                buffer .= p2 .- p1
-                d2 = unsafe_periodic_distance2!(buffer, buffer2, step.cell)
-                if d2 < cutoff2
-                    energy += step.ff[idx1[k1], idx2[k2]](d2)
-                end
+            buffer .= pos2 .- pos1
+            d2 = unsafe_periodic_distance2!(buffer, buffer2, step.cell)
+            if d2 < cutoff2
+                energy += step.ff[ix1, step.ffidx[i2][k2]](d2)
             end
         end
     end

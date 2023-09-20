@@ -77,10 +77,10 @@ end
 abstract type RecordFunction <: Function end
 mutable struct RMinimumEnergy <: RecordFunction
     mine::BaselineEnergyReport
-    minpos::OutputSimulationStep
+    minpos::SimulationStep
     RMinimumEnergy() = new(BaselineEnergyReport(Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
 end
-function (record::RMinimumEnergy)(o::OutputSimulationStep, e::BaselineEnergyReport, k::Int,
+function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k::Int,
                                   mc::MonteCarloSetup, simu::SimulationSetup)
     if Float64(e) < Float64(record.mine)
         record.mine = e

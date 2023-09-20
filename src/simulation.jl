@@ -20,7 +20,7 @@ Definition of the simulation setup, which must provide the following information
   its return value is ignored. Stopping is not immediate and takes one additional cycle.
 
 If provided, `record` must have the signature
-    `record(o::OutputSimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, simu::SimulationSetup)`
+    `record(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, simu::SimulationSetup)`
 where
 - `o` contains the information on the positions of the species at this point.
 - `e` is the energy at this point.
@@ -79,7 +79,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # record and outputs
     mkpath(simu.outdir)
     output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.cell)
-    record_task = @spawn simu.record(OutputSimulationStep(mc), energy, 0, mc, simu)
+    record_task = @spawn simu.record(SimulationStep(mc.step, :output), energy, 0, mc, simu)
 
     # main loop
     for k in 1:simu.ncycles
@@ -95,7 +95,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             ffidxi = mc.step.ffidx[idx[1]]
 
             # currentposition is the position of that species
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : mc.step.positions[idx[1]][idx[2]]
+            # currentposition is either a Vector or a @view, that's OK
+            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
 
             istranslation = false
             isrotation = false
@@ -181,7 +182,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         report_now = k%simu.printevery == 0
         if !(simu.record isa Returns) || report_now
             accepted && wait(running_update)
-            o = OutputSimulationStep(mc)
+            o = SimulationStep(mc.step, :output)
             if report_now
                 put!(output, o)
                 push!(reports, energy)
@@ -204,7 +205,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     wait(record_task)
     accepted && wait(running_update)
     push!(reports, energy)
-    put!(output, OutputSimulationStep(mc, nothing))
+    put!(output, SimulationStep(mc.step, :zero))
     wait(output_task[])
     reports
 end

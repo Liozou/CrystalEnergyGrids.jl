@@ -2,46 +2,21 @@ using Printf, Serialization
 
 export output_pdb, output_restart
 
-struct OutputSimulationStep
-    cell::CellMatrix
-    ff::ForceField
-    positions::Vector{SVector{3,TÅ}}
-    nummol::Vector{Int}
-    ffidx::Vector{Vector{Int}}
-end
+SimulationStep(mc::MonteCarloSetup) = SimulationStep(mc.step, :output)
 
-function OutputSimulationStep(mc::MonteCarloSetup)
-    positions = Vector{SVector{3,TÅ}}(undef, mc.numatoms[])
-    nummol = Vector{Int}(undef, length(mc.step.positions))
-    k = 0
-    for (i, positioni) in enumerate(mc.step.positions)
-        nummol[i] = length(positioni)
-        for poss in positioni
-            for pos in poss
-                k += 1
-                positions[k] = pos
-            end
-        end
-    end
-    OutputSimulationStep(mc.step.cell, mc.step.ff, positions, nummol, mc.step.ffidx)
-end
-
-# Signal that the channel should be closed
-function OutputSimulationStep(mc::MonteCarloSetup, ::Nothing)
-    OutputSimulationStep(mc.step.cell, mc.step.ff, SVector{3,TÅ}[], Int[], Vector{Int}[])
-end
-
-function output_pdb(path, o::OutputSimulationStep, (a, b, c), (α, β, γ), i)
+function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i)
     open(path, "a") do io
         @printf io "MODEL %4d\n" i
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
-        k = 0
-        for (ffidxi, nummoli) in zip(o.ffidx, o.nummol), _ in 1:nummoli, ix in ffidxi
-            symb = String(o.ff.symbols[ix])
-            k += 1
-            abc = o.cell.invmat * o.positions[k]
+        for (l, opos) in enumerate(o.positions)
+            i, j, k = o.atoms[l]
+            ix = o.ffidx[i][k]
+            abc = o.cell.invmat * opos
             pos = o.cell.mat*(abc .- floor.(abc))/u"Å"
-            @printf io "ATOM  %5d %4.4s MOL          %8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" k symb pos[1] pos[2] pos[3] symb
+            symb = String(o.ff.symbols[ix])
+            ij = ((i + j - 2)*(i + j - 1))÷2 + j - 1
+            serial = ((ij + k - 1)*(ij + k))÷2 + ij
+            @printf io "ATOM  %5d %4.4s MOL          %8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" serial symb pos[1] pos[2] pos[3] symb
         end
         @printf io "ENDMDL\n"
         nothing
@@ -49,7 +24,7 @@ function output_pdb(path, o::OutputSimulationStep, (a, b, c), (α, β, γ), i)
 end
 
 """
-    output_pdb(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc), i=0)
+    output_pdb(path, mc::MonteCarloSetup, o=SimulationStep(mc), i=0)
 
 Output a .pdb at the given `path` representing the positions of the atoms for the given
 output `o`, which corresponds to the `i`-th simulation step of the input `mc`.
@@ -59,13 +34,27 @@ The output is appended to the file at the given `path`, if any.
 
 See also [`output_restart`](@ref).
 """
-function output_pdb(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc), i=0)
+function output_pdb(path, mc::MonteCarloSetup, o=SimulationStep(mc), i=0)
     lengths, angles = cell_parameters(mc.step.cell.mat)
     output_pdb(path, o, lengths, angles, i)
 end
 
 
-function output_restart(path, o::OutputSimulationStep, (a, b, c), (α, β, γ), molnames, charges)
+function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnames)
+    positions = [Vector{SVector{3,TÅ}}[] for _ in o.ffidx]
+    for (l, pos) in enumerate(o.positions)
+        i, j, k = o.atoms[l]
+        posi = positions[i]
+        length(posi) < j && resize!(posi, j)
+        isassigned(posi, j) || (posi[j] = SVector{3,TÅ}[])
+        poss = posi[j]
+        length(poss) < k && resize!(poss, k)
+        poss[k] = pos
+    end
+    for posi in positions
+        hasassigned = [j for j in 1:length(posi) if isassigned(posi, j)]
+        keepat!(posi, hasassigned)
+    end
     open(path, "w") do io
         println(io, """Cell info:
 ========================================================================
@@ -94,7 +83,7 @@ Target-box-shape-change: 0.500000
 Target-Gibbs-volume-change: 0.500000
 
 
-Components: """, length(o.ffidx), " (Adsorbates ", sum(o.nummol), """, Cations 0)
+Components: """, length(o.ffidx), " (Adsorbates ", sum(length, positions), """, Cations 0)
 ========================================================================""")
         for (i, name) in enumerate(molnames)
             im1 = i-1
@@ -112,23 +101,23 @@ Components: """, length(o.ffidx), " (Adsorbates ", sum(o.nummol), """, Cations 0
             println(io, "	Maximum-rotation-change component ", im1, ": 0.123456 0.123456 0.123456")
         end
         println(io, "\nReactions: 0\n")
-        t = 0
-        for (i, (name, num)) in enumerate(zip(molnames, o.nummol))
+        for (i, name) in enumerate(molnames)
+            posi = positions[i]
+            num = length(posi)
             ffidxi = o.ffidx[i]
             m = length(ffidxi)
             println(io, "Component: ", i-1, "     Adsorbate    ", num, " molecules of ", name)
             println(io, "------------------------------------------------------------------------")
-            for j in 0:num-1, k in 0:m-1
-                t += 1
-                abc = o.cell.invmat * o.positions[t]
+            for (j, poss) in enumerate(posi), (k, opos) in enumerate(poss)
+                abc = o.cell.invmat * opos
                 pos = NoUnits.(o.cell.mat*(abc .- floor.(abc))./u"Å")
-                @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" j k pos[1] pos[2] pos[3]
+                @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" (j-1) (k-1) pos[1] pos[2] pos[3]
             end
             for s in ("velocity:", "force:   "), j in 0:num-1, k in 0:m-1
                 @printf io "Adsorbate-atom-%s %d %d     0.000000000000     0.000000000000     0.000000000000\n" s j k
             end
             for j in 0:num-1, (k, ix) in enumerate(ffidxi)
-                @printf io "Adsorbate-atom-charge:   %d %d%19.12f\n" j (k-1) NoUnits(charges[ix]/u"e_au")
+                @printf io "Adsorbate-atom-charge:   %d %d%19.12f\n" j (k-1) NoUnits(o.charges[ix]/u"e_au")
             end
             for j in 0:num-1, k in 0:m-1
                 @printf io "Adsorbate-atom-scaling:  %d %d     1.000000000000\n" j k
@@ -144,7 +133,7 @@ Components: """, length(o.ffidx), " (Adsorbates ", sum(o.nummol), """, Cations 0
 end
 
 """
-    function output_restart(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc))
+    function output_restart(path, mc::MonteCarloSetup, o=SimulationStep(mc))
 
 Output a restart file compatible with RASPA at the given `path` for the given output `o`,
 which represents a simulation step of the input `mc`.
@@ -152,23 +141,23 @@ If not provided, the output `o` corresponds to the current status of `mc`.
 
 See also [`output_pdb`](@ref).
 """
-function output_restart(path, mc::MonteCarloSetup, o=OutputSimulationStep(mc))
+function output_restart(path, mc::MonteCarloSetup, o=SimulationStep(mc))
     lengths, angles = cell_parameters(mc.step.cell.mat)
     molnames = [identify_molecule([mc.step.ff.symbols[ix] for ix in ffidxi]) for ffidxi in mc.step.ffidx]
-    output_restart(path, o, lengths, angles, molnames, mc.step.charges)
+    output_restart(path, o, lengths, angles, molnames)
 end
 
 function pdb_output_handler(path, cell::CellMatrix)
     taskref = Ref{Task}()
     if isempty(path)
-        Channel{OutputSimulationStep}(1; taskref) do channel
+        Channel{SimulationStep}(1; taskref) do channel
             for o in channel
                 isempty(o.ffidx) && break
             end
         end
     else
         lengths, angles = cell_parameters(cell.mat)
-        Channel{OutputSimulationStep}(100; taskref) do channel
+        Channel{SimulationStep}(100; taskref) do channel
             for (i, o) in enumerate(channel)
                 isempty(o.ffidx) && break
                 output_pdb(path, o, lengths, angles, i)

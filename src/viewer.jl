@@ -200,6 +200,7 @@ function preplot(system::AbstractSystem{3})
 end
 
 function preplot(field::AbstractArray{Float64,3}, reference::AbstractSystem{3}, block=nothing)
+    Base.require_one_based_indexing(field)
     numA, numB, numC = size(field)
     axeA, axeB, axeC = [NoUnits.(x/u"Å") for x in bounding_box(reference)]
     # X, Y, Z = mgrid(range(0.0; step=(axeA[1]+axeB[1]+axeC[1])))
