@@ -96,7 +96,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
+            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.psystem.positions[mc.step.posidx[idx[1]][idx[2]]]
 
             istranslation = false
             isrotation = false
@@ -174,7 +174,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 # @show shadow.ewald.ctx.Eiks[1][30]
                 # display(energy)
                 # display(baseline_energy(shadow))
-                # println(mc.step.positions)
+                # println(mc.step.psystem.positions)
             end
         end
         # end of cycle

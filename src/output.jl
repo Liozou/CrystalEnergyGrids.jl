@@ -8,7 +8,7 @@ function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i)
     open(path, "a") do io
         @printf io "MODEL %4d\n" i
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
-        for (l, opos) in enumerate(o.positions)
+        for (l, opos) in enumerate(o.psystem.positions)
             i, j, k = o.atoms[l]
             ix = o.ffidx[i][k]
             abc = o.cell.invmat * opos
@@ -35,14 +35,14 @@ The output is appended to the file at the given `path`, if any.
 See also [`output_restart`](@ref).
 """
 function output_pdb(path, mc::MonteCarloSetup, o=SimulationStep(mc), i=0)
-    lengths, angles = cell_parameters(mc.step.cell.mat)
+    lengths, angles = cell_parameters(o.cell.mat)
     output_pdb(path, o, lengths, angles, i)
 end
 
 
 function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnames)
     positions = [Vector{SVector{3,TÅ}}[] for _ in o.ffidx]
-    for (l, pos) in enumerate(o.positions)
+    for (l, pos) in enumerate(o.psystem.positions)
         i, j, k = o.atoms[l]
         posi = positions[i]
         length(posi) < j && resize!(posi, j)

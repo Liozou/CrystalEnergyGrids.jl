@@ -274,7 +274,7 @@ function MonteCarloSetup(mc::MonteCarloSetup)
     for (i, posidxi) in enumerate(mc.step.posidx)
         ffidxi = mc.step.ffidx[i]
         charge = [mc.step.charges[k] for k in ffidxi]
-        append!(ewaldsystems, EwaldSystem(mc.step.positions[molpos], charge) for molpos in posidxi)
+        append!(ewaldsystems, EwaldSystem(mc.step.psystem.positions[molpos], charge) for molpos in posidxi)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     MonteCarloSetup(SimulationStep(mc.step),
@@ -285,7 +285,7 @@ end
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
     molpos = mc.step.posidx[i][j]
     for (k, newpos) in enumerate(newpositions)
-        mc.step.positions[molpos[k]] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
+        mc.step.psystem.positions[molpos[k]] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
             newpos
         else
             NoUnits(newpos/u"Å")
@@ -399,7 +399,7 @@ function baseline_energy(mc::MonteCarloSetup)
     for (i, indices) in enumerate(mc.step.ffidx)
         molposi = mc.step.posidx[i]
         for molpos in molposi
-            fer += framework_interactions(mc, indices, @view mc.step.positions[molpos])
+            fer += framework_interactions(mc, indices, @view mc.step.psystem.positions[molpos])
         end
     end
     return BaselineEnergyReport(fer, vdw, reciprocal, mc.tailcorrection[])
@@ -424,7 +424,7 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     k = mc.offsets[i]+j
     poss = if positions isa Nothing
         molpos = mc.step.posidx[i][j]
-        @view mc.step.positions[molpos]
+        @view mc.step.psystem.positions[molpos]
     else
         positions
     end
@@ -442,7 +442,7 @@ state of `mc` so that the species of index `idx` is now at `positions`.
 """
 function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}})
     update_ewald_context!(mc.ewald)
-    mc.step.positions[mc.step.posidx[i][j]] .= positions
+    mc.step.psystem.positions[mc.step.posidx[i][j]] .= positions
     nothing
 end
 
@@ -514,7 +514,7 @@ Put the species at the given index to a random position and orientation.
 """
 function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
     d = norm(sum(mc.step.cell.mat; dims=2))/4
-    newpos = randomize_position!(mc.step.positions, mc.step.posidx[i][j], mc.bead[i], mc.blocks[i], d)
+    newpos = randomize_position!(mc.step.psystem.positions, mc.step.posidx[i][j], mc.bead[i], mc.blocks[i], d)
     if update_ewald
         single_contribution_ewald(mc.ewald, mc.offsets[i] + j, newpos)
         update_mc!(mc, (i,j), newpos)

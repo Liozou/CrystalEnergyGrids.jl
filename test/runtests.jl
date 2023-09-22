@@ -12,7 +12,7 @@ using Serialization
 # Aqua.test_all(CrystalEnergyGrids; ambiguities=false)
 
 const TESTDIR = joinpath(dirname(dirname(pathof(CEG))), "test"); setdir_RASPA!(joinpath(TESTDIR, "raspa"))
-rm(joinpath(TESTDIR, "raspa", "grids"); recursive=true)
+# rm(joinpath(TESTDIR, "raspa", "grids"); recursive=true)
 
 @testset "CrystalEnergyGrids" begin
     setupArCHA = setup_RASPA("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", "Ar", "TraPPE"; blockfile=nothing);
@@ -227,7 +227,7 @@ end
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
     mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
     reportsTrio = run_montecarlo!(mcTrio, SimulationSetup(300u"K", 40000))
-    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, [mcTrio.step.positions[1]]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[2:4]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[5:7])]; blockfiles=[false,false,false]);
+    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, [mcTrio.step.psystem.positions[1]]), CEG.ChangePositionSystem(co2, mcTrio.step.psystem.positions[2:4]), CEG.ChangePositionSystem(co2, mcTrio.step.psystem.positions[5:7])]; blockfiles=[false,false,false]);
     baseTrio = Float64(baseline_energy(mcTrio))
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])
