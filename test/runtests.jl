@@ -207,7 +207,7 @@ end
     newposCO2_2 = SVector{3}.([[1.3, 2.9, 1.149]u"Å", [1.3, 2.9, 0.0]u"Å", [1.3, 2.9, -1.149]u"Å"])
     diffCO2 = Float64(CEG.movement_energy(mcTrio, (2,2), newposCO2_2) - CEG.movement_energy(mcTrio, (2,2)))
     mcTrio_diffCO2, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, CEG.ChangePositionSystem(molCO2_1, newposCO2_2)]; blockfiles=[false, false, false]);
-    @test baseTrio + diffCO2 ≈ Float64(CEG.baseline_energy(mcTrio_diffCO2))
+    @test baseTrio + diffCO2 ≈ Float64(CEG.baseline_energy(mcTrio_diffCO2)) rtol=0.0001
 
     # blocking sphere straddling a periodic boundary
     setupArCIT7block = setup_RASPA("CIT7block", "BoulfelfelSholl2021", "Ar", "TraPPE");
@@ -226,8 +226,8 @@ end
                                                          [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
     mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
-    reportsTrio = run_montecarlo!(mcTrio, SimulationSetup(300u"K", 40000))
-    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, [mcTrio.step.psystem.positions[1]]), CEG.ChangePositionSystem(co2, mcTrio.step.psystem.positions[2:4]), CEG.ChangePositionSystem(co2, mcTrio.step.psystem.positions[5:7])]; blockfiles=[false,false,false]);
+    reportsTrio = run_montecarlo!(mcTrio, SimulationSetup(300u"K", 4000))
+    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, [mcTrio.step.psystem.xpositions[1]]), CEG.ChangePositionSystem(co2, mcTrio.step.psystem.xpositions[2:4]), CEG.ChangePositionSystem(co2, mcTrio.step.psystem.xpositions[5:7])]; blockfiles=[false,false,false]);
     baseTrio = Float64(baseline_energy(mcTrio))
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])

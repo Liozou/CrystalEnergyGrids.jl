@@ -1,7 +1,7 @@
 export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
-struct MonteCarloSetup
-    step::SimulationStep{3}
+struct MonteCarloSetup{N,T}
+    step::SimulationStep{N,T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     ewald::IncrementalEwaldContext
@@ -97,7 +97,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
             tcorrection += ni*nj*tailcorrection(ff[i,j], ff.cutoff)
         end
     end
-    tcorrection *= 2π/det(ustrip.(cell.mat))
+    tcorrection *= 2π/det(ustrip.(u"Å", cell.mat))
 
     n = length(poss)
     offsets = Vector{Int}(undef, n)
@@ -274,7 +274,7 @@ function MonteCarloSetup(mc::MonteCarloSetup)
     for (i, posidxi) in enumerate(mc.step.posidx)
         ffidxi = mc.step.ffidx[i]
         charge = [mc.step.charges[k] for k in ffidxi]
-        append!(ewaldsystems, EwaldSystem(mc.step.psystem.positions[molpos], charge) for molpos in posidxi)
+        append!(ewaldsystems, EwaldSystem(mc.step.psystem.xpositions[molpos], charge) for molpos in posidxi)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     MonteCarloSetup(SimulationStep(mc.step),
@@ -285,7 +285,7 @@ end
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
     molpos = mc.step.posidx[i][j]
     for (k, newpos) in enumerate(newpositions)
-        mc.step.psystem.positions[molpos[k]] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
+        mc.step.psystem.xpositions[molpos[k]] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
             newpos
         else
             NoUnits(newpos/u"Å")
@@ -399,7 +399,7 @@ function baseline_energy(mc::MonteCarloSetup)
     for (i, indices) in enumerate(mc.step.ffidx)
         molposi = mc.step.posidx[i]
         for molpos in molposi
-            fer += framework_interactions(mc, indices, @view mc.step.psystem.positions[molpos])
+            fer += framework_interactions(mc, indices, @view mc.step.psystem.xpositions[molpos])
         end
     end
     return BaselineEnergyReport(fer, vdw, reciprocal, mc.tailcorrection[])
@@ -424,13 +424,13 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     k = mc.offsets[i]+j
     poss = if positions isa Nothing
         molpos = mc.step.posidx[i][j]
-        @view mc.step.psystem.positions[molpos]
+        @view mc.step.psystem.xpositions[molpos]
     else
         positions
     end
     singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, positions)
     fer = @spawn framework_interactions(mc, i, poss)
-    singlevdw = single_contribution_vdw(mc.step, (i,j), poss)
+    singlevdw = single_contribution_vdw(mc.step, (i,j), positions)
     MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
 end
 
@@ -442,7 +442,9 @@ state of `mc` so that the species of index `idx` is now at `positions`.
 """
 function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}})
     update_ewald_context!(mc.ewald)
-    mc.step.psystem.positions[mc.step.posidx[i][j]] .= positions
+    L = mc.step.posidx[i][j]
+    mc.step.psystem.xpositions[L] .= positions
+    mc.step.psystembis.xpositions[L] .= positions
     nothing
 end
 
@@ -514,7 +516,7 @@ Put the species at the given index to a random position and orientation.
 """
 function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
     d = norm(sum(mc.step.cell.mat; dims=2))/4
-    newpos = randomize_position!(mc.step.psystem.positions, mc.step.posidx[i][j], mc.bead[i], mc.blocks[i], d)
+    newpos = randomize_position!(mc.step.psystem.xpositions, mc.step.posidx[i][j], mc.bead[i], mc.blocks[i], d)
     if update_ewald
         single_contribution_ewald(mc.ewald, mc.offsets[i] + j, newpos)
         update_mc!(mc, (i,j), newpos)

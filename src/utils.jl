@@ -203,7 +203,7 @@ struct CellMatrix
     mat::SMatrix{3,3,TÅ,9}
     invmat::SMatrix{3,3,typeof(1.0u"Å^-1"),9}
 end
-CellMatrix(mat::AbstractMatrix{TÅ}) = CellMatrix(mat, inv(ustrip.(mat))*u"Å^-1")
+CellMatrix(mat::AbstractMatrix) = CellMatrix(mat, inv(ustrip.(u"Å", mat))*u"Å^-1")
 CellMatrix(mat::AbstractMatrix{Float64}) = CellMatrix(mat*u"Å")
 CellMatrix(system::AbstractSystem{3}) = CellMatrix(SMatrix{3,3,TÅ,9}(stack(bounding_box(system))))
 function CellMatrix(mat::AbstractMatrix{Float64}, invmat::AbstractMatrix{Float64})
