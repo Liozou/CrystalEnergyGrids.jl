@@ -14,12 +14,12 @@ The following attributes are part of the API:
 """
 struct GridCoordinatesSetup
     cell::CellMatrix
-    spacing::typeof(1.0u"Å")
+    spacing::TÅ
     dims::SVector{3,Cint}
-    size::SVector{3,typeof(1.0u"Å")}
-    shift::SVector{3,typeof(1.0u"Å")}
-    unitcell::SVector{3,typeof(1.0u"Å")}
-    Δ::SVector{3,typeof(1.0u"Å")}
+    size::SVector{3,TÅ}
+    shift::SVector{3,TÅ}
+    unitcell::SVector{3,TÅ}
+    Δ::SVector{3,TÅ}
 end
 GridCoordinatesSetup() = GridCoordinatesSetup(CellMatrix(),
                                               0.0u"Å",
@@ -29,18 +29,18 @@ GridCoordinatesSetup() = GridCoordinatesSetup(CellMatrix(),
                                               SVector{3}((0.0u"Å", 0.0u"Å", 0.0u"Å")),
                                               SVector{3}((0.0u"Å", 0.0u"Å", 0.0u"Å")))
 
-function GridCoordinatesSetup(cell::CellMatrix, spacing::typeof(1.0u"Å"))
+function GridCoordinatesSetup(cell::CellMatrix, spacing::TÅ)
     a, b, c = eachcol(cell.mat)
-    size = SVector{3,typeof(1.0u"Å")}(abs.(a)) + SVector{3,typeof(1.0u"Å")}(abs.(b)) + SVector{3,typeof(1.0u"Å")}(abs.(c))
-    shift = SVector{3,typeof(1.0u"Å")}(min.(a, 0.0u"Å")) + SVector{3,typeof(1.0u"Å")}(min.(b, 0.0u"Å")) + SVector{3,typeof(1.0u"Å")}(min.(c, 0.0u"Å"))
+    size = SVector{3,TÅ}(abs.(a)) + SVector{3,TÅ}(abs.(b)) + SVector{3,TÅ}(abs.(c))
+    shift = SVector{3,TÅ}(min.(a, 0.0u"Å")) + SVector{3,TÅ}(min.(b, 0.0u"Å")) + SVector{3,TÅ}(min.(c, 0.0u"Å"))
     _dims = floor.(Cint, (size ./ spacing))
     dims = _dims + iseven.(_dims)
-    unitcell = SVector{3,typeof(1.0u"Å")}((norm(a), norm(b), norm(c)))
+    unitcell = SVector{3,TÅ}((norm(a), norm(b), norm(c)))
     Δ = size ./ dims
     GridCoordinatesSetup(cell, spacing, dims, size, shift, unitcell, Δ)
 end
 
-function GridCoordinatesSetup(framework::AbstractSystem{3}, spacing::typeof(1.0u"Å"))
+function GridCoordinatesSetup(framework::AbstractSystem{3}, spacing::TÅ)
     GridCoordinatesSetup(CellMatrix(framework), spacing)
 end
 
@@ -60,7 +60,7 @@ function inverse_offsetpoint(ipoint, csetup::GridCoordinatesSetup)
 end
 
 function abc_to_xyz(cset::GridCoordinatesSetup, i, j, k)
-    SVector{3,typeof(1.0u"Å")}((i*cset.size[1]/cset.dims[1] + cset.shift[1],
+    SVector{3,TÅ}((i*cset.size[1]/cset.dims[1] + cset.shift[1],
                                 j*cset.size[2]/cset.dims[2] + cset.shift[2],
                                 k*cset.size[3]/cset.dims[3] + cset.shift[3]))
 end
@@ -84,7 +84,7 @@ function BlockFile(csetup::GridCoordinatesSetup, block::BitArray{3})
     end
 end
 Base.isempty(x::BlockFile) = x.empty
-function Base.getindex(x::BlockFile, pos::SVector{3,typeof(1.0u"Å")})
+function Base.getindex(x::BlockFile, pos::SVector{3,TÅ})
     x.empty && return false
     a, b, c = round.(Int, offsetpoint(pos, x.csetup))
     x.block[a,b,c]

@@ -1,3 +1,10 @@
+# Types
+
+const TÅ = typeof(1.0u"Å")
+const TK = typeof(1.0u"K")
+const Te_au = typeof(1.0u"e_au")
+
+
 # General utils
 
 function perpendicular_lengths(a, b, c)
@@ -193,12 +200,12 @@ function periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
 end
 
 struct CellMatrix
-    mat::SMatrix{3,3,typeof(1.0u"Å"),9}
+    mat::SMatrix{3,3,TÅ,9}
     invmat::SMatrix{3,3,typeof(1.0u"Å^-1"),9}
 end
-CellMatrix(mat::AbstractMatrix{typeof(1.0u"Å")}) = CellMatrix(mat, inv(ustrip.(mat))*u"Å^-1")
+CellMatrix(mat::AbstractMatrix{TÅ}) = CellMatrix(mat, inv(ustrip.(mat))*u"Å^-1")
 CellMatrix(mat::AbstractMatrix{Float64}) = CellMatrix(mat*u"Å")
-CellMatrix(system::AbstractSystem{3}) = CellMatrix(SMatrix{3,3,typeof(1.0u"Å"),9}(stack(bounding_box(system))))
+CellMatrix(system::AbstractSystem{3}) = CellMatrix(SMatrix{3,3,TÅ,9}(stack(bounding_box(system))))
 function CellMatrix(mat::AbstractMatrix{Float64}, invmat::AbstractMatrix{Float64})
     CellMatrix(mat*u"Å", invmat*u"Å^-1")
 end

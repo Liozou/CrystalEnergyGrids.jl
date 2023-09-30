@@ -6,7 +6,7 @@ struct ForceField
     interactions::Matrix{Union{InteractionRule,InteractionRuleSum}}
     sdict::IdDict{Symbol,Int}
     symbols::Vector{Symbol}
-    cutoff::typeof(1.0u"Å")
+    cutoff::TÅ
     name::String
 end
 

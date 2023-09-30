@@ -5,7 +5,7 @@ struct MonteCarloSetup
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     ewald::IncrementalEwaldContext
-    tailcorrection::Base.RefValue{typeof(1.0u"K")}
+    tailcorrection::Base.RefValue{TK}
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[i] is the VdW grid for atom i in ff.
     offsets::Vector{Int}
@@ -22,8 +22,8 @@ end
 
 
 struct EwaldSystem # pseudo-AbstractSystem with only positions and charges
-    position::Vector{SVector{3,typeof(1.0u"Å")}}
-    atomic_charge::Vector{typeof(1.0u"e_au")}
+    position::Vector{SVector{3,TÅ}}
+    atomic_charge::Vector{Te_au}
 end
 AtomsBase.position(x::EwaldSystem) = x.position
 AtomsBase.position(x::EwaldSystem, i::Int) = x.position[i]
@@ -33,7 +33,7 @@ Base.length(x::EwaldSystem) = length(x.position)
 
 struct IdSystem # pseudo-AbstractSystem with only atomic symbols and charges
     atomic_symbol::Vector{Symbol}
-    atomic_charge::Vector{typeof(1.0u"e_au")}
+    atomic_charge::Vector{Te_au}
 end
 IdSystem(s::AbstractSystem{3}) = IdSystem(atomic_symbol(s), s[:,:atomic_charge])
 Base.length(s::IdSystem) = length(s.atomic_charge)
@@ -43,14 +43,14 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
                           coulomb::EnergyGrid, grids::Vector{EnergyGrid},
                           blocksetup::Vector{String},
                           num_framework_atoms::Vector{Int},
-                          restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,typeof(1.0u"Å")}}}}})
+                          restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,TÅ}}}}})
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
 
     kindsdict = Dict{Tuple{Vector{Symbol},String},Int}()
     systemkinds = IdSystem[]
-    U = Vector{SVector{3,typeof(1.0u"Å")}} # positions of the atoms of a system
+    U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
     poss = restartpositions isa Nothing ? Vector{U}[] : restartpositions
     indices = Tuple{Int,Int}[]
     rev_indices = Vector{Int}[]
@@ -71,7 +71,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         end
         push!(indices, (kind, length(poss[kind])+1))
         append!(rev_indices[kind], i for _ in 1:n)
-        restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,typeof(1.0u"Å")}}) for _ in 1:n)
+        restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,TÅ}}) for _ in 1:n)
     end
 
     ffidx = [[ff.sdict[s.atomic_symbol[k]] for k in 1:length(s)] for s in systemkinds]
@@ -113,7 +113,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    buffer = MVector{3,typeof(1.0u"Å")}(undef)
+    buffer = MVector{3,TÅ}(undef)
     buffer2 = MVector{3,Float64}(undef)
     beads = Vector{Int}(undef, n)
     for i in 1:n
@@ -206,7 +206,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
         supercell = find_supercell(syst_framework, 12.0u"Å")
     end
     supercell::NTuple{3,Int}
-    cell = CellMatrix(SMatrix{3,3,typeof(1.0u"Å"),9}(stack(bounding_box(syst_framework).*supercell)))
+    cell = CellMatrix(SMatrix{3,3,TÅ,9}(stack(bounding_box(syst_framework).*supercell)))
 
     csetup = GridCoordinatesSetup(syst_framework, gridstep)
     length(blockfiles) == length(systems) || error("Please provide one blockfiles element per system")
@@ -310,16 +310,16 @@ end
 
 
 struct FrameworkEnergyReport
-    vdw::typeof(1.0u"K")
-    direct::typeof(1.0u"K")
+    vdw::TK
+    direct::TK
 end
 FrameworkEnergyReport() = FrameworkEnergyReport(0.0u"K", 0.0u"K")
 Base.Float64(f::FrameworkEnergyReport) = Float64((f.vdw + f.direct)/u"K")
 
 struct MCEnergyReport
     framework::FrameworkEnergyReport
-    inter::typeof(1.0u"K")
-    reciprocal::typeof(1.0u"K")
+    inter::TK
+    reciprocal::TK
 end
 MCEnergyReport(v, d, i, r) = MCEnergyReport(FrameworkEnergyReport(v, d), i, r)
 Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
@@ -330,7 +330,7 @@ end
 
 struct BaselineEnergyReport
     er::MCEnergyReport
-    tailcorrection::typeof(1.0u"K")
+    tailcorrection::TK
 end
 BaselineEnergyReport(f, i, r, t) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
 BaselineEnergyReport(v, d, i, r, t) = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t)
@@ -355,7 +355,7 @@ for op in (:+, :-)
 end
 
 
-function framework_interactions(grids::Vector{EnergyGrid}, coulombgrid::EnergyGrid, charges::Vector{typeof(1.0u"e_au")}, indices::Vector{Int}, positions)
+function framework_interactions(grids::Vector{EnergyGrid}, coulombgrid::EnergyGrid, charges::Vector{Te_au}, indices::Vector{Int}, positions)
     isempty(grids) && return FrameworkEnergyReport()
     n = length(indices)
     vdw = 0.0u"K"
@@ -433,19 +433,19 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
 end
 
 """
-    update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,typeof(1.0u"Å")}})
+    update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}})
 
 Following a call to [`movement_energy(mc, idx, positions)`](@ref), update the internal
 state of `mc` so that the species of index `idx` is now at `positions`.
 """
-function update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,typeof(1.0u"Å")}})
+function update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}})
     update_ewald_context!(mc.ewald)
     mc.step.positions[idx[1]][idx[2]] = positions
     nothing
 end
 
 
-function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::Vector{Int}, newpos::Vector{SVector{3,typeof(1.0u"Å")}})
+function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::Vector{Int}, newpos::Vector{SVector{3,TÅ}})
     for (j, pos) in enumerate(newpos)
         block[pos] && return true
         ablock = atomblocks[ffidxi[j]]
@@ -454,11 +454,11 @@ function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::
     return false
 end
 
-function random_translation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, dmax::typeof(1.0u"Å"))
+function random_translation(positions::Vector{SVector{3,TÅ}}, dmax::TÅ)
     r = SVector{3}(((2*rand()-1)*dmax) for _ in 1:3)
     [poss + r for poss in positions]
 end
-function random_rotation(positions::Vector{SVector{3,typeof(1.0u"Å")}}, θmax, bead, _r=nothing)
+function random_rotation(positions::Vector{SVector{3,TÅ}}, θmax, bead, _r=nothing)
     θ = θmax*(2*rand()-1)
     s, c = sincos(θ)
     r = _r isa Nothing ? rand(1:3) : _r

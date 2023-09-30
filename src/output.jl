@@ -5,13 +5,13 @@ export output_pdb, output_restart
 struct OutputSimulationStep
     cell::CellMatrix
     ff::ForceField
-    positions::Vector{SVector{3,typeof(1.0u"Å")}}
+    positions::Vector{SVector{3,TÅ}}
     nummol::Vector{Int}
     ffidx::Vector{Vector{Int}}
 end
 
 function OutputSimulationStep(mc::MonteCarloSetup)
-    positions = Vector{SVector{3,typeof(1.0u"Å")}}(undef, mc.numatoms[])
+    positions = Vector{SVector{3,TÅ}}(undef, mc.numatoms[])
     nummol = Vector{Int}(undef, length(mc.step.positions))
     k = 0
     for (i, positioni) in enumerate(mc.step.positions)
@@ -28,7 +28,7 @@ end
 
 # Signal that the channel should be closed
 function OutputSimulationStep(mc::MonteCarloSetup, ::Nothing)
-    OutputSimulationStep(mc.step.cell, mc.step.ff, SVector{3,typeof(1.0u"Å")}[], Int[], Vector{Int}[])
+    OutputSimulationStep(mc.step.cell, mc.step.ff, SVector{3,TÅ}[], Int[], Vector{Int}[])
 end
 
 function output_pdb(path, o::OutputSimulationStep, (a, b, c), (α, β, γ), i)

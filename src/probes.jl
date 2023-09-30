@@ -68,7 +68,7 @@ function Base.show(io::IO, ::MIME"text/plain", x::ProbeSystem)
     nothing
 end
 
-function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,typeof(1.0u"Å")})
+function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,TÅ})
     buffer, ortho, safemin = prepare_periodic_distance_computations(s.mat)
     safemin2 = safemin^2
     buffer2 = MVector{3,Float64}(undef)
@@ -91,7 +91,7 @@ function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,typeof(1.0u"Å"
     (value, SVector{3,Float64}(∂1), SVector{3,Float64}(∂2), ∂3)
 end
 
-function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,typeof(1.0u"Å")})
+function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,TÅ})
     buffer, ortho, safemin = prepare_periodic_distance_computations(s.mat)
     safemin2 = safemin^2
     buffer2 = MVector{3,Float64}(undef)

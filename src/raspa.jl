@@ -157,7 +157,7 @@ function parse_molecule_RASPA(file)
     @assert num_groups == 1
     @assert num_atoms == parse(Int, lines[7])
     @assert num_atoms == 1 || strip(lines[6]) == "rigid"
-    positions = Vector{SVector{3,typeof(1.0u"Å")}}(undef, num_atoms)
+    positions = Vector{SVector{3,TÅ}}(undef, num_atoms)
     symbols = Vector{Symbol}(undef, num_atoms)
     for i in 1:num_atoms
         l = split(lines[7+i])
@@ -179,12 +179,12 @@ end
 Use `load_framework_RASPA`[@ref] or `load_molecule_RASPA`[@ref] to create one.
 """
 struct RASPASystem <: AbstractSystem{3}
-    bounding_box::SVector{3,SVector{3,typeof(1.0u"Å")}}
-    position::Vector{SVector{3,typeof(1.0u"Å")}}
+    bounding_box::SVector{3,SVector{3,TÅ}}
+    position::Vector{SVector{3,TÅ}}
     atomic_symbol::Vector{Symbol}
     atomic_number::Vector{Int}
     atomic_mass::Vector{typeof(1.0u"u")}
-    atomic_charge::Vector{typeof(1.0u"e_au")}
+    atomic_charge::Vector{Te_au}
     ismolecule::Bool
 end
 function AtomsBase.boundary_conditions(sys::RASPASystem)
@@ -229,7 +229,7 @@ function load_framework_RASPA(name::AbstractString, forcefield::AbstractString)
     system = load_system(AtomsIO.ChemfilesParser(), cif)
     pseudoatoms = parse_pseudoatoms_RASPA(joinpath(raspa, "forcefield", forcefield, "pseudo_atoms.def"))
     mass  = Vector{typeof(1.0u"u")}(undef, length(system))
-    charges = Vector{typeof(1.0u"e_au")}(undef, length(system))
+    charges = Vector{Te_au}(undef, length(system))
     for (i, atom) in enumerate(system)
         pseudo::PseudoAtomInfo = pseudoatoms[AtomsBase.atomic_symbol(atom)]
         mass[i]    = pseudo.mass*u"u"
@@ -243,7 +243,7 @@ function load_framework_RASPA(input::AbstractMatrix{T}, ::AbstractString) where 
     bbox = SVector{3}([[mat[1,1], mat[2,1], mat[3,1]],
                        [mat[1,2], mat[2,2], mat[3,2]],
                        [mat[1,3], mat[2,3], mat[3,3]]])
-    RASPASystem(bbox, SVector{3,typeof(1.0u"Å")}[], Symbol[], Int[], typeof(1.0u"u")[], typeof(1.0u"e_au")[], false)
+    RASPASystem(bbox, SVector{3,TÅ}[], Symbol[], Int[], typeof(1.0u"u")[], Te_au[], false)
 end
 
 """
@@ -263,7 +263,7 @@ function load_molecule_RASPA(name::AbstractString, forcefield::AbstractString, f
     symbols, positions = parse_molecule_RASPA(joinpath(raspa, "molecules", forcefield, splitext(name)[2] == ".def" ? name : name*".def"))
     pseudoatoms = parse_pseudoatoms_RASPA(joinpath(raspa, "forcefield", framework_forcefield, "pseudo_atoms.def"))
     mass  = Vector{typeof(1.0u"u")}(undef, length(symbols))
-    charges = Vector{typeof(1.0u"e_au")}(undef, length(symbols))
+    charges = Vector{Te_au}(undef, length(symbols))
     atom_numbers = Vector{Int}(undef, length(symbols))
     for (i, atom) in enumerate(symbols)
         pseudo::PseudoAtomInfo = pseudoatoms[atom]
@@ -275,7 +275,7 @@ function load_molecule_RASPA(name::AbstractString, forcefield::AbstractString, f
     bbox = if framework_system !== nothing
         bounding_box(framework_system)
     else
-        SVector{3,SVector{3,typeof(1.0u"Å")}}([[Inf, 0.0, 0.0]*u"Å", [0.0, Inf, 0.0]*u"Å", [0.0, 0.0, Inf]*u"Å"])
+        SVector{3,SVector{3,TÅ}}([[Inf, 0.0, 0.0]*u"Å", [0.0, Inf, 0.0]*u"Å", [0.0, 0.0, Inf]*u"Å"])
     end
     RASPASystem(bbox, positions, symbols, atom_numbers, mass, charges, true)
 end
@@ -581,7 +581,7 @@ function read_restart_RASPA(file)
         for _ in 1:29; readline(io); end
         numcomponents = parse(Int, split(readline(io))[2])
         for _ in 1:(4+11*numcomponents); readline(io); end
-        positions = Vector{Vector{SVector{3,typeof(1.0u"Å")}}}[]
+        positions = Vector{Vector{SVector{3,TÅ}}}[]
         l = readline(io)
         while !isempty(l)
             num_mol = parse(Int, split(l)[4])
@@ -593,7 +593,7 @@ function read_restart_RASPA(file)
                 parse(Int, split(readline(io))[3]) == 0 && break
                 num_atoms += 1
             end
-            newpos = [Vector{SVector{3,typeof(1.0u"Å")}}(undef, num_atoms) for _ in 1:num_mol]
+            newpos = [Vector{SVector{3,TÅ}}(undef, num_atoms) for _ in 1:num_mol]
             push!(positions, newpos)
             seek(io, pos)
             for j in 1:num_mol, k in 1:num_atoms

@@ -2,15 +2,15 @@
 abstract type TemperatureFunction <: Function end
 
 struct TRamp <: TemperatureFunction
-    start::typeof(1.0u"K")
-    Δ::typeof(1.0u"K")
+    start::TK
+    Δ::TK
 
-    function TRamp(start::typeof(1.0u"K"), Δ::typeof(1.0u"K"), ::Nothing)
+    function TRamp(start::TK, Δ::TK, ::Nothing)
         new(start, Δ)
     end
 end
 function TRamp(start, stop)
-    TRamp(convert(typeof(1.0u"K"), start), convert(typeof(1.0u"K"), stop-start), nothing)
+    TRamp(convert(TK, start), convert(TK, stop-start), nothing)
 end
 function (tf::TRamp)(k, n)
     tf.start + tf.Δ*(k-1)/(n-1)
@@ -51,7 +51,7 @@ function (tf::TParts{N})(k, n) where N
     0.0u"K"
 end
 
-function TAnneal(bottom::typeof(1.0u"K"), top::typeof(1.0u"K"), wait::Float64)
+function TAnneal(bottom::TK, top::TK, wait::Float64)
     TParts(((1.0 - wait)/2, (1.0 + wait)/2, 1.0), (
         TRamp(bottom, top),
         Returns(top),

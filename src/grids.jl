@@ -89,7 +89,7 @@ macro write_no_unit(x)
     end)
 end
 
-function _create_grid_common(file, framework::AbstractSystem{3}, spacing::typeof(1.0u"Å"), cutoff::typeof(1.0u"Å"))
+function _create_grid_common(file, framework::AbstractSystem{3}, spacing::TÅ, cutoff::TÅ)
     # isfile(file) && error(lazy"File $file already exists, please remove it if you want to overwrite it.")
 
     csetup = GridCoordinatesSetup(framework, spacing)
@@ -131,7 +131,7 @@ function _set_gridpoint!(grid, i, j, k, Δ, λ, λ⁻¹e7, derivatives)
     nothing
 end
 
-function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::typeof(1.0u"Å"), atom::Symbol)
+function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::TÅ, atom::Symbol)
     cset, num_unitcell = _create_grid_common(file, framework, spacing, forcefield.cutoff)
     grid = Array{Cfloat,4}(undef, cset.dims[3]+1, cset.dims[2]+1, cset.dims[1]+1, 8)
     probe_vdw = ProbeSystem(framework, forcefield, atom)
@@ -152,7 +152,7 @@ function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceFi
     grid
 end
 
-function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::typeof(1.0u"Å"), _ewald=nothing)
+function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::TÅ, _ewald=nothing)
     cset, num_unitcell = _create_grid_common(file, framework, spacing, 12.0u"Å")
     ewald = if _ewald isa EwaldFramework
         _ewald

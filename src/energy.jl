@@ -16,10 +16,10 @@ systems of kind "water".
 """
 struct SimulationStep{N}
     ff::ForceField
-    charges::Vector{typeof(1.0u"e_au")}
+    charges::Vector{Te_au}
     # charges[ix] is the charge of the atom whose of index ix in ff, i.e. the charge of the
     # k-th atom in a system of kind i is charges[ffidx[i][k]].
-    positions::Vector{Vector{Vector{SVector{N,typeof(1.0u"Å")}}}}
+    positions::Vector{Vector{Vector{SVector{N,TÅ}}}}
     # positions[i][j][k] is the position of the k-th atom in the j-th system of kind i
     isrigid::BitVector # isrigid[i] applies to all systems of kind i
     ffidx::Vector{Vector{Int}}
@@ -30,7 +30,7 @@ end
 
 """
     SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
-                   positions::Vector{Vector{Vector{SVector{N,typeof(1.0u"Å")}}}} where N,
+                   positions::Vector{Vector{Vector{SVector{N,TÅ}}}} where N,
                    cell::CellMatrix,
                    isrigid::BitVector=trues(length(systemkinds)))
 
@@ -53,12 +53,12 @@ See also [`make_step`](@ref) for an alternative way of constructing a `Simulatio
 without having to specify the system kinds.
 """
 function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
-                        positions::Vector{Vector{Vector{SVector{N,typeof(1.0u"Å")}}}} where N,
+                        positions::Vector{Vector{Vector{SVector{N,TÅ}}}} where N,
                         cell::CellMatrix,
                         isrigid::BitVector=trues(length(systemkinds)))
     @assert length(systemkinds) == length(positions) == length(isrigid)
     ffidx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
-    charges = [[uconvert(u"e_au", s[k,:atomic_charge])::typeof(1.0u"e_au") for k in 1:length(s)] for s in systemkinds]
+    charges = [[uconvert(u"e_au", s[k,:atomic_charge])::Te_au for k in 1:length(s)] for s in systemkinds]
     SimulationStep(ff, charges, positions, isrigid, ffidx, cell)
 end
 
@@ -86,7 +86,7 @@ function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatr
     end
     kindsdict = Dict{Tuple{Vector{Symbol},Bool},Int}()
     systemkinds = T[]
-    U = Vector{SVector{n_dimensions(systems[1]),typeof(1.0u"Å")}} # positions of the atoms of a system
+    U = Vector{SVector{n_dimensions(systems[1]),TÅ}} # positions of the atoms of a system
     poss = Vector{U}[]
     newisrigid = BitVector()
     indices = Tuple{Int,Int}[]
@@ -170,7 +170,7 @@ function unalias_position(step, (i,j))
     SimulationStep(step.ff, step.charges, newpositions, step.isrigid, step.ffidx, step.cell)
 end
 
-function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,typeof(1.0u"Å")}}) where N
+function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,TÅ}}) where N
     n = length(positions)
     energy = 0.0u"K"
     cutoff2 = step.ff.cutoff^2
@@ -217,7 +217,7 @@ function compute_vdw(step::SimulationStep)
     energy = 0.0u"K"
     nkinds = length(step.ffidx)
     cutoff2 = step.ff.cutoff^2
-    buffer = MVector{3,typeof(1.0u"Å")}(undef)
+    buffer = MVector{3,TÅ}(undef)
     buffer2 = MVector{3,Float64}(undef)
     for i1 in 1:nkinds
         poskind1 = step.positions[i1]
@@ -244,11 +244,11 @@ function compute_vdw(step::SimulationStep)
     energy
 end
 
-function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, positions::Vector{SVector{N,typeof(1.0u"Å")}}) where N
+function single_contribution_vdw(step::SimulationStep, (i1,j1)::Tuple{Int,Int}, positions::Vector{SVector{N,TÅ}}) where N
     energy = step.isrigid[i1] ? 0.0u"K" : energy_intra(step, i1, positions)
     nkinds = length(step.ffidx)
     cutoff2 = step.ff.cutoff^2
-    buffer = MVector{3,typeof(1.0u"Å")}(undef)
+    buffer = MVector{3,TÅ}(undef)
     buffer2 = MVector{3,Float64}(undef)
     idx1 = step.ffidx[i1]
     for i2 in 1:nkinds

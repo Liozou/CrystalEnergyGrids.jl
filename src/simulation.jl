@@ -30,7 +30,7 @@ where
 - `simu` is this `SimulationSetup`.
 """
 struct SimulationSetup{Trecord}
-    temperatures::Vector{typeof(1.0u"K")}
+    temperatures::Vector{TK}
     ncycles::Int
     outdir::String
     printevery::Int
@@ -40,7 +40,7 @@ function SimulationSetup(T, ncycles::Int, outdir::String, _printevery::Int, reco
     temperatures = if T isa Number
         fill(T, ncycles)
     elseif T isa Vector
-        convert(Vector{typeof(1.0u"K")}, T)
+        convert(Vector{TK}, T)
     else
         T.(1:ncycles, ncycles)
     end
@@ -65,7 +65,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     # idle initialisations
     running_update = @spawn nothing
-    local oldpos::Vector{SVector{3,typeof(1.0u"Å")}}
+    local oldpos::Vector{SVector{3,TÅ}}
     local before::MCEnergyReport
     local after::MCEnergyReport
 

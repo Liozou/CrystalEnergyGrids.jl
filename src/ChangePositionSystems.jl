@@ -3,11 +3,11 @@ using Unitful
 
 struct ChangePositionSystem{N,T<:AbstractSystem{N}} <: AbstractSystem{N}
     system::T
-    positions::Vector{SVector{N,typeof(1.0u"Å")}}
+    positions::Vector{SVector{N,TÅ}}
 end
-ChangePositionSystem(s::AbstractSystem{N}, poss) where {N} = ChangePositionSystem{N,typeof(s)}(s, [SVector{N,typeof(1.0u"Å")}(p) for p in poss])
+ChangePositionSystem(s::AbstractSystem{N}, poss) where {N} = ChangePositionSystem{N,typeof(s)}(s, [SVector{N,TÅ}(p) for p in poss])
 ChangePositionSystem(s::ChangePositionSystem, poss) = ChangePositionSystem(s.system, poss)
-function ChangePositionSystem(s::ChangePositionSystem, poss::Vector{SVector{N,typeof(1.0u"Å")}}) where N
+function ChangePositionSystem(s::ChangePositionSystem, poss::Vector{SVector{N,TÅ}}) where N
     ChangePositionSystem(s.system, poss) # to avoid ambiguity
 end
 

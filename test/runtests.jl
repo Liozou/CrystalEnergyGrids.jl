@@ -114,7 +114,7 @@ end
     ΠA, ΠB, ΠC = setupArCIT7.grids[1].num_unitcell
     Π = ΠA*ΠB*ΠC
     n = length(cit7)
-    _positions = Vector{SVector{3,typeof(1.0u"Å")}}(undef, n*Π)
+    _positions = Vector{SVector{3,TÅ}}(undef, n*Π)
     _symbols = Vector{Symbol}(undef, n*Π)
     mat = NoUnits.(setupArCIT7.grids[1].csetup.cell.mat./u"Å")
     axeA, axeB, axeC = eachcol(mat)
