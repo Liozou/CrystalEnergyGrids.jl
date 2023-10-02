@@ -5,16 +5,55 @@ using CellListMap.PeriodicSystems
 import LinearAlgebra
 
 """
-    SimulationStep{N}
+    SimulationStep{N,T}
 
 Represent a set of systems in space along with a force-field, i.e. a single frame in time.
 
 To compute the energy of such a step, see [`energy_nocutoff`](@ref) and [`compute_vdw`](@ref).
 
+
+## Nomenclature
+
 The systems are factored into kinds: one kind may designate a molecule of water, another a
 zeolite framework. There can be any number of systems for each kind: simulating the wetting
 of a zeolite will for instance require one system of the "zeolite framework" kind and many
 systems of kind "water".
+
+Each kind of system is referred by a number `i`.
+For each such kind, each instance of the kind (i.e. each molecule) is referred by another
+number `j`.
+Finally, for each kind, each atom is referred by a last number `k`.
+
+As a consequence, each atom of the `SimulationStep` is uniquely determined by its
+corresponding triplet `(i,j,k)`.
+
+The force field associates properties to each atom according to its category. The category
+is usually referred by a name in the force field definition (like "Ow" to designate the
+oxygens of water molecule), and is also internally represented by a number `ix`.
+Each pair `(i,k)` designating a specific atom in a given species kind corresponds to a
+unique category `ix` in the forcefield.
+
+
+## Fields (part of the API)
+- `ff`: the [`ForceField`](@ref).
+- `charges`: `charges[ix]` is the charge of an atom of category `ix`.
+- `mat`: the 3×3 matrix representing the unit cell.
+- `positions`: a `Vector` of `SVector{N,typeof(1.0u"Å")}` representing the coordinates of
+  all the atoms in the system.
+- `atoms`: the list of triplet `(i,j,k)` defining the atoms, in the same order than their
+  corresponding coordinates in `positions`.
+- `posidx`: the converse mapping, i.e. `atoms[l] == (i,j,k)` implies `posidx[i][j][k] == l`.
+- `freespecies`: `freespecies[i]` is a list of indices `j` that indicate that `posidx[i][j]`
+  is an invalid sublist, not to be taken into account.
+- `ffidx`: a `Vector{Vector{Int}}` such that `ffidx[i][k] == ix` where `ix` is the category
+  of the `k`-th atom of a species of kind `i` in the force field.
+
+Note that `atoms[l] == (i,j,k)` implies that `posidx[i][j][k] == l` but the converse does
+not hold: `posidx[i][j][k]` may be defined even though there is no atom `l` such that
+`atoms[l] == (i,j,k)`. The value of `posidx[i][j][k]` is then meaningless.
+In particular, the list of valid indices `j` for kind `i` is
+`setdiff(eachindex(posidx[i]), freespecies[i])` and the number of species of kind `i` is
+`length(posidx[i]) - length(freespecies[i])`.
 """
 struct SimulationStep{N,T}
     ff::ForceField
@@ -37,6 +76,16 @@ struct SimulationStep{N,T}
     ffidx::Vector{Vector{Int}}
     # ffidx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
     # in the force field for the k-th atom in a system of kind i
+end
+
+@inline function Base.getproperty(s::SimulationStep, x::Symbol)
+    if x === :positions
+        return getfield(s, :psystem).xpositions
+    elseif x === :mat
+        return getfield(s, :psystem).unitcell
+    else
+        return getfield(s, x)
+    end
 end
 
 function SimulationStep(ff::ForceField, charges::Vector{Te_au},
@@ -157,17 +206,17 @@ If `mode === :zero`, create a `SimulationStep` with an empty `ffidx` field.
 """
 function SimulationStep(step::SimulationStep{N,T}, mode=:all) where {N,T}
     if mode === :all
-        psystem = PeriodicSystem(; xpositions=step.psystem.xpositions,
+        psystem = PeriodicSystem(; xpositions=step.positions,
                                    ypositions=SVector{3,TÅ}[],
-                                   unitcell=step.psystem.unitcell,
+                                   unitcell=step.mat,
                                    cutoff=step.ff.cutoff, output=0.0u"K")
         SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
                        [[copy(js) for js in is] for is in step.posidx],
                        [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
     elseif mode === :output
-        psystem = PeriodicSystem(; xpositions=step.psystem.xpositions,
+        psystem = PeriodicSystem(; xpositions=step.positions,
                                    ypositions=SVector{3,TÅ}[],
-                                   unitcell=step.psystem.unitcell,
+                                   unitcell=step.mat,
                                    cutoff=step.ff.cutoff, output=0.0u"K")
         SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
                        step.posidx, step.freespecies, step.isrigid, step.ffidx)
@@ -191,7 +240,7 @@ function update_position!(step::SimulationStep, (i,j), newpos)
     molpos = step.posidx[i][j]
     for (k, pos) in enumerate(newpos)
         l = molpos[k]
-        step.psystem.xpositions[l] = pos
+        step.positions[l] = pos
     end
 end
 
@@ -206,9 +255,9 @@ the `j`-th system of kind `i` in `step`.
 See also [`update_position!`](@ref) to modify `step` in-place.
 """
 function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
-    psystem = PeriodicSystem(; xpositions=step.psystem.xpositions,
+    psystem = PeriodicSystem(; xpositions=step.positions,
                                ypositions=SVector{3,TÅ}[],
-                               unitcell=step.psystem.unitcell,
+                               unitcell=step.mat,
                                cutoff=step.ff.cutoff, output=0.0u"K")
 
     x = SimulationStep{N,T}(step.ff, step.charges, psystem, step.atoms, step.posidx, step.freespecies, step.isrigid, step.ffidx)
@@ -239,13 +288,13 @@ end
 #     energy = 0.0u"K"
 #     nkinds = length(step.ffidx)
 #     for i1 in 1:nkinds
-#         poskind1 = step.psystem.xpositions[i1]
+#         poskind1 = step.positions[i1]
 #         idx1 = step.ffidx[i1]
 #         rigid1 = step.isrigid[i1]
 #         for (j1, pos1) in enumerate(poskind1)
 #             rigid1 || (energy += energy_intra(step, i1, pos1))
 #             for i2 in i1:nkinds
-#                 poskind2 = step.psystem.xpositions[i2]
+#                 poskind2 = step.positions[i2]
 #                 idx2 = step.ffidx[i2]
 #                 for j2 in (j1*(i1==i2)+1):length(poskind2)
 #                     pos2 = poskind2[j2]
@@ -273,8 +322,8 @@ end
 function compute_vdw(step::SimulationStep)
     length(step.atoms) < 300 && return compute_vdw_noneighbour(step)
     system = PeriodicSystem(;
-        xpositions=step.psystem.xpositions,
-        unitcell=step.psystem.unitcell,
+        xpositions=step.positions,
+        unitcell=step.mat,
         cutoff=step.psystem.cutoff,
         output=0.0u"K"
     )
@@ -288,14 +337,14 @@ function compute_vdw_noneighbour(step::SimulationStep)
     cutoff2 = step.ff.cutoff^2
     buffer = MVector{3,TÅ}(undef)
     buffer2 = MVector{3,Float64}(undef)
-    cell = CellMatrix(step.psystem.unitcell)
-    for (l1, pos1) in enumerate(step.psystem.xpositions)
+    cell = CellMatrix(step.mat)
+    for (l1, pos1) in enumerate(step.positions)
         i1, j1, k1 = step.atoms[l1]
         ix1 = step.ffidx[i1][k1]
-        for l2 in (l1+1):length(step.psystem.xpositions)
+        for l2 in (l1+1):length(step.positions)
             i2, j2, k2 = step.atoms[l2]
             i1 == i2 && j1 == j2 && continue # no intra energy considered here
-            pos2 = step.psystem.xpositions[l2]
+            pos2 = step.positions[l2]
             buffer .= pos2 .- pos1
             d2 = unsafe_periodic_distance2!(buffer, buffer2, cell)
             if d2 < cutoff2
@@ -307,7 +356,7 @@ function compute_vdw_noneighbour(step::SimulationStep)
         rigid && continue
         posidxi = step.posidx[i]
         for molpos in posidxi
-            energy += energy_intra(step, i, @view step.psystem.xpositions[molpos])
+            energy += energy_intra(step, i, @view step.positions[molpos])
         end
     end
     energy
@@ -343,10 +392,10 @@ function single_contribution_vdw_noneighbour(step::SimulationStep, (i2,j2)::Tupl
     buffer = MVector{3,TÅ}(undef)
     buffer2 = MVector{3,Float64}(undef)
     idx2 = step.ffidx[i2]
-    cell = CellMatrix(step.psystem.unitcell)
+    cell = CellMatrix(step.mat)
     for (k2, pos2) in enumerate(poss2)
         ix2 = idx2[k2]
-        for (l1, pos1) in enumerate(step.psystem.xpositions)
+        for (l1, pos1) in enumerate(step.positions)
             i1, j1, k1 = step.atoms[l1]
             i1 == i2 && j1 == j2 && continue
             buffer .= pos2 .- pos1

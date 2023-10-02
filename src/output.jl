@@ -5,15 +5,15 @@ export output_pdb, output_restart
 SimulationStep(mc::MonteCarloSetup) = SimulationStep(mc.step, :output)
 
 function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i)
-    invmat = inv(ustrip.(u"Å", o.psystem.unitcell))*u"Å^-1"
+    invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
     open(path, "a") do io
         @printf io "MODEL %4d\n" i
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
-        for (l, opos) in enumerate(o.psystem.xpositions)
+        for (l, opos) in enumerate(o.positions)
             i, j, k = o.atoms[l]
             ix = o.ffidx[i][k]
             abc = invmat * opos
-            pos = o.psystem.unitcell*(abc .- floor.(abc))/u"Å"
+            pos = o.mat*(abc .- floor.(abc))/u"Å"
             symb = String(o.ff.symbols[ix])
             ij = ((i + j - 2)*(i + j - 1))÷2 + j - 1
             serial = ((ij + k - 1)*(ij + k))÷2 + ij
@@ -36,15 +36,15 @@ The output is appended to the file at the given `path`, if any.
 See also [`output_restart`](@ref).
 """
 function output_pdb(path, mc::MonteCarloSetup, o=SimulationStep(mc), i=0)
-    lengths, angles = cell_parameters(o.psystem.unitcell)
+    lengths, angles = cell_parameters(o.mat)
     output_pdb(path, o, lengths, angles, i)
 end
 
 
 function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnames)
     positions = [Vector{SVector{3,TÅ}}[] for _ in o.ffidx]
-    invmat = inv(ustrip.(u"Å", o.psystem.unitcell))*u"Å^-1"
-    for (l, pos) in enumerate(o.psystem.xpositions)
+    invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
+    for (l, pos) in enumerate(o.positions)
         i, j, k = o.atoms[l]
         posi = positions[i]
         length(posi) < j && resize!(posi, j)
@@ -63,7 +63,7 @@ function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnam
 number-of-unit-cells: 1 1 1""")
         for s in ("unit-cell-vector-", "cell-vector-")
             for (i, x) in enumerate(('a', 'b', 'c'))
-                @printf io "%s%c:%19.12f%19.12f%19.12f\n" s x NoUnits(o.psystem.unitcell[1,i]/u"Å") NoUnits(o.psystem.unitcell[2,i]/u"Å") NoUnits(o.psystem.unitcell[3,i]/u"Å")
+                @printf io "%s%c:%19.12f%19.12f%19.12f\n" s x NoUnits(o.mat[1,i]/u"Å") NoUnits(o.mat[2,i]/u"Å") NoUnits(o.mat[3,i]/u"Å")
             end
             println(io)
         end
@@ -112,7 +112,7 @@ Components: """, length(o.ffidx), " (Adsorbates ", sum(length, positions), """, 
             println(io, "------------------------------------------------------------------------")
             for (j, poss) in enumerate(posi), (k, opos) in enumerate(poss)
                 abc = invmat * opos
-                pos = NoUnits.(o.psystem.unitcell*(abc .- floor.(abc))./u"Å")
+                pos = NoUnits.(o.mat*(abc .- floor.(abc))./u"Å")
                 @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" (j-1) (k-1) pos[1] pos[2] pos[3]
             end
             for s in ("velocity:", "force:   "), j in 0:num-1, k in 0:m-1
@@ -144,7 +144,7 @@ If not provided, the output `o` corresponds to the current status of `mc`.
 See also [`output_pdb`](@ref).
 """
 function output_restart(path, mc::MonteCarloSetup, o=SimulationStep(mc))
-    lengths, angles = cell_parameters(mc.step.psystem.unitcell)
+    lengths, angles = cell_parameters(mc.step.mat)
     molnames = [identify_molecule([mc.step.ff.symbols[ix] for ix in ffidxi]) for ffidxi in mc.step.ffidx]
     output_restart(path, o, lengths, angles, molnames)
 end

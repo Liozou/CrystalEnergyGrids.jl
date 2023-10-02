@@ -227,7 +227,7 @@ end
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
     mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
     reportsTrio = run_montecarlo!(mcTrio, SimulationSetup(300u"K", 4000))
-    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, [mcTrio.step.psystem.xpositions[1]]), CEG.ChangePositionSystem(co2, mcTrio.step.psystem.xpositions[2:4]), CEG.ChangePositionSystem(co2, mcTrio.step.psystem.xpositions[5:7])]; blockfiles=[false,false,false]);
+    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, [mcTrio.step.positions[1]]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[2:4]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[5:7])]; blockfiles=[false,false,false]);
     baseTrio = Float64(baseline_energy(mcTrio))
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])

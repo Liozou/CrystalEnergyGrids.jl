@@ -7,6 +7,7 @@ Definition of the simulation setup, which must provide the following information
 - `T` the temperature. Either a number (in K), a list of temperatures (in K, one per cycle)
   or a function. If a function, it must take two parameters: `k` the number of the current
   cycle and `n` the total number of cycles, and return a temperature (in K).
+  Internally, the list of temperatures is stored as a field `temperatures` indexed by `k`.
 - `ncycles` the number of cycles of the simulation. Each cycle consists in `N` steps, where
   a step is a Monte-Carlo movement attempt on a random species, and `N` is the number of
   species.
@@ -22,33 +23,64 @@ Definition of the simulation setup, which must provide the following information
 If provided, `record` must have the signature
     `record(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, simu::SimulationSetup)`
 where
-- `o` contains the information on the positions of the species at this point.
+- `o` contains the information on the positions of the species at this point. It must not
+  be modified by the `record` function.
 - `e` is the energy at this point.
 - `k` is the cycle number (between 1 and `cycles`).
 - `mc` is the input `MonteCarloSetup`. Note that the `positions` field may be incorrect,
-  use that of `o`.
-- `simu` is this `SimulationSetup`.
+  use that of `o`. It must not be modified by the `record` function.
+- `simu` is this `SimulationSetup`. It must not be modified by the `record` function.
+
+
+## Example
+
+This is an example of a record function that stores the averages of the distance between
+the particles and a given point, weighted by the current temperature:
+
+```julia
+struct AverageDistanceTemperatureRecord <: Function
+    refpoint::SVector{3,typeof(1.0u"Å")}
+    weightedaverages::Vector{typeof(1.0u"Å * K")}
+end
+AverageDistanceTemperatureRecord(refpoint) = AverageDistanceTemperatureRecord(refpoint, [])
+
+function (x::AverageDistanceTemperatureRecord)(o, _, k, _, simu)
+    buffer, ortho, safemin = prepare_periodic_distance_computations(o.cell)
+    weightedaverage = 0.0u"Å * K"
+    for pos in o.positions
+        buffer .= pos .- x.refpoint
+        weightedaverage += periodic_distance!(buffer, o.cell, ortho, safemin)
+    end
+    x.weightedaverages[k] = weightedaverage * simu.temperatures[k] / length(o.atoms)
+    nothing
+end
+```
+
+To perform a simulation that runs for 1000 cycles with logarithmically increasing
+temperatures, no trajectory stored but a record the average weighted distance to point
+`(0.5, 0.9, 1.3)` (in Å) and energies stored every 2 cycles, use
+`SimulationSetup((k,n)->log1p(k/n)*300u"K"/log(2), 1000, "", 2, AverageDistanceTemperatureRecord([0.5, 0.9, 1.3]u"Å"))`
 """
-struct SimulationSetup{Trecord}
+@kwdef struct SimulationSetup{Trecord}
     temperatures::Vector{TK}
     ncycles::Int
-    outdir::String
-    printevery::Int
-    record::Trecord
-end
-function SimulationSetup(T, ncycles::Int, outdir::String, _printevery::Int, record)
-    temperatures = if T isa Number
-        fill(T, ncycles)
-    elseif T isa Vector
-        convert(Vector{TK}, T)
-    else
-        T.(1:ncycles, ncycles)
+    outdir::String=""
+    printevery::Int=1000
+    record::Trecord=Returns(nothing)
+
+    function SimulationSetup(T, ncycles::Int, outdir::String="", printevery::Int=1000, record=Returns(nothing))
+        temperatures = if T isa Number
+            fill(T, ncycles)
+        elseif T isa Vector
+            convert(Vector{TK}, T)
+        else
+            T.(1:ncycles, ncycles)
+        end
+        new{typeof(record)}(temperatures, ncycles, outdir, printevery, record)
     end
-    printevery = _printevery == 0 ? ncycles+1 : _printevery
-    SimulationSetup(temperatures, ncycles, outdir, printevery, record)
 end
-function SimulationSetup(T, ncycles, outdir="", _printevery=1000)
-    SimulationSetup(T, ncycles, outdir, _printevery, Returns(nothing))
+function SimulationSetup(T, ncycles; kwargs...)
+    SimulationSetup(; temperatures=T, ncycles, kwargs...)
 end
 
 
@@ -78,7 +110,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     # record and outputs
     mkpath(simu.outdir)
-    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.psystem.unitcell)
+    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
     record_task = @spawn simu.record(SimulationStep(mc.step, :output), energy, 0, mc, simu)
 
     # main loop
@@ -96,7 +128,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.psystem.xpositions[mc.step.posidx[idx[1]][idx[2]]]
+            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
 
             istranslation = false
             isrotation = false
@@ -147,7 +179,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 after = MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
             else
                 molpos = mc.step.posidx[i][j]
-                positions = @view mc.step.psystem.xpositions[molpos]
+                positions = @view mc.step.positions[molpos]
                 singlevdw_before_task = @spawn single_contribution_vdw(mc.step, (i,j), positions)
                 singlereciprocal_after = @spawn single_contribution_ewald(mc.ewald, k, newpos)
                 singlereciprocal_before = @spawn single_contribution_ewald(mc.ewald, k, nothing)
@@ -189,12 +221,12 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 # @show shadow.ewald.ctx.Eiks[1][30]
                 # display(energy)
                 # display(baseline_energy(shadow))
-                # println(mc.step.psystem.xpositions)
+                # println(mc.step.positions)
             end
         end
         # end of cycle
         translation_ratio = accepted_translations / attempted_translations
-        report_now = idx_cycle%simu.printevery == 0
+        report_now = simu.printevery > 0 && idx_cycle%simu.printevery == 0
         if !(simu.record isa Returns) || report_now
             accepted && wait(running_update)
             o = SimulationStep(mc.step, :output)
