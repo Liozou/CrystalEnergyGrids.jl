@@ -22,7 +22,6 @@ struct SimulationStep{N,T}
     # charges[ix] is the charge of the atom of index ix in ff, i.e. the charge of the k-th
     # atom in a system of kind i is charges[ffidx[i][k]].
     psystem::T
-    psystembis::T # copy of the first, used to do two computations at the same time
     atoms::Vector{Tuple{Int,Int,Int}} # one index per atom
     posidx::Vector{Vector{Vector{Int}}}
     # the position of the k-th atom in the j-th system of kind i is positions[l] where
@@ -67,9 +66,8 @@ function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                                unitcell=cell.mat,
                                cutoff=ff.cutoff,
                                output=0.0u"K")
-    psystembis = deepcopy(psystem)
 
-    SimulationStep{N,typeof(psystem)}(ff, charges, psystem, psystembis, atoms, posidx, freespecies, isrigid, ffidx)
+    SimulationStep{N,typeof(psystem)}(ff, charges, psystem, atoms, posidx, freespecies, isrigid, ffidx)
 end
 
 """
@@ -163,11 +161,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all) where {N,T}
                                    ypositions=SVector{3,TÅ}[],
                                    unitcell=step.psystem.unitcell,
                                    cutoff=step.ff.cutoff, output=0.0u"K")
-        psystembis = PeriodicSystem(; xpositions=step.psystembis.xpositions,
-                                      ypositions=SVector{3,TÅ}[],
-                                      unitcell=step.psystembis.unitcell,
-                                      cutoff=step.ff.cutoff, output=0.0u"K")
-        SimulationStep{N,T}(step.ff, step.charges, psystem, psystembis, copy(step.atoms),
+        SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
                        [[copy(js) for js in is] for is in step.posidx],
                        [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
     elseif mode === :output
@@ -175,10 +169,10 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all) where {N,T}
                                    ypositions=SVector{3,TÅ}[],
                                    unitcell=step.psystem.unitcell,
                                    cutoff=step.ff.cutoff, output=0.0u"K")
-        SimulationStep{N,T}(step.ff, step.charges, psystem, step.psystembis, copy(step.atoms),
+        SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
                        step.posidx, step.freespecies, step.isrigid, step.ffidx)
     elseif mode === :zero
-        SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.psystembis, step.atoms,
+        SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
                        step.posidx, step.freespecies, step.isrigid, Vector{Int}[])
     else
         error("Please use either :all, :output or :zero as value for argument mode")
@@ -198,7 +192,6 @@ function update_position!(step::SimulationStep, (i,j), newpos)
     for (k, pos) in enumerate(newpos)
         l = molpos[k]
         step.psystem.xpositions[l] = pos
-        step.psystembis.xpositions[l] = pos
     end
 end
 
@@ -217,12 +210,8 @@ function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
                                ypositions=SVector{3,TÅ}[],
                                unitcell=step.psystem.unitcell,
                                cutoff=step.ff.cutoff, output=0.0u"K")
-    psystembis = PeriodicSystem(; xpositions=step.psystembis.xpositions,
-                               ypositions=SVector{3,TÅ}[],
-                               unitcell=step.psystembis.unitcell,
-                               cutoff=step.ff.cutoff, output=0.0u"K")
 
-    x = SimulationStep{N,T}(step.ff, step.charges, psystem, psystembis, step.atoms, step.posidx, step.freespecies, step.isrigid, step.ffidx)
+    x = SimulationStep{N,T}(step.ff, step.charges, psystem, step.atoms, step.posidx, step.freespecies, step.isrigid, step.ffidx)
     update_position!(x, (i,j), newpos)
     x
 end
@@ -306,17 +295,10 @@ function (vdw::SingleVdwComputation)(pos1, pos2, l1, k2, d², output)
     output
 end
 
-function single_contribution_vdw(step::SimulationStep, (i2,j2)::Tuple{Int,Int}, poss2::Union{Nothing,AbstractVector{SVector{N,TÅ}} where N})
-    if poss2 isa Nothing
-        molpos = step.posidx[i2][j2]
-        system = step.psystem
-        resize!(system.ypositions, length(molpos))
-        system.ypositions .= @view step.psystem.xpositions[molpos]
-    else
-        system = step.psystembis
-        resize!(system.ypositions, length(poss2))
-        system.ypositions .= poss2
-    end
+function single_contribution_vdw(step::SimulationStep, (i2,j2)::Tuple{Int,Int}, poss2::AbstractVector{SVector{N,TÅ}} where N)
+    system = step.psystem
+    resize!(system.ypositions, length(poss2))
+    system.ypositions .= poss2
     map_pairwise(SingleVdwComputation(step, i2, j2, step.ffidx[i2]), system)
     system.output
 end

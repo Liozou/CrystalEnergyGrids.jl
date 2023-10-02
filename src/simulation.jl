@@ -82,8 +82,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     record_task = @spawn simu.record(SimulationStep(mc.step, :output), energy, 0, mc, simu)
 
     # main loop
-    for k in 1:simu.ncycles
-        temperature = simu.temperatures[k]
+    for idx_cycle in 1:simu.ncycles
+        temperature = simu.temperatures[idx_cycle]
         accepted_translations = 0
         accepted_rotations = 0
         attempted_translations = 0
@@ -132,18 +132,33 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             # before computing
             accepted && wait(running_update)
 
+            i, j = idx
+            k = mc.offsets[i]+j
+
             if old_idx == idx
                 if accepted
                     before = after
                 # else
                 #     before = fetch(before_task) # simply keep its previous value
                 end
-                after = movement_energy(mc, idx, newpos)
+                singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, newpos)
+                fer = @spawn framework_interactions(mc, i, newpos)
+                singlevdw = single_contribution_vdw(mc.step, idx, newpos)
+                after = MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
             else
-                before_task = @spawn movement_energy(mc, idx)
-                after = movement_energy(mc, idx, newpos)
-                before = fetch(before_task)::MCEnergyReport
+                molpos = mc.step.posidx[i][j]
+                positions = @view mc.step.psystem.xpositions[molpos]
+                singlevdw_before_task = @spawn single_contribution_vdw(mc.step, (i,j), positions)
+                singlereciprocal_after = @spawn single_contribution_ewald(mc.ewald, k, newpos)
+                singlereciprocal_before = @spawn single_contribution_ewald(mc.ewald, k, nothing)
+                fer_before = @spawn framework_interactions(mc, i, positions)
+                fer_after = @spawn framework_interactions(mc, i, newpos)
+                singlevdw_before = fetch(singlevdw_before_task)
+                singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
+                before = MCEnergyReport(fetch(fer_before), singlevdw_before, fetch(singlereciprocal_before))
+                after = MCEnergyReport(fetch(fer_after), singlevdw_after, fetch(singlereciprocal_after))
             end
+
             old_idx = idx
             accepted = compute_accept_move(before, after, temperature)
             oldpos = newpos
@@ -166,7 +181,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 # shadow = MonteCarloSetup(mc)
                 # if !isapprox(Float64(baseline_energy(shadow)), Float64(energy), rtol=1e-4)
                 #     println("discrepancy ! ", Float64(baseline_energy(shadow)), " vs ", Float64(energy))
-                #     @show idx, k, idnummol
+                #     @show idx, idx_cycle, idnummol
                 #     push!(reports, energy)
                 #     return reports
                 # end
@@ -179,7 +194,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         end
         # end of cycle
         translation_ratio = accepted_translations / attempted_translations
-        report_now = k%simu.printevery == 0
+        report_now = idx_cycle%simu.printevery == 0
         if !(simu.record isa Returns) || report_now
             accepted && wait(running_update)
             o = SimulationStep(mc.step, :output)
@@ -190,16 +205,16 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             if !(simu.record isa Returns)
                 ret_record = fetch(record_task)
                 ret_record === :stop && break
-                record_task = @spawn simu.record(o, energy, k, mc, simu)
+                record_task = @spawn simu.record(o, energy, idx_cycle, mc, simu)
             end
         end
 
         rotation_ratio = accepted_rotations / attempted_rotations
         if !isnan(translation_ratio)
-            translation_dmax *= 1 + (translation_ratio - 0.5)*(1.0 + 3*translation_ratio)*100/(99+k)
+            translation_dmax *= 1 + (translation_ratio - 0.5)*(1.0 + 3*translation_ratio)*100/(99+idx_cycle)
         end
         if !isnan(rotation_ratio)
-            rotation_θmax = (k-1)/k*rotation_θmax + rotation_ratio/k*120u"°"
+            rotation_θmax = (idx_cycle-1)/idx_cycle*rotation_θmax + rotation_ratio/idx_cycle*120u"°"
         end
     end
     wait(record_task)

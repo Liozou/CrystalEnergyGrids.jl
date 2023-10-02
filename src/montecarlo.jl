@@ -430,7 +430,7 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     end
     singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, positions)
     fer = @spawn framework_interactions(mc, i, poss)
-    singlevdw = single_contribution_vdw(mc.step, (i,j), positions)
+    singlevdw = single_contribution_vdw(mc.step, (i,j), poss)
     MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
 end
 
@@ -444,7 +444,6 @@ function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vecto
     update_ewald_context!(mc.ewald)
     L = mc.step.posidx[i][j]
     mc.step.psystem.xpositions[L] .= positions
-    mc.step.psystembis.xpositions[L] .= positions
     nothing
 end
 
