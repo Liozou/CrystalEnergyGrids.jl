@@ -216,24 +216,24 @@ function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
     x
 end
 
-# function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,TÅ}}) where N
-#     n = length(positions)
-#     energy = 0.0u"K"
-#     cutoff2 = step.ff.cutoff^2
-#     isinf(step.ff.cutoff) || error("finite cutoff not implemented")
-#     indices = step.ffidx[i]
-#     for k1 in 1:n
-#         ix1 = indices[k1]
-#         for k2 in (i+1):n
-#             ix2 = indices[k2]
-#             r2 = norm2(positions[k1], positions[k2])
-#             r2 > cutoff2 && error("Flexible molecule cannot be larger than the cutoff")
-#             rule = step.ff[ix1, ix2]
-#             energy += rule(r2)# + tailcorrection(rule, step.ff.cutoff)
-#         end
-#     end
-#     energy
-# end
+function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{N,TÅ}}) where N
+    n = length(positions)
+    energy = 0.0u"K"
+    cutoff2 = step.ff.cutoff^2
+    isinf(step.ff.cutoff) || error("finite cutoff not implemented")
+    indices = step.ffidx[i]
+    for k1 in 1:n
+        ix1 = indices[k1]
+        for k2 in (i+1):n
+            ix2 = indices[k2]
+            r2 = norm2(positions[k1], positions[k2])
+            r2 > cutoff2 && error("Flexible molecule cannot be larger than the cutoff")
+            rule = step.ff[ix1, ix2]
+            energy += rule(r2)# + tailcorrection(rule, step.ff.cutoff)
+        end
+    end
+    energy
+end
 
 # function energy_nocutoff(step::SimulationStep)
 #     energy = 0.0u"K"
@@ -271,6 +271,7 @@ function (vdw::TotalVdwComputation)(pos1, pos2, l1, l2, d², output)
 end
 
 function compute_vdw(step::SimulationStep)
+    length(step.atoms) < 300 && return compute_vdw_noneighbour(step)
     system = PeriodicSystem(;
         xpositions=step.psystem.xpositions,
         unitcell=step.psystem.unitcell,
@@ -279,6 +280,37 @@ function compute_vdw(step::SimulationStep)
     )
     map_pairwise(TotalVdwComputation(step), system)
     system.output
+end
+
+
+function compute_vdw_noneighbour(step::SimulationStep)
+    energy = 0.0u"K"
+    cutoff2 = step.ff.cutoff^2
+    buffer = MVector{3,TÅ}(undef)
+    buffer2 = MVector{3,Float64}(undef)
+    cell = CellMatrix(step.psystem.unitcell)
+    for (l1, pos1) in enumerate(step.psystem.xpositions)
+        i1, j1, k1 = step.atoms[l1]
+        ix1 = step.ffidx[i1][k1]
+        for l2 in (l1+1):length(step.psystem.xpositions)
+            i2, j2, k2 = step.atoms[l2]
+            i1 == i2 && j1 == j2 && continue # no intra energy considered here
+            pos2 = step.psystem.xpositions[l2]
+            buffer .= pos2 .- pos1
+            d2 = unsafe_periodic_distance2!(buffer, buffer2, cell)
+            if d2 < cutoff2
+                energy += step.ff[ix1, step.ffidx[i2][k2]](d2)
+            end
+        end
+    end
+    for (i, rigid) in enumerate(step.isrigid)
+        rigid && continue
+        posidxi = step.posidx[i]
+        for molpos in posidxi
+            energy += energy_intra(step, i, @view step.psystem.xpositions[molpos])
+        end
+    end
+    energy
 end
 
 
@@ -295,10 +327,34 @@ function (vdw::SingleVdwComputation)(pos1, pos2, l1, k2, d², output)
     output
 end
 
-function single_contribution_vdw(step::SimulationStep, (i2,j2)::Tuple{Int,Int}, poss2::AbstractVector{SVector{N,TÅ}} where N)
+function single_contribution_vdw(step::SimulationStep, idx2::Tuple{Int,Int}, poss2::AbstractVector{SVector{N,TÅ}} where N)
+    length(step.atoms) < 300 && return single_contribution_vdw_noneighbour(step, idx2, poss2)
     system = step.psystem
     resize!(system.ypositions, length(poss2))
     system.ypositions .= poss2
+    i2, j2 = idx2
     map_pairwise(SingleVdwComputation(step, i2, j2, step.ffidx[i2]), system)
     system.output
+end
+
+function single_contribution_vdw_noneighbour(step::SimulationStep, (i2,j2)::Tuple{Int,Int}, poss2::AbstractVector{SVector{N,TÅ}}) where N
+    energy = step.isrigid[i2] ? 0.0u"K" : energy_intra(step, i2, poss2)
+    cutoff2 = step.ff.cutoff^2
+    buffer = MVector{3,TÅ}(undef)
+    buffer2 = MVector{3,Float64}(undef)
+    idx2 = step.ffidx[i2]
+    cell = CellMatrix(step.psystem.unitcell)
+    for (k2, pos2) in enumerate(poss2)
+        ix2 = idx2[k2]
+        for (l1, pos1) in enumerate(step.psystem.xpositions)
+            i1, j1, k1 = step.atoms[l1]
+            i1 == i2 && j1 == j2 && continue
+            buffer .= pos2 .- pos1
+            d2 = unsafe_periodic_distance2!(buffer, buffer2, cell)
+            if d2 < cutoff2
+                energy += step.ff[step.ffidx[i1][k1], ix2](d2)
+            end
+        end
+    end
+    energy
 end
