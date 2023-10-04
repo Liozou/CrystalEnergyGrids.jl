@@ -457,6 +457,7 @@ end
 # Multithreading
 
 using Base.Threads
+using Distributed: WorkerPool, remotecall, Future, addprocs, rmprocs
 
 function stripspawn(@nospecialize(expr), dict::IdDict{Symbol,Symbol})
     if expr isa Expr
@@ -493,34 +494,30 @@ end
 
 
 """
-    LoadBalancer{T}
+    LoadBalancer{Tf}
 
 Channel-like abstraction to balance function calls across a fixed number of tasks.
-See [`LoadBalancer{T}(f, n::Integer)`](@ref) to create an instance.
+See [`LoadBalancer(f, n::Integer)`](@ref) to create an instance.
 """
-struct LoadBalancer{T}
-    data::Vector{T}
-    datastart::Atomic{Int}
-    datalength::Atomic{Int}
-    tasks::Vector{Task}
-    freeevent::Event
-    busyevent::Event
-    busy::Atomic{Int}
+struct LoadBalancer{Tf}
+    f::Tf
+    pool::WorkerPool
+    waitlist::Vector{Future}
 end
 
 """
-    LoadBalancer{T}(f, n::Integer=nthreads())
+    LoadBalancer(f, n::Integer=nthreads())
 
-Given a function `f`, create `n` tasks that wait on an input `x::T` to execute `f(x)`.
+Given a function `f`, create `n` workers that wait on an input `x` to execute `f(x)`.
 With `lb = LoadBalancer(f, n)`, use `put!(lb, x)` to send `x` to one of the tasks: this
 call is not blocking and will always return immediately, but the `f(x)` call will not occur
-until one of the `n` tasks is free. Use `wait(lb)` to wait until all inputs have been
+until one of the `n` workers is free. Use `wait(lb)` to wait until all inputs have been
 processed.
 
 ## Example
 
 ```julia
-lb = LoadBalancer{Tuple{Int,String}}() do (i,s)
+lb = LoadBalancer() do (i,s)
     some_complicated_function(i, s)
 end
 
@@ -533,60 +530,15 @@ do_something_else()
 wait(lb)
 ```
 """
-function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
-    datastart = Atomic{Int}(1)
-    datalength = Atomic{Int}(0)
-    freeevent = Event(true)
-    busyevent = Event(true)
-    busy = Atomic{Int}(0)
-    data = T[]
-    sizehint!(data, 10*n)
-    tasks = [(let data=data, f=f, freeevent=freeevent, busyevent=busyevent, datastart=datastart, datalength=datalength, busy=busy
-        @spawn while true
-            wait(busyevent) # only one task is released here because autoreset=true
-            atomic_add!(busy, 1)
-            while true # only wait for busyevent if there is nothing better to do
-                # in case multiple tasks are looking for a valid idx, make sure that you
-                # collect datastart and increment it all atomically, while preventing this
-                # from happening if datastart is already beyond datalength
-                len = datalength[]
-                idx = datastart[]
-                while idx ≤ len && atomic_cas!(datastart, idx, idx+1) !== idx
-                    len = datalength[]
-                    idx = datastart[]
-                end
-                idx ≤ len || break
-                # at this point idx is guaranteed to be an unvisited valid index of data
-                x = data[idx]
-                f(x) # do the actual work
-                notify(freeevent) # signal for wait(::LoadBalancer)
-            end
-            atomic_sub!(busy, 1)
-            notify(freeevent)
-        end
-    end) for i in 1:n]
-
-    LoadBalancer{T}(data, datastart, datalength, tasks, freeevent, busyevent, busy)
+function LoadBalancer(f, n::Integer=nthreads()-1)
+    procs = addprocs(n; topology=:master_worker)
+    pool = WorkerPool(procs)
+    LoadBalancer(f, pool, Future[])
 end
 function Base.put!(lb::LoadBalancer, x)
-    push!(lb.data, x)
-    atomic_add!(lb.datalength, 1)
-    notify(lb.busyevent)
+    push!(lb.waitlist, remotecall(lb.f, lb.pool, x))
     x
 end
 function Base.wait(lb::LoadBalancer)
-    while true
-        len = lb.datalength[]
-        while lb.datastart[] ≤ len
-            wait(lb.freeevent)
-            len = lb.datalength[]
-        end
-        # at this point, it is guaranteed that lb.datastart[] > len
-        # all that remains to be checked is whether len == lb.datalength[]
-        atomic_cas!(lb.datalength, len, len) === len && break
-    end
-    while lb.busy[] > 0
-        wait(lb.freeevent)
-    end
-    nothing
+    foreach(wait, lb.waitlist)
 end

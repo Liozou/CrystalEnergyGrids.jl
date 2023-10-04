@@ -101,25 +101,25 @@ function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k:
 end
 
 
-struct ShootingStarMinimizer{N,T} <: RecordFunction
+struct ShootingStarMinimizer{N,T,Tf} <: RecordFunction
     every::Int
     length::Int
     positions::Vector{SimulationStep{N,T}}
     energies::Vector{BaselineEnergyReport}
-    lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
+    lb::LoadBalancer{Tf}
 end
 function ShootingStarMinimizer{N,T}(nsteps::Int; length::Int=100, every::Int=1) where {N,T}
     n = nsteps ÷ every
     positions = Vector{SimulationStep{N,T}}(undef, n)
     energies = Vector{BaselineEnergyReport}(undef, n)
-    lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
+    lb = LoadBalancer(nthreads()-1) do (ik, newmc, newsimu)
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
             run_montecarlo!(newmc, newsimu)
             positions[ik] = newsimu.record.minpos
             energies[ik] = newsimu.record.mine
         end
     end
-    ShootingStarMinimizer{N,T}(every, length, positions, energies, lb)
+    ShootingStarMinimizer(every, length, positions, energies, lb)
 end
 function ShootingStarMinimizer(::Union{MonteCarloSetup{N,T},SimulationStep{N,T}}, nsteps::Int; length::Int=100, every::Int=1) where {N,T}
     ShootingStarMinimizer{N,T}(nsteps; length, every)
