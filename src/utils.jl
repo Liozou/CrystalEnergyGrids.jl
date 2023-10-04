@@ -452,3 +452,41 @@ function get_atom_name(atom)
     end
     return name
 end
+
+
+# Multithreading
+
+using Base.Threads
+
+function stripspawn(@nospecialize(expr), dict::IdDict{Symbol,Symbol})
+    if expr isa Expr
+        if expr.head === :(=) && Meta.isexpr(expr.args[2], :macrocall) && expr.args[2].args[1] === Symbol("@spawn")
+            left = expr.args[1]
+            newsymb = if left isa Symbol
+                get!(() -> Symbol(left::Symbol, :_nospawn), dict, left)
+            else
+                stripspawn(left, dict)
+            end
+            Expr(:(=), newsymb, stripspawn(last(expr.args[2].args), dict))
+        else
+            x = Expr(expr.head)
+            append!(x.args, stripspawn(arg, dict) for arg in expr.args)
+            x
+        end
+    elseif expr isa Symbol
+        get(dict, expr, expr)
+    else
+        expr
+    end
+end
+
+macro spawnif(dospawn, expr)
+    stripped = stripspawn(expr, IdDict{Symbol,Symbol}())
+    esc(quote
+        if $dospawn
+            $expr
+        else
+            $stripped
+        end
+    end)
+end

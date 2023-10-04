@@ -42,7 +42,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
                           coulomb::EnergyGrid, grids::Vector{EnergyGrid},
                           blocksetup::Vector{String},
                           num_framework_atoms::Vector{Int},
-                          restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,TÅ}}}}})
+                          restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,TÅ}}}}};
+                          parallel::Bool=true)
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
@@ -157,7 +158,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
-    MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell),
+    MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     ewald, Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
                     speciesblocks, atomblocks, beads), indices
 end
@@ -195,7 +196,7 @@ If `restart` is the path of a raspa restart file, the positions will be taken fr
 """
 function setup_montecarlo(framework, forcefield_framework::String, systems;
                           blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
-                          supercell=nothing, new=false, restart=nothing)
+                          supercell=nothing, new=false, restart=nothing, parallel=true)
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
     mat = stack3(bounding_box(syst_framework))
@@ -252,15 +253,18 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
 
     restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
 
-    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms, restartpositions)
+    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; parallel)
 end
 
 """
-    MonteCarloSetup(mc::MonteCarloSetup)
+    MonteCarloSetup(mc::MonteCarloSetup; parallel::Bool=mc.step.parallel)
 
 Create a copy of `mc` that does not share its modifiable internal states (the positions and
 the Ewald state). For example, the copy and the original can be used to run Monte-Carlo
 simulations in parallel, and the state of one will not influence that of the other.
+
+`parallel` specifies whether the computations on the resulting `MonteCarloSetup` should be
+parallelized or not.
 
 !!! warn
     Internal states that are semantically immutable are shared, although some of them are
@@ -269,7 +273,7 @@ simulations in parallel, and the state of one will not influence that of the oth
     `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
     modifying states outside of the API.
 """
-function MonteCarloSetup(mc::MonteCarloSetup)
+function MonteCarloSetup(mc::MonteCarloSetup; parallel::Bool=mc.step.parallel)
     ewaldsystems = EwaldSystem[]
     for (i, posidxi) in enumerate(mc.step.posidx)
         ffidxi = mc.step.ffidx[i]
@@ -277,7 +281,7 @@ function MonteCarloSetup(mc::MonteCarloSetup)
         append!(ewaldsystems, EwaldSystem(mc.step.positions[molpos], charge) for molpos in posidxi)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
-    MonteCarloSetup(SimulationStep(mc.step),
+    MonteCarloSetup(SimulationStep(mc.step, :all; parallel),
                     ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
                     mc.indices, mc.speciesblocks, mc.atomblocks, mc.bead)
 end

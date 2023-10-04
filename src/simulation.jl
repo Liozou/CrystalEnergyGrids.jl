@@ -18,7 +18,8 @@ Definition of the simulation setup, which must provide the following information
   of 0 in printevery to only record those.
 - `record::Trecord` a function which can be used to record extra information at the end of
   each cycle. `record` can return `:stop` to end the computation at that point, otherwise
-  its return value is ignored. Stopping is not immediate and takes one additional cycle.
+  its return value is ignored. Stopping may not be immediate and can take up to one
+  additional cycle.
 
 If provided, `record` must have the signature
     `record(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, simu::SimulationSetup)`
@@ -26,7 +27,8 @@ where
 - `o` contains the information on the positions of the species at this point. It must not
   be modified by the `record` function.
 - `e` is the energy at this point.
-- `k` is the cycle number (between 1 and `cycles`).
+- `k` is the cycle number (between 0 and `cycles`). `k == 0` corresponds to the
+  initialization of the simulation.
 - `mc` is the input `MonteCarloSetup`. Note that the `positions` field may be incorrect,
   use that of `o`. It must not be modified by the `record` function.
 - `simu` is this `SimulationSetup`. It must not be modified by the `record` function.
@@ -70,11 +72,11 @@ temperatures, no trajectory stored but a record the average weighted distance to
 
     function SimulationSetup(T, ncycles::Int, outdir::String="", printevery::Int=1000, record=Returns(nothing))
         temperatures = if T isa Number
-            fill(T, ncycles)
+            fill(T, ncycles + (ncycles == 0))
         elseif T isa Vector
             convert(Vector{TK}, T)
         else
-            T.(1:ncycles, ncycles)
+            ncycles ≤ 1 ? [T(1,2)] : T.(1:ncycles, ncycles)
         end
         new{typeof(record)}(temperatures, ncycles, outdir, printevery, record)
     end
@@ -86,14 +88,37 @@ end
 
 
 """
-    run_montecarlo!(mc::MonteCarloSetup, T, nsteps::Int)
+    run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
-Run a Monte-Carlo simulation at temperature `T` (given in K) during `nsteps`.
+Run a Monte-Carlo simulation. Return the list of energies of the system during the
+simulation.
+
+See [`MonteCarloSetup`](@ref) for the definition of the system and
+[`SimulationSetup`](@ref) for the parameters of the simulation.
 """
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # report
     energy = baseline_energy(mc)
     reports = [energy]
+
+    # record and outputs
+    mkpath(simu.outdir)
+    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
+    if mc.step.parallel
+        record_task = let energy1 = energy, mc1 = mc, simu1 = simu
+            @spawn simu1.record(SimulationStep(mc1.step, :output), energy1, 0, mc1, simu1)
+        end
+    else
+        simu.record(SimulationStep(mc.step, :output), energy, 0, mc, simu) === :stop && return reports
+        record_task = @spawn nothing # for type stability
+    end
+
+    if simu.ncycles == 0 # single-point computation
+        put!(output, SimulationStep(mc.step, :zero))
+        wait(record_task)
+        wait(output_task[])
+        return reports
+    end
 
     # idle initialisations
     running_update = @spawn nothing
@@ -107,11 +132,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     accepted = false
     translation_dmax = 1.3u"Å"
     rotation_θmax = 30.0u"°"
-
-    # record and outputs
-    mkpath(simu.outdir)
-    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
-    record_task = @spawn simu.record(SimulationStep(mc.step, :output), energy, 0, mc, simu)
 
     # main loop
     for idx_cycle in 1:simu.ncycles
@@ -173,29 +193,40 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 # else
                 #     before = fetch(before_task) # simply keep its previous value
                 end
-                singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, newpos)
-                fer = @spawn framework_interactions(mc, i, newpos)
-                singlevdw = single_contribution_vdw(mc.step, idx, newpos)
-                after = MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
+                @spawnif mc.step.parallel begin
+                    singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, newpos)
+                    fer = @spawn framework_interactions(mc, i, newpos)
+                    singlevdw = single_contribution_vdw(mc.step, idx, newpos)
+                    after = MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
+            end
             else
                 molpos = mc.step.posidx[i][j]
                 positions = @view mc.step.positions[molpos]
-                singlevdw_before_task = @spawn single_contribution_vdw(mc.step, (i,j), positions)
-                singlereciprocal_after = @spawn single_contribution_ewald(mc.ewald, k, newpos)
-                singlereciprocal_before = @spawn single_contribution_ewald(mc.ewald, k, nothing)
-                fer_before = @spawn framework_interactions(mc, i, positions)
-                fer_after = @spawn framework_interactions(mc, i, newpos)
-                singlevdw_before = fetch(singlevdw_before_task)
-                singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
-                before = MCEnergyReport(fetch(fer_before), singlevdw_before, fetch(singlereciprocal_before))
-                after = MCEnergyReport(fetch(fer_after), singlevdw_after, fetch(singlereciprocal_after))
+                @spawnif mc.step.parallel begin
+                    singlevdw_before_task = @spawn single_contribution_vdw(mc.step, (i,j), positions)
+                    singlereciprocal_after = @spawn single_contribution_ewald(mc.ewald, k, newpos)
+                    singlereciprocal_before = @spawn single_contribution_ewald(mc.ewald, k, nothing)
+                    fer_before = @spawn framework_interactions(mc, i, positions)
+                    fer_after = @spawn framework_interactions(mc, i, newpos)
+                    singlevdw_before = fetch(singlevdw_before_task)::TK
+                    singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
+                    before = MCEnergyReport(fetch(fer_before), singlevdw_before, fetch(singlereciprocal_before))
+                    after = MCEnergyReport(fetch(fer_after), singlevdw_after, fetch(singlereciprocal_after))
+                end
             end
 
             old_idx = idx
             accepted = compute_accept_move(before, after, temperature)
             oldpos = newpos
             if accepted
-                running_update = @spawn update_mc!(mc, idx, oldpos) # do not use newpos since it can be changed in the next iteration before the Task is run
+                if mc.step.parallel
+                    # do not use newpos since it can be changed in the next iteration before the Task is run
+                    running_update = let mc3 = mc, idx3 = idx, oldpos3 = oldpos
+                        @spawn update_mc!(mc3, idx3, oldpos3)
+                    end
+                else
+                    update_mc!(mc, idx, oldpos)
+                end
                 diff = after - before
                 if istranslation
                     accepted_translations += 1
@@ -208,20 +239,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 else
                     energy += diff
                 end
-
-                # wait(running_update)
-                # shadow = MonteCarloSetup(mc)
-                # if !isapprox(Float64(baseline_energy(shadow)), Float64(energy), rtol=1e-4)
-                #     println("discrepancy ! ", Float64(baseline_energy(shadow)), " vs ", Float64(energy))
-                #     @show idx, idx_cycle, idnummol
-                #     push!(reports, energy)
-                #     return reports
-                # end
-                # println(Float64(energy), " vs ", Float64(baseline_energy(shadow)))
-                # @show shadow.ewald.ctx.Eiks[1][30]
-                # display(energy)
-                # display(baseline_energy(shadow))
-                # println(mc.step.positions)
             end
         end
         # end of cycle
@@ -235,9 +252,16 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 push!(reports, energy)
             end
             if !(simu.record isa Returns)
-                ret_record = fetch(record_task)
-                ret_record === :stop && break
-                record_task = @spawn simu.record(o, energy, idx_cycle, mc, simu)
+                if mc.step.parallel
+                    # ret_record cannot be inferred, but that's fine
+                    ret_record = fetch(record_task)
+                    ret_record === :stop && break
+                    record_task = let energy2 = energy, mc2 = mc, simu2 = simu, o2 = o, idx_cycle2 = idx_cycle
+                        @spawn simu2.record(o2, energy2, idx_cycle2, mc2, simu2)
+                    end
+                else
+                    simu.record(o, energy, idx_cycle, mc, simu) === :stop && break
+                end
             end
         end
 

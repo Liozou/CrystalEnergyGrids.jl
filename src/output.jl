@@ -135,19 +135,21 @@ Components: """, length(o.ffidx), " (Adsorbates ", sum(length, positions), """, 
 end
 
 """
-    function output_restart(path, mc::MonteCarloSetup, o=SimulationStep(mc))
+    function output_restart(path, mc::MonteCarloSetup)
+    function output_restart(path, step::SimulationStep(mc))
 
-Output a restart file compatible with RASPA at the given `path` for the given output `o`,
+Output a restart file compatible with RASPA at the given `path` for the given output `step`,
 which represents a simulation step of the input `mc`.
-If not provided, the output `o` corresponds to the current status of `mc`.
+If not provided, the output `step` corresponds to the current status of `mc`.
 
 See also [`output_pdb`](@ref).
 """
-function output_restart(path, mc::MonteCarloSetup, o=SimulationStep(mc))
-    lengths, angles = cell_parameters(mc.step.mat)
-    molnames = [identify_molecule([mc.step.ff.symbols[ix] for ix in ffidxi]) for ffidxi in mc.step.ffidx]
-    output_restart(path, o, lengths, angles, molnames)
+function output_restart(path, step::SimulationStep)
+    lengths, angles = cell_parameters(step.mat)
+    molnames = [identify_molecule([step.ff.symbols[ix] for ix in ffidxi]) for ffidxi in step.ffidx]
+    output_restart(path, step, lengths, angles, molnames)
 end
+output_restart(path, mc::MonteCarloSetup) = output_restart(path, SimulationStep(mc))
 
 function pdb_output_handler(path, mat::SMatrix{3,3,TÅ,9})
     taskref = Ref{Task}()
