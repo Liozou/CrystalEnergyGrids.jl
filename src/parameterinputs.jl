@@ -1,3 +1,5 @@
+using Base.Threads
+
 ## Temperature input
 abstract type TemperatureFunction <: Function end
 
@@ -47,7 +49,7 @@ function (tf::TParts{N})(k, n) where N
             return tf.parts[i](num_current - num_start, num_stop - num_start)
         end
     end
-    @assert false
+    @assert ("Please report this error."; false)
     0.0u"K"
 end
 
@@ -75,10 +77,15 @@ end
 
 ## Record inputs
 abstract type RecordFunction <: Function end
-mutable struct RMinimumEnergy <: RecordFunction
+
+mutable struct RMinimumEnergy{N,T} <: RecordFunction
     mine::BaselineEnergyReport
-    minpos::SimulationStep
-    RMinimumEnergy() = new(BaselineEnergyReport(Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
+    minpos::SimulationStep{N,T}
+
+    RMinimumEnergy{N,T}() where {N,T} = new{N,T}(BaselineEnergyReport(Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
+    function RMinimumEnergy(mine::BaselineEnergyReport, minpos::SimulationStep{N,T}) where {N,T}
+        new{N,T}(mine, minpos)
+    end
 end
 function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k::Int,
                                   mc::MonteCarloSetup, simu::SimulationSetup)
@@ -88,7 +95,40 @@ function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k:
     end
     if k == simu.ncycles && !isempty(simu.outdir)
         output_pdb(joinpath(simu.outdir, "min_energy.pdb"), mc, record.minpos)
-        output_restart(joinpath(simu.outdir, "min_energy.restart"), mc, record.minpos)
+        output_restart(joinpath(simu.outdir, "min_energy.restart"), record.minpos)
     end
     nothing
+end
+
+struct RainfallMinimizer{N,T} <: RecordFunction
+    every::Int
+    length::Int
+    positions::Vector{SimulationStep{N,T}}
+    energies::Vector{BaselineEnergyReport}
+    tasks::Vector{Task}
+end
+
+function RainfallMinimizer{N,T}(nsteps::Int; length::Int=100, every::Int=1) where {N,T}
+    n = nsteps ÷ every
+    positions = Vector{SimulationStep{N,T}}(undef, n)
+    energies = Vector{BaselineEnergyReport}(undef, n)
+    tasks = Vector{Task}(undef, n)
+    RainfallMinimizer{N,T}(every, length, positions, energies, tasks)
+end
+function RainfallMinimizer(::Union{MonteCarloSetup{N,T},SimulationStep{N,T}}, nsteps::Int; length::Int=100, every::Int=1) where {N,T}
+    RainfallMinimizer{N,T}(nsteps; length, every)
+end
+
+function (rain::RainfallMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
+    k == 0 && return
+    ik, r = divrem(k, rain.every)
+    r == 0 || return
+    newmc = MonteCarloSetup(mc; parallel=false)
+    recordminimum = RMinimumEnergy(e, o)
+    newsimu = SimulationSetup(300u"K", rain.length; printevery=0, record=recordminimum)
+    rain.tasks[ik] = @spawn let ik=ik, newmc=newmc, newsimu=newsimu, rain=rain
+        run_montecarlo!(newmc, newsimu)
+        rain.positions[ik] = newsimu.record.minpos
+        rain.energies[ik] = newsimu.record.mine
+    end
 end
