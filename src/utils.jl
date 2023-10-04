@@ -500,14 +500,12 @@ See [`LoadBalancer{T}(f, n::Integer)`](@ref) to create an instance.
 """
 struct LoadBalancer{T}
     data::Vector{T}
+    datastart::Atomic{Int}
     datalength::Atomic{Int}
     tasks::Vector{Task}
-    semaphore::Semaphore
-    maintask::Task
-    mainevent::Event
     freeevent::Event
     busyevent::Event
-    lck::SpinLock
+    busy::Atomic{Int}
 end
 
 """
@@ -536,67 +534,59 @@ wait(lb)
 ```
 """
 function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
+    datastart = Atomic{Int}(1)
     datalength = Atomic{Int}(0)
     freeevent = Event(true)
     busyevent = Event(true)
-    mainevent = Event(true)
-    data_collected_event = Event()
-    semaphore = Semaphore(n) # count the number of free tasks
-    for _ in 1:n
-        acquire(semaphore) # start by marking all tasks as busy
-    end
-    lck = SpinLock()
+    busy = Atomic{Int}(0)
     data = T[]
     sizehint!(data, 10*n)
-    maintask = let mainevent=mainevent#, semaphore=semaphore, busyevent=busyevent, datalength=datalength, data_collected_event=data_collected_event
+    tasks = [(let data=data, f=f, freeevent=freeevent, busyevent=busyevent, datastart=datastart, datalength=datalength, busy=busy
         @spawn while true
-            wait(mainevent) # wait for new input x to be put on the data list
-            len = 1
-            while len > 0
-                acquire(semaphore) # wait for one task to be free and mark it as busy
-                reset(data_collected_event)
-                notify(busyevent) # give the input to one task
-                wait(data_collected_event) # wait for the input to be collected
-                len = datalength[]
-            end
-        end
-    end
-    tasks = [(let data=data#, f=f, freeevent=freeevent, busyevent=busyevent, lck=lck, semaphore=semaphore, datalength=datalength, data_collected_event=data_collected_event
-        @spawn while true
-            release(semaphore) # mark the task as free
             wait(busyevent) # only one task is released here because autoreset=true
-            lock(lck)
-            isempty(data) && (println("EMPTY DATA ON $i"); flush())
-            x = pop!(data)
-            unlock(lck)
-            atomic_sub!(datalength, 1)
-            notify(data_collected_event)
-            f(x) # do the actual work
-            notify(freeevent) # signal for wait(::LoadBalancer)
+            atomic_add!(busy, 1)
+            while true # only wait for busyevent if there is nothing better to do
+                # in case multiple tasks are looking for a valid idx, make sure that you
+                # collect datastart and increment it all atomically, while preventing this
+                # from happening if datastart is already beyond datalength
+                len = datalength[]
+                idx = datastart[]
+                while idx ≤ len && atomic_cas!(datastart, idx, idx+1) !== idx
+                    len = datalength[]
+                    idx = datastart[]
+                end
+                idx ≤ len || break
+                # at this point idx is guaranteed to be an unvisited valid index of data
+                x = data[idx]
+                f(x) # do the actual work
+                notify(freeevent) # signal for wait(::LoadBalancer)
+            end
+            atomic_sub!(busy, 1)
+            notify(freeevent)
         end
     end) for i in 1:n]
-    LoadBalancer{T}(data, datalength, tasks, semaphore, maintask, mainevent, freeevent, busyevent, lck)
+
+    LoadBalancer{T}(data, datastart, datalength, tasks, freeevent, busyevent, busy)
 end
 function Base.put!(lb::LoadBalancer, x)
-    lock(lb.lck)
     push!(lb.data, x)
-    unlock(lb.lck)
     atomic_add!(lb.datalength, 1)
-    notify(lb.mainevent) # signal to maintask that a new input has been added
+    notify(lb.busyevent)
     x
 end
 function Base.wait(lb::LoadBalancer)
-    while lb.datalength[] > 0
+    while true
+        len = lb.datalength[]
+        while lb.datastart[] ≤ len
+            wait(lb.freeevent)
+            len = lb.datalength[]
+        end
+        # at this point, it is guaranteed that lb.datastart[] > len
+        # all that remains to be checked is whether len == lb.datalength[]
+        atomic_cas!(lb.datalength, len, len) === len && break
+    end
+    while lb.busy[] > 0
         wait(lb.freeevent)
-    end
-    # at this point the data queue is empty, so we only have to wait for task completion
-    for _ in 1:length(lb.tasks)
-        acquire(lb.semaphore)
-    end
-    # at this point, all tasks were marked as busy by this function so they are all free
-    # so the work is actually done
-    for _ in 1:length(lb.tasks)
-        release(lb.semaphore) # mark them all as free again
     end
     nothing
 end
