@@ -499,13 +499,16 @@ Channel-like abstraction to balance function calls across a fixed number of task
 See [`LoadBalancer{T}(f, n::Integer)`](@ref) to create an instance.
 """
 struct LoadBalancer{T}
-    channel::Channel{T}
+    data::Vector{T}
+    datalength::Atomic{Int}
     tasks::Vector{Task}
-    busy::Atomic{Int}
-    event::Event
+    semaphore::Semaphore
+    maintask::Task
+    mainevent::Event
+    freeevent::Event
+    busyevent::Event
+    lck::SpinLock
 end
-
-using Serialization
 
 """
     LoadBalancer{T}(f, n::Integer=nthreads())
@@ -533,23 +536,67 @@ wait(lb)
 ```
 """
 function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
-    busy::Atomic{Int} = Atomic{Int}(0)
-    event::Event = Event()
-    channel::Channel{T} = Channel{T}()
-    tasks = [(@spawn let channel=channel, busy=busy, f=f, event=event
-        while true
-            x = take!(channel)
-            atomic_add!(busy, 1)
-            f(x)
-            atomic_sub!(busy, 1)
-            notify(event)
+    datalength = Atomic{Int}(0)
+    freeevent = Event(true)
+    busyevent = Event(true)
+    mainevent = Event(true)
+    data_collected_event = Event()
+    semaphore = Semaphore(n) # count the number of free tasks
+    for _ in 1:n
+        acquire(semaphore) # start by marking all tasks as busy
+    end
+    lck = SpinLock()
+    data = T[]
+    sizehint!(data, 10*n)
+    maintask = let mainevent=mainevent#, semaphore=semaphore, busyevent=busyevent, datalength=datalength, data_collected_event=data_collected_event
+        @spawn while true
+            wait(mainevent) # wait for new input x to be put on the data list
+            len = 1
+            while len > 0
+                acquire(semaphore) # wait for one task to be free and mark it as busy
+                reset(data_collected_event)
+                notify(busyevent) # give the input to one task
+                wait(data_collected_event) # wait for the input to be collected
+                len = datalength[]
+            end
+        end
+    end
+    tasks = [(let data=data#, f=f, freeevent=freeevent, busyevent=busyevent, lck=lck, semaphore=semaphore, datalength=datalength, data_collected_event=data_collected_event
+        @spawn while true
+            release(semaphore) # mark the task as free
+            wait(busyevent) # only one task is released here because autoreset=true
+            lock(lck)
+            isempty(data) && (println("EMPTY DATA ON $i"); flush())
+            x = pop!(data)
+            unlock(lck)
+            atomic_sub!(datalength, 1)
+            notify(data_collected_event)
+            f(x) # do the actual work
+            notify(freeevent) # signal for wait(::LoadBalancer)
         end
     end) for i in 1:n]
-    LoadBalancer{T}(channel, tasks, busy, event)
+    LoadBalancer{T}(data, datalength, tasks, semaphore, maintask, mainevent, freeevent, busyevent, lck)
 end
-Base.put!(lb::LoadBalancer, x) = put!(lb.channel, x)
+function Base.put!(lb::LoadBalancer, x)
+    lock(lb.lck)
+    push!(lb.data, x)
+    unlock(lb.lck)
+    atomic_add!(lb.datalength, 1)
+    notify(lb.mainevent) # signal to maintask that a new input has been added
+    x
+end
 function Base.wait(lb::LoadBalancer)
-    while !isempty(lb.channel) || lb.busy[] != 0
-        wait(lb.event)
+    while lb.datalength[] > 0
+        wait(lb.freeevent)
     end
+    # at this point the data queue is empty, so we only have to wait for task completion
+    for _ in 1:length(lb.tasks)
+        acquire(lb.semaphore)
+    end
+    # at this point, all tasks were marked as busy by this function so they are all free
+    # so the work is actually done
+    for _ in 1:length(lb.tasks)
+        release(lb.semaphore) # mark them all as free again
+    end
+    nothing
 end
