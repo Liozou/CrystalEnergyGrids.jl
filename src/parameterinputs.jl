@@ -100,6 +100,43 @@ function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k:
     nothing
 end
 
+
+struct ShootingStarMinimizer{N,T} <: RecordFunction
+    every::Int
+    length::Int
+    positions::Vector{SimulationStep{N,T}}
+    energies::Vector{BaselineEnergyReport}
+    lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
+end
+function ShootingStarMinimizer{N,T}(nsteps::Int; length::Int=100, every::Int=1) where {N,T}
+    n = nsteps ÷ every
+    positions = Vector{SimulationStep{N,T}}(undef, n)
+    energies = Vector{BaselineEnergyReport}(undef, n)
+    lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
+        let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
+            run_montecarlo!(newmc, newsimu)
+            positions[ik] = newsimu.record.minpos
+            energies[ik] = newsimu.record.mine
+        end
+    end
+    ShootingStarMinimizer{N,T}(every, length, positions, energies, lb)
+end
+function ShootingStarMinimizer(::Union{MonteCarloSetup{N,T},SimulationStep{N,T}}, nsteps::Int; length::Int=100, every::Int=1) where {N,T}
+    ShootingStarMinimizer{N,T}(nsteps; length, every)
+end
+
+function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
+    k == 0 && return
+    ik, r = divrem(k, star.every)
+    r == 0 || return
+    newmc = MonteCarloSetup(mc; parallel=false)
+    recordminimum = RMinimumEnergy(e, o)
+    newsimu = SimulationSetup(300u"K", star.length; printevery=0, record=recordminimum)
+    put!(star.lb, (ik, newmc, newsimu))
+    nothing
+end
+
+
 struct RainfallMinimizer{N,T} <: RecordFunction
     every::Int
     length::Int
