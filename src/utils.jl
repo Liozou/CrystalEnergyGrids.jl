@@ -468,6 +468,8 @@ function stripspawn(@nospecialize(expr), dict::IdDict{Symbol,Symbol})
                 stripspawn(left, dict)
             end
             Expr(:(=), newsymb, stripspawn(last(expr.args[2].args), dict))
+        elseif expr.head === :$
+            stripspawn(expr.args[1], dict)
         else
             x = Expr(expr.head)
             append!(x.args, stripspawn(arg, dict) for arg in expr.args)
@@ -534,16 +536,14 @@ wait(lb)
 """
 function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
     busy::Atomic{Int} = Atomic{Int}(0)
-    event::Event = Event()
-    channel::Channel{T} = Channel{T}()
-    tasks = [(@spawn let channel=channel, busy=busy, f=f, event=event
-        while true
-            x = take!(channel)
-            atomic_add!(busy, 1)
-            f(x)
-            atomic_sub!(busy, 1)
-            notify(event)
-        end
+    event::Event = Event(true)
+    channel::Channel{T} = Channel{T}(Inf)
+    tasks = [(@spawn while true
+        x = take!($channel)
+        atomic_add!($busy, 1)
+        $f(x)
+        atomic_sub!($busy, 1)
+        notify($event)
     end) for i in 1:n]
     LoadBalancer{T}(channel, tasks, busy, event)
 end

@@ -33,6 +33,9 @@ where
   use that of `o`. It must not be modified by the `record` function.
 - `simu` is this `SimulationSetup`. It must not be modified by the `record` function.
 
+Additionally, if a call to `record` can spawn asynchronous calls, a method for `Base.fetch`
+should be implemented such that `Base.fetch(record)` blocks until all asynchronous calls
+are done.
 
 ## Example
 
@@ -105,9 +108,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     mkpath(simu.outdir)
     output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
     if mc.step.parallel
-        record_task = let energy1 = energy, mc1 = mc, simu1 = simu
-            @spawn simu1.record(SimulationStep(mc1.step, :output), energy1, 0, mc1, simu1)
-        end
+        record_task = @spawn $simu.record(SimulationStep($mc.step, :output), $energy, 0, $mc, $simu)
     else
         simu.record(SimulationStep(mc.step, :output), energy, 0, mc, simu) === :stop && return reports
         record_task = @spawn nothing # for type stability
@@ -194,8 +195,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 #     before = fetch(before_task) # simply keep its previous value
                 end
                 @spawnif mc.step.parallel begin
-                    singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, newpos)
-                    fer = @spawn framework_interactions(mc, i, newpos)
+                    singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $k, $newpos)
+                    fer = @spawn framework_interactions($mc, $i, $newpos)
                     singlevdw = single_contribution_vdw(mc.step, idx, newpos)
                     after = MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
             end
@@ -203,11 +204,11 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 molpos = mc.step.posidx[i][j]
                 positions = @view mc.step.positions[molpos]
                 @spawnif mc.step.parallel begin
-                    singlevdw_before_task = @spawn single_contribution_vdw(mc.step, (i,j), positions)
-                    singlereciprocal_after = @spawn single_contribution_ewald(mc.ewald, k, newpos)
-                    singlereciprocal_before = @spawn single_contribution_ewald(mc.ewald, k, nothing)
-                    fer_before = @spawn framework_interactions(mc, i, positions)
-                    fer_after = @spawn framework_interactions(mc, i, newpos)
+                    singlevdw_before_task = @spawn single_contribution_vdw($mc.step, $(i,j), $positions)
+                    singlereciprocal_after = @spawn single_contribution_ewald($mc.ewald, $k, $newpos)
+                    singlereciprocal_before = @spawn single_contribution_ewald($mc.ewald, $k, nothing)
+                    fer_before = @spawn framework_interactions($mc, $i, $positions)
+                    fer_after = @spawn framework_interactions($mc, $i, $newpos)
                     singlevdw_before = fetch(singlevdw_before_task)::TK
                     singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
                     before = MCEnergyReport(fetch(fer_before), singlevdw_before, fetch(singlereciprocal_before))
@@ -221,9 +222,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             if accepted
                 if mc.step.parallel
                     # do not use newpos since it can be changed in the next iteration before the Task is run
-                    running_update = let mc3 = mc, idx3 = idx, oldpos3 = oldpos
-                        @spawn update_mc!(mc3, idx3, oldpos3)
-                    end
+                    running_update = @spawn update_mc!($mc, $idx, $oldpos)
                 else
                     update_mc!(mc, idx, oldpos)
                 end
@@ -256,9 +255,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                     # ret_record cannot be inferred, but that's fine
                     ret_record = fetch(record_task)
                     ret_record === :stop && break
-                    record_task = let energy2 = energy, mc2 = mc, simu2 = simu, o2 = o, idx_cycle2 = idx_cycle
-                        @spawn simu2.record(o2, energy2, idx_cycle2, mc2, simu2)
-                    end
+                    record_task = @spawn $simu.record($o, $energy, $idx_cycle, $mc, $simu)
                 else
                     simu.record(o, energy, idx_cycle, mc, simu) === :stop && break
                 end
@@ -274,6 +271,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         end
     end
     wait(record_task)
+    fetch(simu.record)
     accepted && wait(running_update)
     push!(reports, energy)
     put!(output, SimulationStep(mc.step, :zero))

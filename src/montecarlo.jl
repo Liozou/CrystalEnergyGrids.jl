@@ -115,6 +115,10 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     buffer2 = MVector{3,Float64}(undef)
     beads = Vector{Int}(undef, n)
     for i in 1:n
+        if isempty(poss[i])
+            beads[i] = 0
+            continue
+        end
         possi = poss[i][1]
         refpos = possi[1]
         meanpos = refpos + mean(pos - refpos for pos in possi)
@@ -432,9 +436,9 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     else
         positions
     end
-    singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, positions)
-    fer = @spawn framework_interactions(mc, i, poss)
-    singlevdw = single_contribution_vdw(mc.step, (i,j), poss)
+    singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $k, $positions)
+    fer = @spawn framework_interactions($mc, $i, $poss)
+    singlevdw = single_contribution_vdw(mc.step, idx, poss)
     MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
 end
 

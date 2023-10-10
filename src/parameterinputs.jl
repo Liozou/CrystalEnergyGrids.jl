@@ -136,6 +136,8 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     nothing
 end
 
+Base.fetch(x::ShootingStarMinimizer) = wait(x.lb)
+
 
 struct RainfallMinimizer{N,T} <: RecordFunction
     every::Int
@@ -163,9 +165,11 @@ function (rain::RainfallMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k
     newmc = MonteCarloSetup(mc; parallel=false)
     recordminimum = RMinimumEnergy(e, o)
     newsimu = SimulationSetup(300u"K", rain.length; printevery=0, record=recordminimum)
-    rain.tasks[ik] = @spawn let ik=ik, newmc=newmc, newsimu=newsimu, rain=rain
-        run_montecarlo!(newmc, newsimu)
-        rain.positions[ik] = newsimu.record.minpos
-        rain.energies[ik] = newsimu.record.mine
+    rain.tasks[ik] = @spawn begin
+        run_montecarlo!($newmc, $newsimu)
+        $rain.positions[$ik] = $newsimu.record.minpos
+        $rain.energies[$ik] = $newsimu.record.mine
     end
 end
+
+Base.fetch(x::RainfallMinimizer) = foreach(wait, x.tasks)

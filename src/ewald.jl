@@ -382,7 +382,7 @@ function EwaldContext(eframework::EwaldFramework, systems)
 
     energy_net_charges = eframework.UIon*eframework.net_charges_framework*net_charges
     offsets = Vector{Int}(undef, m)
-    offsets[1] = -1
+    m > 0 && (offsets[1] = -1)
     @inbounds for i in 1:(m-1)
         offsets[i+1] = offsets[i] + length(systems[i])
     end
