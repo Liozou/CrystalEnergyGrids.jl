@@ -3,6 +3,7 @@ using StaticArrays
 using OffsetArrays
 using AtomsBase
 using SpecialFunctions: erf, erfc
+using ElasticArrays: ElasticMatrix
 
 export initialize_ewald, compute_ewald
 
@@ -157,9 +158,10 @@ function ewald_main_loop!(sums::T, allcharges, kspace::EwaldKspace, Eiks, skipco
 
     counter = 0
 
-    @inbounds for (idxsystem, charges) in enumerate(allcharges)
+    @inbounds for charges in allcharges
         counter += 1
         counter == skipcontribution && continue
+        ijp1 = counter + 1
         for c in charges
             ix += kxp
             iy += tkyp
@@ -175,7 +177,7 @@ function ewald_main_loop!(sums::T, allcharges, kspace::EwaldKspace, Eiks, skipco
                         end
                     else
                         @simd for I in 1:n
-                            sums[rangeidx+I,idxsystem] += Eikx[ofs+I]*Eik_yz
+                            sums[rangeidx+I,ijp1] += Eikx[ofs+I]*Eik_yz
                         end
                     end
                 end
@@ -183,7 +185,7 @@ function ewald_main_loop!(sums::T, allcharges, kspace::EwaldKspace, Eiks, skipco
         end
     end
     if T !== Vector{ComplexF64}
-        sums[:,end] .= sum(sums; dims=2)
+        sums[:,1] .= sum(sums; dims=2)
     end
     nothing
 end
@@ -341,7 +343,7 @@ function move_one_system!(Eiks, ctx::EwaldContext, positions, ofs)
         make_line_neg!(Eikz, 1 + jofs*tkzp, kz, cispi(2*pz))
     end
 end
-move_one_system!(ctx::EwaldContext, k::Int, positions) = move_one_system!(ctx.Eiks, ctx, positions, ctx.offsets[k])
+move_one_system!(ctx::EwaldContext, ij::Int, positions) = move_one_system!(ctx.Eiks, ctx, positions, ctx.offsets[ij])
 
 """
     EwaldContext(eframework::EwaldFramework, systems)
@@ -397,7 +399,7 @@ end
 Compute the Fourier contribution to the Coulomb part of the interaction energy between
 a framework and a set of rigid molecules.
 
-If `skipcontribution` is set to `k`, the contributions of the charges of the `k`-th species
+If `skipcontribution` is set to `ij`, the contributions of the charges of the `ij`-th species
 are not taken into account.
 """
 function compute_ewald(ctx::EwaldContext, skipcontribution=0)
@@ -431,7 +433,7 @@ end
 
 struct IncrementalEwaldContext
     ctx::EwaldContext
-    sums::Matrix{ComplexF64} # need to change to ElasticArray if number of charges can change
+    sums::ElasticMatrix{ComplexF64,Vector{ComplexF64}} # need to change to ElasticArray if number of charges can change
     tmpEiks::NTuple{3,Vector{ComplexF64}}
     tmpsums::Vector{ComplexF64}
     last::Base.RefValue{Int} # last inquired change
@@ -445,7 +447,7 @@ function IncrementalEwaldContext(ctx::EwaldContext)
     Eiky = Vector{ComplexF64}(undef, tkyp)
     Eikz = Vector{ComplexF64}(undef, tkzp)
     tmpsums = Vector{ComplexF64}(undef, m)
-    IncrementalEwaldContext(ctx, Matrix{ComplexF64}(undef, m, n+1), (Eikx, Eiky, Eikz), tmpsums, Ref(-1))
+    IncrementalEwaldContext(ctx, ElasticMatrix{ComplexF64}(undef, m, (m!=0)*(n+1)), (Eikx, Eiky, Eikz), tmpsums, Ref(-1))
 end
 
 """
@@ -464,7 +466,7 @@ function compute_ewald(ewald::IncrementalEwaldContext)
     framework_adsorbate = 0.0
     adsorbate_adsorbate = 0.0
     for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
-        adsorbate_contribution = ewald.sums[idxkvec,end]
+        adsorbate_contribution = ewald.sums[idxkvec,1]
         _re_a, _im_a = reim(adsorbate_contribution)
         temp = ewald.ctx.eframework.kfactors[idxkvec]
         _re_f, _im_f = reim(ewald.ctx.eframework.StoreRigidChargeFramework[idxkvec])
@@ -483,12 +485,12 @@ end
 
 
 """
-    single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
+    single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions)
 
-Compute the contribution of species number `k` at the given `positions` (one position per
+Compute the contribution of species number `ij` at the given `positions` (one position per
 atom) to the reciprocal Ewald sum, so that
-`single_contribution_ewald(ewald, k, poss2) - single_contribution_ewald(ewald, k, poss1)`
-is the reciprocal Ewald sum energy difference between species `k` at positions `poss2` and
+`single_contribution_ewald(ewald, ij, poss2) - single_contribution_ewald(ewald, ij, poss1)`
+is the reciprocal Ewald sum energy difference between species `ij` at positions `poss2` and
 `poss1`.
 
 If `positions == nothing`, use the position for the species currently stored in `ewald`
@@ -504,11 +506,11 @@ If `positions == nothing`, use the position for the species currently stored in 
     not be called from multiple threads in parallel on the same `ewald` with
     `positions !== nothing`.
 """
-function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
+function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions)
     iszero(ewald.ctx.eframework.α) && return 0.0u"K"
     ewald.last[] == -1 && error("Please call `compute_ewald(ewald)` before calling `single_contribution_ewald(ewald, ...)`")
     if positions isa Nothing
-        contribution = @view ewald.sums[:,k]
+        contribution = @view ewald.sums[:,ij+1]
     else
         kx, ky, kz = ewald.ctx.eframework.kspace.ks
         kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
@@ -519,7 +521,7 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
         move_one_system!(Eiks, ewald.ctx, positions, -1) # this only modifies Eiks, not ewald
         contribution = ewald.tmpsums
         contribution .= zero(ComplexF64)
-        charges = ewald.ctx.allcharges[k]
+        charges = ewald.ctx.allcharges[ij]
         kindices = ewald.ctx.eframework.kspace.kindices
         ix = 0
         iy = ky+1
@@ -537,7 +539,7 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
             iy += tkyp
             iz += tkzp
         end
-        ewald.last[] = k # signal for update_ewald_context!
+        ewald.last[] = ij # signal for update_ewald_context!
     end
 
     rest_single = 0.0
@@ -545,7 +547,7 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, k, positions)
     n = length(ewald.ctx.allcharges)
     @inbounds for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
         rest = ewald.ctx.eframework.StoreRigidChargeFramework[idxkvec]
-        rest += ewald.sums[idxkvec,end] - ewald.sums[idxkvec,k]
+        rest += ewald.sums[idxkvec,1] - ewald.sums[idxkvec,ij+1]
         _re_f, _im_f = reim(rest)
         _re_a, _im_a = reim(contribution[idxkvec])
         temp = ewald.ctx.eframework.kfactors[idxkvec]
@@ -559,20 +561,20 @@ end
 """
     update_ewald_context!(ewald::IncrementalEwaldContext)
 
-Following a call to [`single_contribution_ewald(ewald, k, positions)`](@ref), update the
-internal state of `ewald` so that the species `k` is now at the given `positions`.
+Following a call to [`single_contribution_ewald(ewald, ij, positions)`](@ref), update the
+internal state of `ewald` so that the species `ij` is now at the given `positions`.
 
 Note that this modifies the underlying [`EwaldContext`](@ref) `ewald.ctx`.
 """
 function update_ewald_context!(ewald::IncrementalEwaldContext)
-    k = ewald.last[]
-    k ≤ 0 && return # last moved molecule bears no charge TODO: check
-    ewald.sums[:,end] .+= ewald.tmpsums .- @view(ewald.sums[:,k])
-    ewald.sums[:,k] .= ewald.tmpsums
+    ij = ewald.last[]
+    ij ≤ 0 && return # last moved molecule bears no charge TODO: check
+    ewald.sums[:,1] .+= ewald.tmpsums .- @view(ewald.sums[:,ij+1])
+    ewald.sums[:,ij+1] .= ewald.tmpsums
     Eikx, Eiky, Eikz = ewald.ctx.Eiks
     newEikx, newEiky, newEikz = ewald.tmpEiks
     kx, ky, kz = ewald.ctx.eframework.kspace.ks
-    chargepos = 1 + ewald.ctx.offsets[k]
+    chargepos = 1 + ewald.ctx.offsets[ij]
     copyto!(Eikx, 1 + chargepos*(kx+1), newEikx, 1, length(newEikx))
     copyto!(Eiky, 1 + chargepos*(ky+ky+1), newEiky, 1, length(newEiky))
     copyto!(Eikz, 1 + chargepos*(kz+kz+1), newEikz, 1, length(newEikz))

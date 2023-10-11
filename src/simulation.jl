@@ -185,7 +185,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             accepted && wait(running_update)
 
             i, j = idx
-            k = mc.offsets[i]+j
+            ij = mc.offsets[i]+j
 
             if old_idx == idx
                 if accepted
@@ -194,18 +194,18 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 #     before = fetch(before_task) # simply keep its previous value
                 end
                 @spawnif mc.step.parallel begin
-                    singlereciprocal = @spawn single_contribution_ewald(mc.ewald, k, newpos)
+                    singlereciprocal = @spawn single_contribution_ewald(mc.ewald, ij, newpos)
                     fer = @spawn framework_interactions(mc, i, newpos)
                     singlevdw = single_contribution_vdw(mc.step, idx, newpos)
                     after = MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
-            end
+                end
             else
                 molpos = mc.step.posidx[i][j]
                 positions = @view mc.step.positions[molpos]
                 @spawnif mc.step.parallel begin
                     singlevdw_before_task = @spawn single_contribution_vdw(mc.step, (i,j), positions)
-                    singlereciprocal_after = @spawn single_contribution_ewald(mc.ewald, k, newpos)
-                    singlereciprocal_before = @spawn single_contribution_ewald(mc.ewald, k, nothing)
+                    singlereciprocal_after = @spawn single_contribution_ewald(mc.ewald, ij, newpos)
+                    singlereciprocal_before = @spawn single_contribution_ewald(mc.ewald, ij, nothing)
                     fer_before = @spawn framework_interactions(mc, i, positions)
                     fer_after = @spawn framework_interactions(mc, i, newpos)
                     singlevdw_before = fetch(singlevdw_before_task)::TK
