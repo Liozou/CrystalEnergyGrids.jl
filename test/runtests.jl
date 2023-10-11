@@ -12,6 +12,7 @@ using Serialization
 # Aqua.test_all(CrystalEnergyGrids; ambiguities=false)
 
 const TESTDIR = joinpath(dirname(dirname(pathof(CEG))), "test"); setdir_RASPA!(joinpath(TESTDIR, "raspa"))
+mkpath(joinpath(TESTDIR, "savegrids"))
 # rm(joinpath(TESTDIR, "raspa", "grids"); recursive=true)
 
 @testset "CrystalEnergyGrids" begin

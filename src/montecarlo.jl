@@ -429,16 +429,16 @@ The energy difference between the new position for the molecule and the current 
 """
 function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     i, j = idx
-    k = mc.offsets[i]+j
+    ij = mc.offsets[i]+j
     poss = if positions isa Nothing
         molpos = mc.step.posidx[i][j]
         @view mc.step.positions[molpos]
     else
         positions
     end
-    singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $k, $positions)
+    singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $ij, $positions)
     fer = @spawn framework_interactions($mc, $i, $poss)
-    singlevdw = single_contribution_vdw(mc.step, idx, poss)
+    singlevdw = single_contribution_vdw(mc.step, (i,j), poss)
     MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
 end
 
