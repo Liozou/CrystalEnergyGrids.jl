@@ -108,8 +108,9 @@ struct ShootingStarMinimizer{N,T} <: RecordFunction
     energies::Vector{BaselineEnergyReport}
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
 end
-function ShootingStarMinimizer{N,T}(nsteps::Int; length::Int=100, every::Int=1) where {N,T}
+function ShootingStarMinimizer{N}(nsteps::Int; length::Int=100, every::Int=1) where {N}
     n = nsteps ÷ every
+    T = typeof_psystem(Val(N))
     positions = Vector{SimulationStep{N,T}}(undef, n)
     energies = Vector{BaselineEnergyReport}(undef, n)
     lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
@@ -120,9 +121,6 @@ function ShootingStarMinimizer{N,T}(nsteps::Int; length::Int=100, every::Int=1) 
         end
     end
     ShootingStarMinimizer{N,T}(every, length, positions, energies, lb)
-end
-function ShootingStarMinimizer(::Union{MonteCarloSetup{N,T},SimulationStep{N,T}}, nsteps::Int; length::Int=100, every::Int=1) where {N,T}
-    ShootingStarMinimizer{N,T}(nsteps; length, every)
 end
 
 function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
@@ -147,15 +145,13 @@ struct RainfallMinimizer{N,T} <: RecordFunction
     tasks::Vector{Task}
 end
 
-function RainfallMinimizer{N,T}(nsteps::Int; length::Int=100, every::Int=1) where {N,T}
+function RainfallMinimizer{N}(nsteps::Int; length::Int=100, every::Int=1) where {N}
     n = nsteps ÷ every
+    T = typeof_psystem(Val(N))
     positions = Vector{SimulationStep{N,T}}(undef, n)
     energies = Vector{BaselineEnergyReport}(undef, n)
     tasks = Vector{Task}(undef, n)
     RainfallMinimizer{N,T}(every, length, positions, energies, tasks)
-end
-function RainfallMinimizer(::Union{MonteCarloSetup{N,T},SimulationStep{N,T}}, nsteps::Int; length::Int=100, every::Int=1) where {N,T}
-    RainfallMinimizer{N,T}(nsteps; length, every)
 end
 
 function (rain::RainfallMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
