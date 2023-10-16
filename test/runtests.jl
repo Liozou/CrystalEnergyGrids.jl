@@ -2,6 +2,9 @@ using Test, Random
 using CrystalEnergyGrids
 import CrystalEnergyGrids as CEG
 
+prev_warning::Bool = CEG.PRINT_CHARGE_WARNING
+CEG.PRINT_CHARGE_WARNING = false
+
 using StaticArrays
 using Unitful, UnitfulAtomic
 using AtomsBase
@@ -67,8 +70,7 @@ end
     reciprocal = compute_ewald(ctx)
     @test reciprocal == compute_ewald(iec)
     # /!\ call to single_contribution_ewald must be after call to compute_ewald
-    @test_broken reciprocal ≈ compute_ewald(iec.ctx, 1) + CEG.single_contribution_ewald(iec, 1, pos1)
-
+    @test reciprocal ≈ compute_ewald(iec.ctx, 1) + CEG.single_contribution_ewald(iec, 1, pos1)
 end
 
 @testset "MonteCarloSetup" begin
@@ -261,3 +263,4 @@ end
     rm(path*".COPY")
 end
 
+CEG.PRINT_CHARGE_WARNING = prev_warning

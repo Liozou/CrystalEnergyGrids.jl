@@ -5,7 +5,6 @@ using LinearAlgebra: LinearAlgebra, norm, det, cross, dot
 using Pkg: TOML
 
 using StaticArrays
-using OffsetArrays
 using AtomsBase
 using Scratch: @get_scratch!
 

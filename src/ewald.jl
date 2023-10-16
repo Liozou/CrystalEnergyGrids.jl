@@ -1,6 +1,5 @@
 using LinearAlgebra: norm, det
 using StaticArrays
-using OffsetArrays
 using AtomsBase
 using SpecialFunctions: erf, erfc
 using ElasticArrays: ElasticMatrix
@@ -66,23 +65,23 @@ function Base.:(==)(e1::EwaldFramework, e2::EwaldFramework)
 end
 
 
-function make_line_pos!(Eikt, start, numk, eikt)
-    Eikt[start] = 1
-    Eikt[start+1] = eikt
-    for k in 2:numk
-        Eikt[start+k] = Eikt[start+k-1]*eikt
+function make_line_pos!(Eikt, j, eikt)
+    k = size(Eikt, 1)
+    Eikt[1,j] = 1
+    Eikt[2,j] = eikt
+    @inbounds for i in 3:k
+        Eikt[i,j] = Eikt[i-1,j]*eikt
     end
     nothing
 end
 
-function make_line_neg!(Eikt, start, numk, eikt)
+function make_line_neg!(Eikt, j, k, eikt)
     ceikt = conj(eikt)
-    mid = start + numk
-    Eikt[mid-1] = ceikt
-    for k in 2:numk
-        Eikt[mid-k] = Eikt[mid-k+1]*ceikt
+    Eikt[k,j] = ceikt
+    @inbounds for i in k-1:-1:1
+        Eikt[i,j] = Eikt[i+1,j]*ceikt
     end
-    make_line_pos!(Eikt, mid, numk, eikt)
+    make_line_pos!(@view(Eikt[k+1:end,j]), 1, eikt)
 end
 
 
@@ -100,6 +99,10 @@ Return `(Eikx, Eiky, Eikz)` where, for `m` in `1:numsites`
 - `Eiky[(m-1)*(2ky+1) + ky + 1 + k] == exp(±2ikπ * fracpos_y[m])` with `k ∈ -ky:ky`
 - `Eikz[(m-1)*(2ky+1) + ky + 1 + k] == exp(±2ikπ * fracpos_z[m])` with `k ∈ -kz:kz`
 
+- `Eikx[k,m] == exp(2ikπ * fracpos_x[m])` with `k ∈ 0:kx`
+- `Eiky[k,m] == exp(±2ikπ * fracpos_y[m])` with `k ∈ -ky:ky`
+- `Eikz[k,m] == exp(±2ikπ * fracpos_z[m])` with `k ∈ -kz:kz`
+
 with `fracpos_x[m], fracpos_y[m], fracpos_z[m] == invmat*position[m]`
 """
 function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
@@ -111,9 +114,9 @@ function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
     tkyp = ky + ky + 1
     tkzp = kz + kz + 1
 
-    Eikx = Vector{ComplexF64}(undef, (kx+1)*numsites)
-    Eiky = Vector{ComplexF64}(undef, (ky+ky+1)*numsites)
-    Eikz = Vector{ComplexF64}(undef, (kz+kz+1)*numsites)
+    Eikx = ElasticMatrix{ComplexF64}(undef, kxp, numsites)
+    Eiky = ElasticMatrix{ComplexF64}(undef, tkyp, numsites)
+    Eikz = ElasticMatrix{ComplexF64}(undef, tkzp, numsites)
 
     ofs = -1
     @inbounds for syst in systems
@@ -121,19 +124,16 @@ function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
             px, py, pz = invmat * (NoUnits.(position(syst, j)/u"Å"))
             for πs in CartesianIndices((0:(ΠC-1), 0:(ΠB-1), 0:(ΠA-1)))
                 πc, πb, πa = Tuple(πs)
-                jofs = (j + ofs)*ΠABC + πa*ΠBC + πb*ΠC + πc
+                jofs = 1 + (j + ofs)*ΠABC + πa*ΠBC + πb*ΠC + πc
 
-                ix = 1 + jofs*kxp
                 eikx = cispi(2*(px + πa/ΠA))
-                make_line_pos!(Eikx, ix, kx, eikx)
+                make_line_pos!(Eikx, jofs, eikx)
 
                 eiky = cispi(2*(py + πb/ΠB))
-                iy = 1 + jofs*tkyp
-                make_line_neg!(Eiky, iy, ky, eiky)
+                make_line_neg!(Eiky, jofs, ky, eiky)
 
                 eikz = cispi(2*(pz + πc/ΠC))
-                iz = 1 + jofs*tkzp
-                make_line_neg!(Eikz, iz, kz, eikz)
+                make_line_neg!(Eikz, jofs, kz, eikz)
             end
         end
         ofs += length(syst)
@@ -146,38 +146,32 @@ end
 function ewald_main_loop!(sums::T, allcharges, kspace::EwaldKspace, Eiks, skipcontribution) where T
     fill!(sums, zero(ComplexF64))
     Eikx, Eiky, Eikz = Eiks
-    kx, ky, kz = kspace.ks
+    _, ky, kz = kspace.ks
 
-    kxp = kx + 1
-    tkyp = ky + ky + 1
-    tkzp = kz + kz + 1
-
-    ix = -kxp # reference index of the current site for Eikx
-    iy = -ky # reference index of the current site for Eiky
-    iz = -kz # reference index of the current site for Eikz
-
-    counter = 0
+    speciescounter = 0
+    chargecounter = 0
 
     @inbounds for charges in allcharges
-        counter += 1
-        counter == skipcontribution && continue
-        ijp1 = counter + 1
+        speciescounter += 1
+        if speciescounter == skipcontribution
+            chargecounter += length(charges)
+            continue
+        end
+        ijp1 = speciescounter + 1
         for c in charges
-            ix += kxp
-            iy += tkyp
-            iz += tkzp
+            chargecounter += 1
             # if !iszero(c) # TODO: remove zero charges when constructing EwaldContext
                 for (jy, jz, jxrange, rangeidx) in kspace.kindices
-                    Eik_yz = c*Eiky[iy+jy]*Eikz[iz+jz]
+                    Eik_yz = c*Eiky[ky+1+jy,chargecounter]*Eikz[kz+1+jz,chargecounter]
                     n = length(jxrange)
-                    ofs = first(jxrange) + ix
+                    ofs = first(jxrange)
                     if T === Vector{ComplexF64}
                         @simd for I in 1:n
-                            sums[rangeidx+I] += Eikx[ofs+I]*Eik_yz
+                            sums[rangeidx+I] += Eikx[ofs+I,chargecounter]*Eik_yz
                         end
                     else
                         @simd for I in 1:n
-                            sums[rangeidx+I,ijp1] += Eikx[ofs+I]*Eik_yz
+                            sums[rangeidx+I,ijp1] += Eikx[ofs+I,chargecounter]*Eik_yz
                         end
                     end
                 end
@@ -307,7 +301,7 @@ energy of a system composed of a rigid framework and any number of rigid molecul
 """
 struct EwaldContext
     eframework::EwaldFramework
-    Eiks::NTuple{3,Vector{ComplexF64}}
+    Eiks::NTuple{3,ElasticMatrix{ComplexF64,Vector{ComplexF64}}}
     allcharges::Vector{Vector{Float64}}
     offsets::Vector{Int}
     # offsets[i] is the number of charges before the start of the system at allcharges[i] minus 1
@@ -330,17 +324,16 @@ end
 
 function move_one_system!(Eiks, ctx::EwaldContext, positions, ofs)
     Eikx, Eiky, Eikz = Eiks
-    kx, ky, kz = ctx.eframework.kspace.ks
-    kxp = kx + 1; tkyp = ky + ky + 1; tkzp = kz + kz + 1
+    _, ky, kz = ctx.eframework.kspace.ks
     invmat = ctx.eframework.invmat
     isnumber = eltype(positions) <: AbstractVector{<:AbstractFloat}
     n = length(positions)
     @inbounds for j in 1:n
         px, py, pz = invmat * (isnumber ? positions[j] : NoUnits.(positions[j]/u"Å"))
         jofs = ofs + j
-        make_line_pos!(Eikx, 1 + jofs*kxp, kx, cispi(2*px))
-        make_line_neg!(Eiky, 1 + jofs*tkyp, ky, cispi(2*py))
-        make_line_neg!(Eikz, 1 + jofs*tkzp, kz, cispi(2*pz))
+        make_line_pos!(Eikx, jofs, cispi(2*px))
+        make_line_neg!(Eiky, jofs, ky, cispi(2*py))
+        make_line_neg!(Eikz, jofs, kz, cispi(2*pz))
     end
 end
 move_one_system!(ctx::EwaldContext, ij::Int, positions) = move_one_system!(ctx.Eiks, ctx, positions, ctx.offsets[ij])
@@ -353,13 +346,13 @@ Build an [`EwaldContext`](@ref) for a fixed framework and any number of rigid mo
 `eframework` can be obtained from [`initialize_ewald`](@ref).
 """
 function EwaldContext(eframework::EwaldFramework, systems)
-    iszero(eframework.α) && return EwaldContext(eframework, ntuple(Returns(ComplexF64[]), 3), Vector{Float64}[], Int[], 0.0, 0.0)
+    iszero(eframework.α) && return EwaldContext(eframework, ntuple(Returns(ElasticMatrix{ComplexF64}(undef, 0, 0)), 3), Vector{Float64}[], Int[], 0.0, 0.0)
     allcharges::Vector{Vector{Float64}} = [NoUnits.(syst[:,:atomic_charge]/u"e_au") for syst in systems]
 
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α
     energy_adsorbate_self = sum(sum(abs2, charges; init=0.0)*chargefactor for charges in allcharges; init=0.0)
     net_charges = sum(sum(charges; init=0.0) for charges in allcharges; init=0.0)
-    if abs(net_charges + eframework.net_charges_framework) > 1e-5
+    if abs(net_charges + eframework.net_charges_framework) > 1e-5 && PRINT_CHARGE_WARNING
         @warn "Framework charge of $(eframework.net_charges_framework) and additional charge of $net_charges do not make a neutral system"
     end
     buffer, ortho, safemin = prepare_periodic_distance_computations(eframework.mat)
@@ -387,7 +380,7 @@ function EwaldContext(eframework::EwaldFramework, systems)
 
     energy_net_charges = eframework.UIon*eframework.net_charges_framework*net_charges
     offsets = Vector{Int}(undef, m)
-    m > 0 && (offsets[1] = -1)
+    m > 0 && (offsets[1] = 0)
     @inbounds for i in 1:(m-1)
         offsets[i+1] = offsets[i] + length(systems[i])
     end
@@ -436,8 +429,8 @@ end
 
 struct IncrementalEwaldContext
     ctx::EwaldContext
-    sums::ElasticMatrix{ComplexF64,Vector{ComplexF64}} # need to change to ElasticArray if number of charges can change
-    tmpEiks::NTuple{3,Vector{ComplexF64}}
+    sums::ElasticMatrix{ComplexF64,Vector{ComplexF64}}
+    tmpEiks::NTuple{3,ElasticMatrix{ComplexF64,Vector{ComplexF64}}}
     tmpsums::Vector{ComplexF64}
     last::Base.RefValue{Int} # last inquired change
 end
@@ -446,9 +439,9 @@ function IncrementalEwaldContext(ctx::EwaldContext)
     m = ctx.eframework.kspace.num_kvecs
     kx, ky, kz = ctx.eframework.kspace.ks
     kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
-    Eikx = Vector{ComplexF64}(undef, kxp)
-    Eiky = Vector{ComplexF64}(undef, tkyp)
-    Eikz = Vector{ComplexF64}(undef, tkzp)
+    Eikx = ElasticMatrix{ComplexF64}(undef, kxp, 1)
+    Eiky = ElasticMatrix{ComplexF64}(undef, tkyp, 1)
+    Eikz = ElasticMatrix{ComplexF64}(undef, tkzp, 1)
     tmpsums = Vector{ComplexF64}(undef, m)
     IncrementalEwaldContext(ctx, ElasticMatrix{ComplexF64}(undef, m, (m!=0)*(n+1)), (Eikx, Eiky, Eikz), tmpsums, Ref(-1))
 end
@@ -520,27 +513,21 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
         Eiks = ewald.tmpEiks
         Eikx, Eiky, Eikz = Eiks
         m = length(positions)
-        resize!(Eikx, m*kxp); resize!(Eiky, m*tkyp); resize!(Eikz, m*tkzp)
-        move_one_system!(Eiks, ewald.ctx, positions, -1) # this only modifies Eiks, not ewald
+        resize!(Eikx, kxp, m); resize!(Eiky, tkyp, m); resize!(Eikz, tkzp, m)
+        move_one_system!(Eiks, ewald.ctx, positions, 0) # this only modifies Eiks, not ewald
         contribution = ewald.tmpsums
         contribution .= zero(ComplexF64)
         charges = ewald.ctx.allcharges[ij]
         kindices = ewald.ctx.eframework.kspace.kindices
-        ix = 0
-        iy = ky+1
-        iz = kz+1
-        for c in charges
+        for (chargecounter, c) in enumerate(charges)
             for (jy, jz, jxrange, rangeidx) in kindices
-                Eik_xy = c*Eiky[iy+jy]*Eikz[iz+jz]
+                Eik_xy = c*Eiky[jy+ky+1,chargecounter]*Eikz[jz+kz+1,chargecounter]
                 n = length(jxrange)
-                ofs = first(jxrange) + ix
+                ofs = first(jxrange)
                 @simd for I in 1:n
-                    contribution[rangeidx+I] += Eikx[ofs+I]*Eik_xy
+                    contribution[rangeidx+I] += Eikx[ofs+I,chargecounter]*Eik_xy
                 end
             end
-            ix += kxp
-            iy += tkyp
-            iz += tkzp
         end
         ewald.last[] = ij # signal for update_ewald_context!
     end
@@ -576,11 +563,11 @@ function update_ewald_context!(ewald::IncrementalEwaldContext)
     ewald.sums[:,ij+1] .= ewald.tmpsums
     Eikx, Eiky, Eikz = ewald.ctx.Eiks
     newEikx, newEiky, newEikz = ewald.tmpEiks
-    kx, ky, kz = ewald.ctx.eframework.kspace.ks
-    chargepos = 1 + ewald.ctx.offsets[ij]
-    copyto!(Eikx, 1 + chargepos*(kx+1), newEikx, 1, length(newEikx))
-    copyto!(Eiky, 1 + chargepos*(ky+ky+1), newEiky, 1, length(newEiky))
-    copyto!(Eikz, 1 + chargepos*(kz+kz+1), newEikz, 1, length(newEikz))
+    chargeposstart = ewald.ctx.offsets[ij]
+    chargepos = (chargeposstart+1):(chargeposstart+size(newEikx, 2)) #TODO: this is quite costly
+    Eikx[:,chargepos] = newEikx
+    Eiky[:,chargepos] = newEiky
+    Eikz[:,chargepos] = newEikz
     ewald.last[] = 0
     nothing
 end
