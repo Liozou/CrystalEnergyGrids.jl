@@ -1,10 +1,10 @@
-using Printf, Serialization
+using Printf
 
 export output_pdb, output_restart
 
 SimulationStep(mc::MonteCarloSetup) = SimulationStep(mc.step, :output)
 
-function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i)
+function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i, atomcounter)
     invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
     open(path, "a") do io
         @printf io "MODEL %4d\n" i
@@ -15,8 +15,7 @@ function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i)
             abc = invmat * opos
             pos = o.mat*(abc .- floor.(abc))/u"Å"
             symb = String(o.ff.symbols[ix])
-            ij = ((i + j - 2)*(i + j - 1))÷2 + j - 1
-            serial = ((ij + k - 1)*(ij + k))÷2 + ij
+            serial = atomcounter[i, j, k]
             @printf io "ATOM  %5d %4.4s MOL          %8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" serial symb pos[1] pos[2] pos[3] symb
         end
         @printf io "ENDMDL\n"
@@ -35,9 +34,9 @@ The output is appended to the file at the given `path`, if any.
 
 See also [`output_restart`](@ref).
 """
-function output_pdb(path, mc::MonteCarloSetup, o=SimulationStep(mc), i=0)
+function output_pdb(path, mc::MonteCarloSetup, o=SimulationStep(mc), i=0, atomcounter=Counter3D())
     lengths, angles = cell_parameters(o.mat)
-    output_pdb(path, o, lengths, angles, i)
+    output_pdb(path, o, lengths, angles, i, atomcounter)
 end
 
 
@@ -161,10 +160,11 @@ function pdb_output_handler(path, mat::SMatrix{3,3,TÅ,9})
         end
     else
         lengths, angles = cell_parameters(mat)
+        atomcounter = Counter3D()
         Channel{SimulationStep}(100; taskref) do channel
             for (i, o) in enumerate(channel)
                 isempty(o.ffidx) && break
-                output_pdb(path, o, lengths, angles, i)
+                output_pdb(path, o, lengths, angles, i, atomcounter)
             end
             nothing
         end

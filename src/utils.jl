@@ -465,6 +465,38 @@ Base.@assume_effects :foldable function typeof_psystem(::Val{N}) where N
     ))
 end
 
+
+using Base.Threads
+
+struct Counter3D
+    A::Vector{Vector{Vector{Int}}}
+    lck::ReentrantLock
+    counter::Base.RefValue{Int}
+end
+Counter3D() = Counter3D(Vector{Vector{Int}}[], ReentrantLock(), Ref(0))
+@inbounds function Base.getindex(x::Counter3D, i, j, k)
+    n = length(x.A)
+    n < i && @lock x.lck begin
+        n < i && append!(x.A, Vector{Int}[] for _ in 1:(i-n))
+    end
+    I = x.A[i]
+    m = length(I)
+    m < j && @lock x.lck begin
+        m < j && append!(I, Int[] for _ in 1:(j-m))
+    end
+    J = I[j]
+    p = length(J)
+    p < k && @lock x.lck begin
+        if p < k
+            c = x.counter[]
+            newc = c + k - p
+            append!(J, c:(newc-1))
+            x.counter[] = newc
+        end
+    end
+    J[k]
+end
+
 # Multithreading
 
 using Base.Threads
