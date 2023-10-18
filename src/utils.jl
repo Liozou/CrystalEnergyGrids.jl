@@ -64,6 +64,10 @@ function stack3(x)
     stack3((x[1], x[2], x[3]))
 end
 
+@static if VERSION < v"1.9-"
+    stack(x) = reduce(hcat, x)
+end
+
 # The following are copied from PeriodicGraphEmbeddings.jl
 
 function cell_parameters(mat::AbstractMatrix)
@@ -501,21 +505,21 @@ end
 
 using Base.Threads
 
-function stripspawn(@nospecialize(expr), dict::IdDict{Symbol,Symbol})
+function stripspawn(@nospecialize(expr), dict::IdDict{Symbol,Symbol}, inspawncall=false)
     if expr isa Expr
         if expr.head === :(=) && Meta.isexpr(expr.args[2], :macrocall) && expr.args[2].args[1] === Symbol("@spawn")
             left = expr.args[1]
             newsymb = if left isa Symbol
                 get!(() -> Symbol(left::Symbol, :_nospawn), dict, left)
             else
-                stripspawn(left, dict)
+                stripspawn(left, dict, false)
             end
-            Expr(:(=), newsymb, stripspawn(last(expr.args[2].args), dict))
-        elseif expr.head === :$
-            stripspawn(expr.args[1], dict)
+            Expr(:(=), newsymb, stripspawn(last(expr.args[2].args), dict, true))
+        elseif expr.head === :$ && inspawncall
+            stripspawn(expr.args[1], dict, inspawncall)
         else
             x = Expr(expr.head)
-            append!(x.args, stripspawn(arg, dict) for arg in expr.args)
+            append!(x.args, stripspawn(arg, dict, inspawncall) for arg in expr.args)
             x
         end
     elseif expr isa Symbol

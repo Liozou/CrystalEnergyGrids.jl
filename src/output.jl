@@ -153,16 +153,17 @@ output_restart(path, mc::MonteCarloSetup) = output_restart(path, SimulationStep(
 function pdb_output_handler(path, mat::SMatrix{3,3,TÅ,9})
     taskref = Ref{Task}()
     if isempty(path)
-        Channel{SimulationStep}(1; taskref) do channel
-            for o in channel
-                isempty(o.ffidx) && break
-            end
+        Channel{SimulationStep}(Inf; taskref) do channel
+            while !isempty(take!(channel).ffidx) end # skip until isempty(o.ffidx)
         end
     else
         lengths, angles = cell_parameters(mat)
         atomcounter = Counter3D()
-        Channel{SimulationStep}(100; taskref) do channel
-            for (i, o) in enumerate(channel)
+        Channel{SimulationStep}(Inf; taskref) do channel
+            i = 0
+            while true
+                i += 1
+                o = take!(channel)
                 isempty(o.ffidx) && break
                 output_pdb(path, o, lengths, angles, i, atomcounter)
             end

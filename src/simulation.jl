@@ -24,8 +24,8 @@ Definition of the simulation setup, which must provide the following information
 If provided, `record` must have the signature
     `record(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, simu::SimulationSetup)`
 where
-- `o` contains the information on the positions of the species at this point. It must not
-  be modified by the `record` function.
+- `o` contains the information on the positions of the species at this point. Read below
+  for more information about what can be done with `o` depending on `needcomplete`
 - `e` is the energy at this point.
 - `k` is the cycle number (between 0 and `cycles`). `k == 0` corresponds to the
   initialization of the simulation.
@@ -33,9 +33,25 @@ where
   use that of `o`. It must not be modified by the `record` function.
 - `simu` is this `SimulationSetup`. It must not be modified by the `record` function.
 
+By default, the `record` function is given as an argument a value of `o` which is a copy
+of `mc.step` which is thread-safe to read and modify (except for the `ff`, `charges`,
+`isrigid` and `ffidx` fields which are never meant to change).
+If the `record` function is guaranteed to only ever read or modify the `positions` and
+`atoms` fields of `o`, then it can specify it by defining a method for
+`needcomplete(::Trecord)` that returns `false` (the default is `true`).
+
+!!! warning
+    If the value returned by `needcomplete` is `false` when it should be `true`, this may
+    lead to race conditions and related subtle bugs, which may not be easy to identify.
+
 Additionally, if a call to `record` can spawn asynchronous calls, a method for `Base.fetch`
 should be implemented such that `Base.fetch(record)` blocks until all asynchronous calls
 are done.
+
+Upon creation of a `SimulationSetup`, a call to `initialize_record!(record, setup)` will be
+realized. By default, `initialize_record!` does nothing, but you can specialize it for
+for your appropriate record type if need be, i.e. by defining a method of signature:
+`initialize_record!(record::T, setup::SimulationSetup{T}) where {T<:MyRecordType}`.
 
 ## Example
 
@@ -59,6 +75,17 @@ function (x::AverageDistanceTemperatureRecord)(o, _, k, _, simu)
     x.weightedaverages[k] = weightedaverage * simu.temperatures[k] / length(o.atoms)
     nothing
 end
+
+# Initialize the internal `weightedaverages` vector to the right size
+function CrystalEnergyGrids.initialize_record!(record::T, setup::SimulationSetup{T}) where {T<:AverageDistanceTemperatureRecord}
+    resize!(record.weightedaverages, setup.ncycles)
+end
+
+# No need to give a complete copy of `o` since we only read the positions
+CrystalEnergyGrids.needcomplete(::AverageDistanceTemperatureRecord) = false
+
+# (optional since nothing is blocking here)
+Base.fetch(::AverageDistanceTemperatureRecord) = nothing
 ```
 
 To perform a simulation that runs for 1000 cycles with logarithmically increasing
@@ -66,7 +93,7 @@ temperatures, no trajectory stored but a record the average weighted distance to
 `(0.5, 0.9, 1.3)` (in Å) and energies stored every 2 cycles, use
 `SimulationSetup((k,n)->log1p(k/n)*300u"K"/log(2), 1000, "", 2, AverageDistanceTemperatureRecord([0.5, 0.9, 1.3]u"Å"))`
 """
-@kwdef struct SimulationSetup{Trecord}
+Base.@kwdef struct SimulationSetup{Trecord}
     temperatures::Vector{TK}
     ncycles::Int
     outdir::String=""
@@ -81,13 +108,18 @@ temperatures, no trajectory stored but a record the average weighted distance to
         else
             ncycles ≤ 1 ? [T(1,2)] : T.(1:ncycles, ncycles)
         end
-        new{typeof(record)}(temperatures, ncycles, outdir, printevery, record)
+        ret = new{typeof(record)}(temperatures, ncycles, outdir, printevery, record)
+        initialize_record!(record, ret)
+        ret
     end
 end
 function SimulationSetup(T, ncycles; kwargs...)
     SimulationSetup(; temperatures=T, ncycles, kwargs...)
 end
 
+initialize_record!(::T, ::SimulationSetup{T}) where {T} = nothing
+needcomplete(::Any) = true
+needcomplete(::Returns) = false
 
 
 """
@@ -107,10 +139,11 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # record and outputs
     mkpath(simu.outdir)
     output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
+    startstep = SimulationStep(mc.step, :output)
     if mc.step.parallel
-        record_task = @spawn $simu.record(SimulationStep($mc.step, :output), $energy, 0, $mc, $simu)
+        record_task = @spawn $simu.record(startstep, $energy, 0, $mc, $simu)
     else
-        simu.record(SimulationStep(mc.step, :output), energy, 0, mc, simu) === :stop && return reports
+        simu.record(startstep, energy, 0, mc, simu) === :stop && return reports
         record_task = @spawn nothing # for type stability
     end
 
@@ -251,13 +284,14 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 push!(reports, energy)
             end
             if !(simu.record isa Returns)
+                ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
                 if mc.step.parallel
                     # ret_record cannot be inferred, but that's fine
                     ret_record = fetch(record_task)
                     ret_record === :stop && break
-                    record_task = @spawn $simu.record($o, $energy, $idx_cycle, $mc, $simu)
+                    record_task = @spawn $simu.record($ocomplete, $energy, $idx_cycle, $mc, $simu)
                 else
-                    simu.record(o, energy, idx_cycle, mc, simu) === :stop && break
+                    simu.record(ocomplete, energy, idx_cycle, mc, simu)
                 end
             end
         end

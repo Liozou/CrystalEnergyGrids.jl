@@ -277,17 +277,17 @@ parallelized or not.
     `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
     modifying states outside of the API.
 """
-function MonteCarloSetup(mc::MonteCarloSetup; parallel::Bool=mc.step.parallel)
+function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
     ewaldsystems = EwaldSystem[]
-    for (i, posidxi) in enumerate(mc.step.posidx)
-        ffidxi = mc.step.ffidx[i]
-        charge = [mc.step.charges[k] for k in ffidxi]
-        append!(ewaldsystems, EwaldSystem(mc.step.positions[molpos], charge) for molpos in posidxi)
+    for (i, posidxi) in enumerate(o.posidx)
+        ffidxi = o.ffidx[i]
+        charge = [o.charges[k] for k in ffidxi]
+        append!(ewaldsystems, EwaldSystem(o.positions[molpos], charge) for molpos in posidxi)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
-    MonteCarloSetup(SimulationStep(mc.step, :all; parallel),
+    MonteCarloSetup(SimulationStep(o, :all; parallel),
                     ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
-                    mc.indices, mc.speciesblocks, mc.atomblocks, mc.bead)
+                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead)
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)

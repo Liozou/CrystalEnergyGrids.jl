@@ -233,6 +233,10 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    cutoff=step.ff.cutoff, output=0.0u"K")
         SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
                        step.posidx, step.freespecies, step.isrigid, step.ffidx)
+    elseif mode === :complete_output
+        SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
+                            [[copy(js) for js in is] for is in step.posidx],
+                            [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
     elseif mode === :zero
         SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
                        step.posidx, step.freespecies, step.isrigid, Vector{Int}[])
