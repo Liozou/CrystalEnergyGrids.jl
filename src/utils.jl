@@ -458,7 +458,21 @@ function get_atom_name(atom)
 end
 
 
-Base.@assume_effects :foldable function typeof_psystem(::Val{N}) where N
+mutable struct PeriodicSystem2
+    xpositions::Vector{SVector{3,TÅ}}
+    ypositions::Vector{SVector{3,TÅ}}
+    unitcell::SMatrix{3,3,TÅ,9}
+    cutoff::TÅ
+    parallel::Bool
+    output::TK
+end
+
+function PeriodicSystem(; xpositions, ypositions, unitcell, cutoff, parallel, output)
+    PeriodicSystem2(deepcopy(xpositions), deepcopy(ypositions), unitcell, cutoff, parallel, output)
+end
+
+
+#=Base.@assume_effects :foldable =#function typeof_psystem(::Val{N}) where N
     typeof(PeriodicSystem(;
         xpositions=SVector{N,typeof(1.0u"Å")}[],
         ypositions=SVector{N,typeof(1.0u"Å")}[],

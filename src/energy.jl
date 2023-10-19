@@ -1,7 +1,7 @@
 # Computation of energy resulting from a system with a given force field
 
 export SimulationStep, make_step, update_position, update_position!
-using CellListMap.PeriodicSystems
+# using CellListMap.PeriodicSystems
 import LinearAlgebra
 
 """
@@ -338,7 +338,8 @@ function (vdw::TotalVdwComputation)(pos1, pos2, l1, l2, d², output)
 end
 
 function compute_vdw(step::SimulationStep)
-    nthreads()*length(step.atoms) < 1200 && return compute_vdw_noneighbour(step)
+    # nthreads()*length(step.atoms) < 1200 && return compute_vdw_noneighbour(step)
+    return compute_vdw_noneighbour(step)
     system = PeriodicSystem(;
         xpositions=step.positions,
         unitcell=step.mat,
@@ -396,7 +397,8 @@ function (vdw::SingleVdwComputation)(pos1, pos2, l1, k2, d², output)
 end
 
 function single_contribution_vdw(step::SimulationStep, idx2::Tuple{Int,Int}, poss2::AbstractVector{SVector{N,TÅ}} where N)
-    nthreads()*length(step.atoms) < 1200 && return single_contribution_vdw_noneighbour(step, idx2, poss2)
+    # nthreads()*length(step.atoms) < 1200 && return single_contribution_vdw_noneighbour(step, idx2, poss2)
+    return single_contribution_vdw_noneighbour(step, idx2, poss2)
     system = step.psystem
     resize!(system.ypositions, length(poss2))
     system.ypositions .= poss2

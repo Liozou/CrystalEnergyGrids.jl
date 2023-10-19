@@ -41,6 +41,7 @@ end
 
 
 function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnames)
+    println(">>>>> PRINTING RESTART AT ", path)
     positions = [Vector{SVector{3,TÅ}}[] for _ in o.ffidx]
     invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
     for (l, pos) in enumerate(o.positions)
@@ -52,10 +53,14 @@ function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnam
         length(poss) < k && resize!(poss, k)
         poss[k] = pos
     end
+    println(">>>>> PRINTING A")
+    flush(stdout)
     for posi in positions
         hasassigned = [j for j in 1:length(posi) if isassigned(posi, j)]
         keepat!(posi, hasassigned)
     end
+    println(">>>>> PRINTING B")
+    flush(stdout)
     open(path, "w") do io
         println(io, """Cell info:
 ========================================================================
@@ -66,6 +71,8 @@ number-of-unit-cells: 1 1 1""")
             end
             println(io)
         end
+        println(">>>>> PRINTING C")
+        flush(stdout)
         @printf io "cell-lengths:%19.12f%19.12f%19.12f\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å")
         @printf io "cell-angles:%19.12f%19.12f%19.12f\n\n" α β γ
         println(io, """
@@ -101,36 +108,52 @@ Components: """, length(o.ffidx), " (Adsorbates ", sum(length, positions), """, 
             println(io, "	Maximum-translation-in-plane-change component ", im1, ": 0.000000,0.000000,0.000000")
             println(io, "	Maximum-rotation-change component ", im1, ": 0.123456 0.123456 0.123456")
         end
+        println(">>>>> PRINTING D")
+        flush(stdout)
         println(io, "\nReactions: 0\n")
         for (i, name) in enumerate(molnames)
+            println(">>>>> PRINTING DA ", i)
+            flush(stdout)
             posi = positions[i]
+            println(">>>>> PRINTING DB ", i)
+            flush(stdout)
             num = length(posi)
             ffidxi = o.ffidx[i]
+            println(">>>>> PRINTING DC ", i)
+            flush(stdout)
             m = length(ffidxi)
             println(io, "Component: ", i-1, "     Adsorbate    ", num, " molecules of ", name)
             println(io, "------------------------------------------------------------------------")
+            println(">>>>> PRINTING DD ", i)
+            flush(stdout)
             for (j, poss) in enumerate(posi), (k, opos) in enumerate(poss)
+                println(">>>>> PRINTING DE ", i, ' ', j, ' ', k)
+                flush(stdout)
                 abc = invmat * opos
                 pos = NoUnits.(o.mat*(abc .- floor.(abc))./u"Å")
                 @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" (j-1) (k-1) pos[1] pos[2] pos[3]
             end
-            for s in ("velocity:", "force:   "), j in 0:num-1, k in 0:m-1
-                @printf io "Adsorbate-atom-%s %d %d     0.000000000000     0.000000000000     0.000000000000\n" s j k
-            end
-            for j in 0:num-1, (k, ix) in enumerate(ffidxi)
-                @printf io "Adsorbate-atom-charge:   %d %d%19.12f\n" j (k-1) NoUnits(o.charges[ix]/u"e_au")
-            end
-            for j in 0:num-1, k in 0:m-1
-                @printf io "Adsorbate-atom-scaling:  %d %d     1.000000000000\n" j k
-            end
-            for j in 0:num-1, k in 0:m-1
-                @printf io "Adsorbate-atom-fixed:    %d %d       0 0 0\n" j k
-            end
+            # for s in ("velocity:", "force:   "), j in 0:num-1, k in 0:m-1
+            #     @printf io "Adsorbate-atom-%s %d %d     0.000000000000     0.000000000000     0.000000000000\n" s j k
+            # end
+            # for j in 0:num-1, (k, ix) in enumerate(ffidxi)
+            #     @printf io "Adsorbate-atom-charge:   %d %d%19.12f\n" j (k-1) NoUnits(o.charges[ix]/u"e_au")
+            # end
+            # for j in 0:num-1, k in 0:m-1
+            #     @printf io "Adsorbate-atom-scaling:  %d %d     1.000000000000\n" j k
+            # end
+            # for j in 0:num-1, k in 0:m-1
+            #     @printf io "Adsorbate-atom-fixed:    %d %d       0 0 0\n" j k
+            # end
             println(io)
         end
+        println(">>>>> PRINTING E")
+        flush(stdout)
         println(io, '\n')
         nothing
     end
+    println(">>>>> PRINTING DONE at ", path)
+    flush(stdout)
 end
 
 """

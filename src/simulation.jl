@@ -136,179 +136,219 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     energy = baseline_energy(mc)
     reports = [energy]
 
-    # record and outputs
-    mkpath(simu.outdir)
-    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
+    waittime = parse(Float64, ARGS[1])
+
     startstep = SimulationStep(mc.step, :output)
-    if mc.step.parallel
-        record_task = @spawn $simu.record(startstep, $energy, 0, $mc, $simu)
-    else
-        simu.record(startstep, energy, 0, mc, simu) === :stop && return reports
-        record_task = @spawn nothing # for type stability
-    end
+    simu.record(deepcopy(startstep), energy, 0, deepcopy(mc), simu)
 
-    if simu.ncycles == 0 # single-point computation
-        put!(output, SimulationStep(mc.step, :zero))
-        wait(record_task)
-        wait(output_task[])
-        return reports
-    end
-
-    # idle initialisations
-    running_update = @spawn nothing
-    local oldpos::Vector{SVector{3,TÅ}}
-    local before::MCEnergyReport
-    local after::MCEnergyReport
 
     # value initialisations
     nummol = max(20, length(mc.indices))
-    old_idx = (0,0)
     accepted = false
     translation_dmax = 1.3u"Å"
-    rotation_θmax = 30.0u"°"
 
     # main loop
     for idx_cycle in 1:simu.ncycles
         temperature = simu.temperatures[idx_cycle]
         accepted_translations = 0
-        accepted_rotations = 0
         attempted_translations = 0
-        attempted_rotations = 0
+
+        println("<<< MAIN TASK STARTED")
+        flush(stdout)
 
         for idnummol in 1:nummol
+            # println("<<< MAIN TASK A ", idnummol, '/', nummol)
+            # flush(stdout)
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
-            ffidxi = mc.step.ffidx[idx[1]]
 
+            # println("<<< MAIN TASK B ", idnummol)
+            # flush(stdout)
             # currentposition is the position of that species
-            # currentposition is either a Vector or a @view, that's OK
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
+            currentposition = @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
 
-            istranslation = false
-            isrotation = false
+            attempted_translations += 1
             # newpos is the position after the trial move
-            newpos = if length(ffidxi) == 1
-                istranslation = true
-                attempted_translations += 1
-                random_translation(currentposition, translation_dmax)
-            else
-                if rand() < 0.5
-                    istranslation = true
-                    attempted_translations += 1
-                    random_translation(currentposition, translation_dmax)
-                else
-                    isrotation = true
-                    attempted_rotations += 1
-                    random_rotation(currentposition, rotation_θmax, mc.bead[idx[1]])
-                end
-            end
-
-            # check blocking pockets to refuse the trial early when possible
-            if inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, ffidxi, newpos)
-                # note that if the move is blocked here, neither oldpos, old_idx nor
-                # accepted are updated.
-                # This is allows waiting for the next cycle before waiting on the
-                # running_update task.
-                # However it will still be taken it into account for the translation and
-                # rotation trial values updates.
-                continue
-            end
-
+            newpos = random_translation(currentposition, translation_dmax)
             # if the previous move was accepted, wait for mc to be completely up to date
             # before computing
-            accepted && wait(running_update)
+
+            # println("<<< MAIN TASK C ", idnummol)
+            # flush(stdout)
 
             i, j = idx
             ij = mc.offsets[i]+j
 
-            if old_idx == idx
-                if accepted
-                    before = after
-                # else
-                #     before = fetch(before_task) # simply keep its previous value
-                end
-                @spawnif mc.step.parallel begin
-                    singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
-                    fer = @spawn framework_interactions($mc, $i, $newpos)
-                    singlevdw = single_contribution_vdw(mc.step, idx, newpos)
-                    after = MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
-                end
-            else
-                molpos = mc.step.posidx[i][j]
-                positions = @view mc.step.positions[molpos]
-                @spawnif mc.step.parallel begin
-                    singlevdw_before_task = @spawn single_contribution_vdw($mc.step, $(i,j), $positions)
-                    singlereciprocal_after = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
-                    singlereciprocal_before = @spawn single_contribution_ewald($mc.ewald, $ij, nothing)
-                    fer_before = @spawn framework_interactions($mc, $i, $positions)
-                    fer_after = @spawn framework_interactions($mc, $i, $newpos)
-                    singlevdw_before = fetch(singlevdw_before_task)::TK
-                    singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
-                    before = MCEnergyReport(fetch(fer_before), singlevdw_before, fetch(singlereciprocal_before))
-                    after = MCEnergyReport(fetch(fer_after), singlevdw_after, fetch(singlereciprocal_after))
-                end
-            end
+            molpos = mc.step.posidx[i][j]
+            positions = @view mc.step.positions[molpos]
+            # println("<<< MAIN TASK D ", idnummol)
+            # flush(stdout)
+            singlevdw_before = single_contribution_vdw(mc.step, (i,j), positions)
+            # println("<<< MAIN TASK E ", idnummol)
+            # flush(stdout)
+            singlereciprocal_after = single_contribution_ewald(mc.ewald, ij, newpos)
+            # println("<<< MAIN TASK F ", idnummol)
+            # flush(stdout)
+            singlereciprocal_before = single_contribution_ewald(mc.ewald, ij, nothing)
+            # println("<<< MAIN TASK G ", idnummol)
+            # flush(stdout)
+            fer_before = framework_interactions(mc, i, positions)
+            # println("<<< MAIN TASK H ", idnummol)
+            # flush(stdout)
+            fer_after = framework_interactions(mc, i, newpos)
+            # println("<<< MAIN TASK I ", idnummol)
+            # flush(stdout)
+            singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
+            # println("<<< MAIN TASK J ", idnummol)
+            # flush(stdout)
+            before = MCEnergyReport(fer_before, singlevdw_before, singlereciprocal_before)
+            after = MCEnergyReport(fer_after, singlevdw_after, singlereciprocal_after)
 
-            old_idx = idx
-            accepted = compute_accept_move(before, after, temperature)
-            oldpos = newpos
-            if accepted
-                if mc.step.parallel
-                    # do not use newpos since it can be changed in the next iteration before the Task is run
-                    running_update = @spawn update_mc!($mc, $idx, $oldpos)
-                else
-                    update_mc!(mc, idx, oldpos)
-                end
-                diff = after - before
-                if istranslation
-                    accepted_translations += 1
-                elseif isrotation
-                    accepted_rotations += 1
-                end
-                if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
-                    wait(running_update)
-                    energy = baseline_energy(mc) # to avoid underflows
-                else
-                    energy += diff
-                end
-            end
+            accepted_translations += compute_accept_move(before, after, temperature)
         end
+
         # end of cycle
-        translation_ratio = accepted_translations / attempted_translations
+
+        @show accepted_translations
         report_now = simu.printevery > 0 && idx_cycle%simu.printevery == 0
         if !(simu.record isa Returns) || report_now
-            accepted && wait(running_update)
+            println("<<< MAIN TASK K")
+            flush(stdout)
             o = SimulationStep(mc.step, :output)
             if report_now
-                put!(output, o)
+                push!(reports, energy)
+            end
+            println("<<< MAIN TASK L")
+            flush(stdout)
+            if !(simu.record isa Returns)
+                ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
+                t1 = time()
+                println("<<< MAIN TASK ABOUT TO RECORD")
+                flush(stdout)
+                simu.record(deepcopy(ocomplete), energy, idx_cycle, deepcopy(mc), simu)
+                println("<<< MAIN TASK RECORD SENT")
+                flush(stdout)
+                t2 = time()
+                @show t2 - t1
+                println("<<< MAIN TASK sleeping now for ", waittime, "s...")
+                flush(stdout)
+                sleep(waittime)
+                println("<<< MAIN TASK resuming!")
+                flush(stdout)
+            end
+        end
+
+        translation_ratio = accepted_translations / attempted_translations
+        if !isnan(translation_ratio)
+            translation_dmax *= 1 + (translation_ratio - 0.5)*(1.0 + 3*translation_ratio)*100/(99+idx_cycle)
+        end
+    end
+
+    println("MAIN TASK FINISHED")
+    flush(stdout)
+    fetch(simu.record)
+    push!(reports, energy)
+    reports
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
+    # report
+    energy = baseline_energy(mc)
+    reports = [energy]
+
+    mkpath(simu.outdir)
+
+    startstep = SimulationStep(mc.step, :output)
+    simu.record(startstep, energy, 0, mc, simu)
+
+    # value initialisations
+    nummol = max(20, length(mc.indices))
+    accepted = false
+    translation_dmax = 1.3u"Å"
+
+    # main loop
+    for idx_cycle in 1:simu.ncycles
+        temperature = simu.temperatures[idx_cycle]
+        accepted_translations = 0
+        attempted_translations = 0
+
+        for idnummol in 1:nummol
+            # choose the species on which to attempt a move
+            idx = choose_random_species(mc)
+
+            # currentposition is the position of that species
+            currentposition = @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
+
+            attempted_translations += 1
+            # newpos is the position after the trial move
+            newpos = random_translation(currentposition, translation_dmax)
+            # if the previous move was accepted, wait for mc to be completely up to date
+            # before computing
+
+            i, j = idx
+            ij = mc.offsets[i]+j
+
+            molpos = mc.step.posidx[i][j]
+            positions = @view mc.step.positions[molpos]
+            singlevdw_before = single_contribution_vdw(mc.step, (i,j), positions)
+            singlereciprocal_after = single_contribution_ewald(mc.ewald, ij, newpos)
+            singlereciprocal_before = single_contribution_ewald(mc.ewald, ij, nothing)
+            fer_before = framework_interactions(mc, i, positions)
+            fer_after = framework_interactions(mc, i, newpos)
+            singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
+            before = MCEnergyReport(fer_before, singlevdw_before, singlereciprocal_before)
+            after = MCEnergyReport(fer_after, singlevdw_after, singlereciprocal_after)
+
+            accepted = compute_accept_move(before, after, temperature)
+            if accepted
+                # update_mc!(mc, idx, newpos)
+                diff = after - before
+                accepted_translations += 1
+                energy += diff
+            end
+        end
+
+        # end of cycle
+
+        report_now = simu.printevery > 0 && idx_cycle%simu.printevery == 0
+        if !(simu.record isa Returns) || report_now
+            o = SimulationStep(mc.step, :output)
+            if report_now
                 push!(reports, energy)
             end
             if !(simu.record isa Returns)
                 ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
-                if mc.step.parallel
-                    # ret_record cannot be inferred, but that's fine
-                    ret_record = fetch(record_task)
-                    ret_record === :stop && break
-                    record_task = @spawn $simu.record($ocomplete, $energy, $idx_cycle, $mc, $simu)
-                else
-                    simu.record(ocomplete, energy, idx_cycle, mc, simu)
-                end
+                simu.record(ocomplete, energy, idx_cycle, mc, simu)
+                idx_cycle%100 == 0 && println("sub-task reached checkpoint ", idx_cycle÷100, '/', simu.ncycles÷100)
+                flush(stdout)
+                yield()
             end
         end
 
-        rotation_ratio = accepted_rotations / attempted_rotations
+        translation_ratio = accepted_translations / attempted_translations
         if !isnan(translation_ratio)
             translation_dmax *= 1 + (translation_ratio - 0.5)*(1.0 + 3*translation_ratio)*100/(99+idx_cycle)
         end
-        if !isnan(rotation_ratio)
-            rotation_θmax = (idx_cycle-1)/idx_cycle*rotation_θmax + rotation_ratio/idx_cycle*120u"°"
-        end
     end
-    wait(record_task)
-    fetch(simu.record)
-    accepted && wait(running_update)
+
+    println("sub-task FINISHED")
+    flush(stdout)
+    # fetch(simu.record)
     push!(reports, energy)
-    put!(output, SimulationStep(mc.step, :zero))
-    wait(output_task[])
     reports
 end

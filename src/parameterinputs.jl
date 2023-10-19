@@ -94,7 +94,7 @@ function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k:
         record.minpos = o
     end
     if k == simu.ncycles && !isempty(simu.outdir)
-        output_pdb(joinpath(simu.outdir, "min_energy.pdb"), mc, record.minpos)
+        # output_pdb(joinpath(simu.outdir, "min_energy.pdb"), mc, record.minpos)
         output_restart(joinpath(simu.outdir, "min_energy.restart"), record.minpos)
     end
     nothing
@@ -113,10 +113,8 @@ function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1) where {N}
     positions = Vector{SimulationStep{N,T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
     lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
-        let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
-            run_montecarlo!(newmc, newsimu)
-            positions[ik] = newsimu.record.minpos
-            energies[ik] = newsimu.record.mine
+        let newmc=newmc, newsimu=newsimu
+            run_montecarlo_sub!(newmc, newsimu)
         end
     end
     ShootingStarMinimizer{N,T}(every, length, positions, energies, lb)
@@ -133,7 +131,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     r == 0 || return
     newmc = MonteCarloSetup(mc, o; parallel=false)
     recordminimum = RMinimumEnergy(e, o)
-    newsimu = SimulationSetup(300u"K", star.length; printevery=0, record=recordminimum)
+    newsimu = SimulationSetup(300u"K", star.length; printevery=1, record=recordminimum, outdir="/tmp/shootingstar/$k/")
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end
@@ -168,21 +166,41 @@ function (rain::RainfallMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k
     k == 0 && return
     ik, r = divrem(k, rain.every)
     r == 0 || return
+    println("ABOUT TO COPY MC")
+    flush(stdout)
     newmc = MonteCarloSetup(mc, o; parallel=false)
     recordminimum = RMinimumEnergy(e, o)
-    newsimu = SimulationSetup(300u"K", rain.length; printevery=0, record=recordminimum)
+    newsimu = SimulationSetup(300u"K", rain.length; printevery=1, record=recordminimum, outdir="/tmp/rainfall_other/$k/")
+    # newsimu = SimulationSetup(300u"K", rain.length; printevery=0, record=recordminimum)
+    println("ABOUT TO DEEPCOPY")
+    flush(stdout)
     task = let newmc=newmc, newsimu=newsimu, rain=rain, ik=ik
-        Task(() -> begin
-            run_montecarlo!(newmc, newsimu)
+        println("ABOUT TO CREATE FUNC")
+        func = () -> begin
+            println("RUNNING TASK ", ik)
+            flush(stdout)
+            run_montecarlo_sub!(newmc, newsimu)
+            println("DONE WITH MONTECARLO FOR ", ik)
+            flush(stdout)
             rain.positions[ik] = newsimu.record.minpos
+            println("UPDATED POSITIONS FOR ", ik)
+            flush(stdout)
             rain.energies[ik] = newsimu.record.mine
+            println("UPDATED ENERGIES FOR ", ik)
+            flush(stdout)
             nothing
-        end)
+        end
+        println("ABOUT TO CREATE TASK")
+        Task(func)
     end
+    println("ABOUT TO SET TASK PROPERTIES")
+    flush(stdout)
     task.sticky = false
     rain.tasks[ik] = task
     errormonitor(task)
 
+    println("SCHEDULING TASK ", ik)
+    flush(stdout)
     schedule(task)
     nothing
 end
