@@ -166,6 +166,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     accepted = false
     translation_dmax = 1.3u"Å"
     rotation_θmax = 30.0u"°"
+    reinsertion_dmax = maximum(norm, eachcol(mc.step.mat))
 
     # main loop
     for idx_cycle in 1:simu.ncycles
@@ -187,19 +188,26 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             istranslation = false
             isrotation = false
             # newpos is the position after the trial move
+            r = rand()
             newpos = if length(ffidxi) == 1
-                istranslation = true
-                attempted_translations += 1
-                random_translation(currentposition, translation_dmax)
-            else
-                if rand() < 0.5
+                if r < 0.98
                     istranslation = true
                     attempted_translations += 1
                     random_translation(currentposition, translation_dmax)
                 else
+                    random_translation(currentposition, reinsertion_dmax)
+                end
+            else
+                if r < 0.49
+                    istranslation = true
+                    attempted_translations += 1
+                    random_translation(currentposition, translation_dmax)
+                elseif r < 0.98
                     isrotation = true
                     attempted_rotations += 1
                     random_rotation(currentposition, rotation_θmax, mc.bead[idx[1]])
+                else
+                    random_rotation(random_translation(currentposition, reinsertion_dmax), 90u"°", mc.bead[idx[1]])
                 end
             end
 
@@ -294,6 +302,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                     simu.record(ocomplete, energy, idx_cycle, mc, simu)
                 end
             end
+            yield()
         end
 
         rotation_ratio = accepted_rotations / attempted_rotations
