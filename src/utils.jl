@@ -589,6 +589,7 @@ function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
         atomic_sub!($busy, 1)
         notify($event)
     end) for i in 1:n]
+    foreach(errormonitor, tasks)
     LoadBalancer{T}(channel, tasks, busy, event)
 end
 Base.put!(lb::LoadBalancer, x) = put!(lb.channel, x)

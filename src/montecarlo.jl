@@ -19,6 +19,13 @@ struct MonteCarloSetup{N,T}
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
 end
 
+function Base.show(io::IO, mc::MonteCarloSetup)
+    n = length(mc.indices)
+    m = length(mc.offsets)
+    print(io, "Monte-Carlo setup with ", n , " atoms in ", m, " molecule kind")
+    m > 1 && print(io, 's')
+end
+
 
 struct EwaldSystem # pseudo-AbstractSystem with only positions and charges
     position::Vector{SVector{3,TÅ}}
@@ -509,6 +516,7 @@ function randomize_position!(positions, indices, bead, block, ffidxi, atomblocks
     error(lazy"Could not find a suitable position for molecule $((i,j))!")
 end
 
+#=
 """
     randomize_position!(mc::MonteCarloSetup, idx, update_ewald=true)
 
@@ -522,8 +530,8 @@ Put the species at the given index to a random position and orientation.
     `update_ewald=true` requires a prior call to [`baseline_energy(mc)`](@ref).
 """
 function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
-    d = norm(sum(mc.step.cell.mat; dims=2))/4
-    newpos = randomize_position!(mc.step.positions, mc.step.posidx[i][j], mc.bead[i], mc.blocks[i], d)
+    d = norm(sum(mc.step.mat; dims=2))/4
+    newpos = randomize_position!(mc.step.positions, mc.step.posidx[i][j], mc.bead[i], mc.speciesblocks[i], mc.step.ffidx[i], mc.atomblocks, d)
     if update_ewald
         single_contribution_ewald(mc.ewald, mc.offsets[i] + j, newpos)
         update_mc!(mc, (i,j), newpos)
@@ -532,3 +540,4 @@ function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
     end
     newpos
 end
+=#

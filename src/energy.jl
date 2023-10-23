@@ -91,6 +91,14 @@ end
     end
 end
 
+function Base.show(io::IO, step::SimulationStep)
+    n = length(step.atoms)
+    m = length(step.freespecies)
+    print(io, "Simulation step with ", n , " atoms in ", m, " molecule kind")
+    m > 1 && print(io, 's')
+end
+
+
 function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                         inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
                         isrigid::BitVector, ffidx::Vector{Vector{Int}}, cell::CellMatrix;
