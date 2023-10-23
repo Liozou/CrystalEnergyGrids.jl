@@ -479,26 +479,23 @@ struct Counter3D
 end
 Counter3D() = Counter3D(Vector{Vector{Int}}[], ReentrantLock(), Ref(0))
 @inbounds function Base.getindex(x::Counter3D, i, j, k)
+    lock(x.lck)
     n = length(x.A)
-    n < i && @lock x.lck begin
-        n < i && append!(x.A, Vector{Int}[] for _ in 1:(i-n))
-    end
+    n < i && append!(x.A, Vector{Int}[] for _ in 1:(i-n))
     I = x.A[i]
     m = length(I)
-    m < j && @lock x.lck begin
-        m < j && append!(I, Int[] for _ in 1:(j-m))
-    end
+    m < j && append!(I, Int[] for _ in 1:(j-m))
     J = I[j]
     p = length(J)
-    p < k && @lock x.lck begin
-        if p < k
-            c = x.counter[]
-            newc = c + k - p
-            append!(J, c:(newc-1))
-            x.counter[] = newc
-        end
+    if p < k
+        c = x.counter[]
+        newc = c + k - p
+        append!(J, c:(newc-1))
+        x.counter[] = newc
     end
-    J[k]
+    ret = J[k]
+    unlock(x.lck)
+    ret
 end
 
 # Multithreading
