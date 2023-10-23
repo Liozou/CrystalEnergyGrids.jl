@@ -94,4 +94,4 @@ const COEFF = Float64[ # Use Float64 here to force the promotion upon multiplica
 nint(x) = floor(Int, ifelse(x>=0.0, x+0.5, x-0.5))
 
 # non-constant
-PRINT_CHARGE_WARNING::Bool = true
+PRINT_CHARGE_WARNING::Base.Threads.Atomic{Bool} = Base.Threads.Atomic{Bool}(true)

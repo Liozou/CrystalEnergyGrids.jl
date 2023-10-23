@@ -352,7 +352,7 @@ function EwaldContext(eframework::EwaldFramework, systems)
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α
     energy_adsorbate_self = sum(sum(abs2, charges; init=0.0)*chargefactor for charges in allcharges; init=0.0)
     net_charges = sum(sum(charges; init=0.0) for charges in allcharges; init=0.0)
-    if abs(net_charges + eframework.net_charges_framework) > 1e-5 && PRINT_CHARGE_WARNING
+    if abs(net_charges + eframework.net_charges_framework) > 1e-5 && PRINT_CHARGE_WARNING[]
         @warn "Framework charge of $(eframework.net_charges_framework) and additional charge of $net_charges do not make a neutral system"
     end
     buffer, ortho, safemin = prepare_periodic_distance_computations(eframework.mat)

@@ -331,6 +331,12 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
         rots, _ = get_rotation_matrices(setup.molecule, num_rotate)
         [[SVector{3}(r*p) for p in __pos] for r in rots]
     end
+    pre_printwarn = PRINT_CHARGE_WARNING[]
+    # do one empty computation to trigger the warnings if need be
+    if pre_printwarn
+        energy_point(setup, [p*u"Å" for p in first(rotpos)])
+        PRINT_CHARGE_WARNING[] = false
+    end
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
     allvals .= NaN
     Base.Threads.@threads for iABC in CartesianIndices((numA, numB, numC))
@@ -346,5 +352,6 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
             allvals[k,iA,iB,iC] = newval
         end
     end
+    pre_printwarn && (PRINT_CHARGE_WARNING[] = pre_printwarn)
     allvals
 end

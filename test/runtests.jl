@@ -2,8 +2,8 @@ using Test, Random
 using CrystalEnergyGrids
 import CrystalEnergyGrids as CEG
 
-prev_warning::Bool = CEG.PRINT_CHARGE_WARNING
-CEG.PRINT_CHARGE_WARNING = false
+prev_warning::Bool = CEG.PRINT_CHARGE_WARNING[]
+CEG.PRINT_CHARGE_WARNING[] = false
 
 using StaticArrays
 using Unitful, UnitfulAtomic
@@ -263,4 +263,4 @@ end
     rm(path*".COPY")
 end
 
-CEG.PRINT_CHARGE_WARNING = prev_warning
+CEG.PRINT_CHARGE_WARNING[] = prev_warning
