@@ -104,38 +104,52 @@ function parse_blockfile(file, csetup)
     num == 0 && return BlockFile(csetup)
     a, b, c = csetup.dims .+ 1
     # δmax = Int.(cld.(csetup.dims, 2))
-    block = falses(a, b, c)
+    block = fill(false, a, b, c)
     mat = NoUnits.(csetup.cell.mat./u"Å")
     invmat = NoUnits.(csetup.cell.invmat.*u"Å")
-    buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
+    chunklimits = unique!(round.(Int, LinRange(1, c+1, nthreads()+1)))
+    proto_buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
     safemin2 = safemin^2
-    buffer2 = MVector{3,Float64}(undef)
-    for (idx, l) in enumerate(lines)
-        idx > num && ((@assert all(isspace, l)); continue)
-        sl = split(l)
-        radius = parse(Float64, pop!(sl))
-        _center = csetup.cell.mat*SVector{3,Float64}(parse.(Float64, sl))
-        ofscenter = offsetpoint(_center, csetup)
-        ic, jc, kc = round.(Int, ofscenter)
-        center = inverse_offsetpoint(ofscenter, csetup)
+    protoblocks = [begin
+        sl = split(l);
+        radius = parse(Float64, pop!(sl));
+        _center = csetup.cell.mat*SVector{3,Float64}(parse.(Float64, sl));
+        ofscenter = offsetpoint(_center, csetup);
+        ic, jc, kc = round.(Int, ofscenter);
+        center = inverse_offsetpoint(ofscenter, csetup);
         # δi, δj, δk = min.(1 .+ ceil.(Int, radius*u"Å" ./ csetup.Δ), δmax)
-        radius2 = radius^2
-        for i in 1:a, j in 1:b, k in 1:c
-        # for _i in ic-δi:ic+δi, _j in jc-δj:jc+δj, _k in kc-δk:kc+δk
-        #     i = mod1(_i, a); j = mod1(_j, b); k = mod1(_k, c)
-        # Using this approach is incorrect because a line in the block makes a line in the
-        # crystal aligned with the cartesian referential, not the fractional one.
-        # In other words, if the blocking sphere straddles a periodic boundary, the two
-        # neighbour points in the crystal may not be neighbours in the block.
-            block[i,j,k] && continue
-            buffer .= NoUnits.((center .- inverse_offsetpoint(SVector{3,Int}(i,j,k), csetup)) ./ u"Å")
-            if periodic_distance2_fromcartesian!(buffer, mat, invmat, ortho, safemin2, buffer2) < radius2
-                block[i,j,k] = true
+        (center, radius^2, (ic, jc, kc))
+    end for (idx, l) in enumerate(lines) if idx ≤ num || ((@assert all(isspace, l)); false)]
+    chunks = [chunklimits[i]:(chunklimits[i+1]-1) for i in 1:length(chunklimits)-1]
+    numtasks = length(chunks)
+    tasks = [begin
+        chunk = chunks[taskid];
+        @spawn begin
+            buffer = similar(proto_buffer)
+            buffer2 = MVector{3,Float64}(undef)
+            for k in $chunk, j in 1:$b, i in 1:$a
+            # for _i in ic-δi:ic+δi, _j in jc-δj:jc+δj, _k in kc-δk:kc+δk
+            #     i = mod1(_i, a); j = mod1(_j, b); k = mod1(_k, c)
+            # Using this approach is incorrect because a line in the block makes a line in the
+            # crystal aligned with the cartesian referential, not the fractional one.
+            # In other words, if the blocking sphere straddles a periodic boundary, the two
+            # neighbour points in the crystal may not be neighbours in the block.
+                for (center, radius2, _) in protoblocks
+                    buffer .= NoUnits.((center .- inverse_offsetpoint(SVector{3,Int}(i,j,k), $csetup)) ./ u"Å")
+                    if periodic_distance2_fromcartesian!(buffer, $mat, $invmat, $ortho, $safemin2, buffer2) < radius2
+                        $block[i,j,k] = true
+                        break
+                    end
+                end
             end
+            nothing
         end
+    end for taskid in 1:numtasks]
+    foreach(wait, tasks)
+    for (_, _, (ic, jc, kc)) in protoblocks
         if !block[ic,jc,kc]
             @warn "Blocking sphere of $radius Å around position $center is too small to be used with grid step $(csetup.spacing)"
         end
     end
-    return BlockFile(csetup, block)
+    return BlockFile(csetup, BitArray(block))
 end
