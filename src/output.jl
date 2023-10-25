@@ -171,3 +171,37 @@ function pdb_output_handler(path, mat::SMatrix{3,3,TÅ,9})
         end
     end, taskref
 end
+
+function output_cube(path, grid::Array{Float64,4}, framework, T=300)
+    output_cube(path, meanBoltzmann(grid, T), framework)
+end
+
+function output_cube(path, grid::Array{Float64,3}, framework)
+    cif = ispath(framework) ? framework : joinpath(RASPADIR[], "structures", "cif", framework*".cif")
+    system = load_system(AtomsIO.ChemfilesParser(), cif)
+    box = AtomsBase.bounding_box(system)./u"bohr"
+    atoms = [(a, NoUnits.(p./u"bohr")) for (a, p) in zip(AtomsBase.atomic_number(system), AtomsBase.position(system))]
+    open(path, "w") do io
+        println(io, "CPMD CUBE FILE")
+        println(io, "exported by CrystalEnergyGrids.jl")
+        @printf io "%5d %12.6g %12.6g %12.6g\n" length(atoms) 0.0 0.0 0.0
+        for (i, l) in enumerate(box)
+            a = size(grid,i)
+            @printf io "%5d %12.6g %12.6g %12.6g\n" size(grid, i) NoUnits(l[1])/a NoUnits(l[2])/a NoUnits(l[3])/a
+        end
+        for (a, pos) in atoms
+            @printf io "%5d 0.0 %12.6g %12.6g %12.6g\n" a pos[1] pos[2] pos[3]
+        end
+        counter = 0
+        for i1 in axes(grid, 1), i2 in axes(grid, 2), i3 in axes(grid, 3)
+            counter += 1
+            @printf io "%12.6g" exp(-grid[i1,i2,i3]/300)
+            if counter%6==0
+                println(io)
+            else
+                print(io, ' ')
+            end
+        end
+        println(io)
+    end
+end
