@@ -123,7 +123,7 @@ function SimulationStep(ff::ForceField, charges::Vector{Te_au},
     end
     freespecies = [Int[] for _ in inputpos]
     psystem = PeriodicSystem(; xpositions=positions,
-                               ypositions=SVector{3,typeof(1.0u"Å")}[],
+                               ypositions=SVector{3,TÅ}[],
                                unitcell=cell.mat,
                                cutoff=ff.cutoff,
                                parallel,
@@ -225,7 +225,7 @@ The `parallel` field is passed on to the created copy (except with `mode === :ze
 """
 function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.parallel) where {N,T}
     if mode === :all
-        psystem = PeriodicSystem(; xpositions=step.positions,
+        psystem = PeriodicSystem(; xpositions=copy(step.positions),
                                    ypositions=SVector{3,TÅ}[],
                                    unitcell=step.mat,
                                    parallel,
@@ -234,7 +234,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                        [[copy(js) for js in is] for is in step.posidx],
                        [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
     elseif mode === :output
-        psystem = PeriodicSystem(; xpositions=step.positions,
+        psystem = PeriodicSystem(; xpositions=copy(step.positions),
                                    ypositions=SVector{3,TÅ}[],
                                    unitcell=step.mat,
                                    parallel,
@@ -280,7 +280,7 @@ the `j`-th system of kind `i` in `step`.
 See also [`update_position!`](@ref) to modify `step` in-place.
 """
 function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
-    psystem = PeriodicSystem(; xpositions=step.positions,
+    psystem = PeriodicSystem(; xpositions=copy(step.positions),
                                ypositions=SVector{3,TÅ}[],
                                unitcell=step.mat,
                                parallel=step.parallel,

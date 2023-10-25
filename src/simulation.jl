@@ -139,7 +139,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # record and outputs
     mkpath(simu.outdir)
     output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
-    startstep = SimulationStep(mc.step, :output)
+    startstep = SimulationStep(mc.step, needcomplete(simu.record) ? :all : :output)
     if mc.step.parallel
         record_task = @spawn $simu.record(startstep, $energy, 0, $mc, $simu)
     else
@@ -239,7 +239,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                     singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
                     fer = @spawn framework_interactions($mc, $i, $newpos)
                     singlevdw = single_contribution_vdw(mc.step, idx, newpos)
-                    after = MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
+                    after = MCEnergyReport(fetch(fer)::FrameworkEnergyReport, singlevdw, fetch(singlereciprocal)::TK)
                 end
             else
                 molpos = mc.step.posidx[i][j]
@@ -314,10 +314,11 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         end
     end
     wait(record_task)
-    fetch(simu.record)
     accepted && wait(running_update)
     push!(reports, energy)
     put!(output, SimulationStep(mc.step, :zero))
+    isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
     wait(output_task[])
+    fetch(simu.record)
     reports
 end
