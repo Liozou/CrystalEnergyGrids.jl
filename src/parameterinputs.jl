@@ -106,9 +106,10 @@ struct ShootingStarMinimizer{N,T} <: RecordFunction
     length::Int
     positions::Vector{SimulationStep{N,T}}
     energies::Vector{BaselineEnergyReport}
+    outdir::String
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
 end
-function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1) where {N}
+function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") where {N}
     T = typeof_psystem(Val(N))
     positions = Vector{SimulationStep{N,T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
@@ -119,7 +120,7 @@ function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1) where {N}
             energies[ik] = newsimu.record.mine
         end
     end
-    ShootingStarMinimizer{N,T}(every, length, positions, energies, lb)
+    ShootingStarMinimizer(every, length, positions, energies, outdir, lb)
 end
 function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
     n = simu.ncycles ÷ star.every
@@ -128,12 +129,14 @@ function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: Shoot
 end
 
 function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
-    k == 0 && return
+    k ≤ 0 && return
     ik, r = divrem(k, star.every)
     r == 0 || return
     newmc = MonteCarloSetup(mc, o; parallel=false)
     recordminimum = RMinimumEnergy(e, o)
-    newsimu = SimulationSetup(300u"K", star.length; printevery=0, record=recordminimum)
+    printevery = Int(!isempty(star.outdir))
+    outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
+    newsimu = SimulationSetup(300u"K", star.length; printevery, outdir, ninit=80, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end
@@ -165,7 +168,7 @@ function initialize_record!(rain::T, simu::SimulationSetup{T}) where {T<:Rainfal
 end
 
 function (rain::RainfallMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
-    k == 0 && return
+    k ≤ 0 && return
     ik, r = divrem(k, rain.every)
     r == 0 || return
     newmc = MonteCarloSetup(mc, o; parallel=false)
@@ -199,4 +202,20 @@ function Base.fetch(x::RainfallMinimizer)
     if retry
         foreach(wait, x.tasks)
     end
+end
+
+
+function reconstitute_trace(path::AbstractString, skip, keep)
+    numdirs = length(readdir(path)) - 1
+    energies = [deserialize(joinpath(path, string(i), "energies.serial")) for i in 1:numdirs]
+    trace = Vector{Vector{Float64}}(undef, numdirs)
+    for (i, energy) in enumerate(energies)
+        n = length(energy)
+        start = skip isa Integer ? skip : floor(Int, skip*n)
+        start += (start == 0)
+        stop = keep isa Integer ? start + keep - 1 : start + round(Int, keep*(n-start+1))
+        stop -= (stop == length(energy) + 1)
+        trace[i] = Float64.(@view energy[start:stop])
+    end
+    trace
 end

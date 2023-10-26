@@ -470,6 +470,25 @@ Base.@assume_effects :foldable function typeof_psystem(::Val{N}) where N
 end
 
 
+function block_average(l; num=nothing, size=nothing)
+    n = length(l)
+    sizeint = size isa AbstractFloat ? round(Int, n*size) : size
+    limits = if num isa Integer
+        round.(Int, LinRange(1, n+1, num+1))
+    elseif sizeint isa Integer
+        _limits = collect(1:sizeint:n+1)
+        if last(_limits) != n+1
+            push!(_limits, n+1)
+        end
+        _limits
+    else
+        error("Please give either num or size as keyword argument")
+    end
+    [mean(@view(l[limits[i]:(limits[i+1]-1)])) for i in 1:length(limits)-1]
+end
+
+# Multithreading
+
 using Base.Threads
 
 struct Counter3D
@@ -497,10 +516,6 @@ Counter3D() = Counter3D(Vector{Vector{Int}}[], ReentrantLock(), Ref(0))
     unlock(x.lck)
     ret
 end
-
-# Multithreading
-
-using Base.Threads
 
 function stripspawn(@nospecialize(expr), dict::IdDict{Symbol,Symbol}, inspawncall=false)
     if expr isa Expr
@@ -594,7 +609,15 @@ function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
 end
 Base.put!(lb::LoadBalancer, x) = put!(lb.channel, x)
 function Base.wait(lb::LoadBalancer)
-    while !isempty(lb.channel) || lb.busy[] != 0
+    while !isempty(lb.channel) || lb.busy[] > 0
         wait(lb.event)
     end
+end
+function Base.close(lb::LoadBalancer)
+    if lb.busy[] != 0
+        @error "Forcibly closing the LoadBalancer may yield errors from the still-working tasks"
+    end
+    close(lb.channel)
+    lb.busy[] = -max(0, lb.busy[]) # make lb.busy zero or negative to signal the close
+    notify(lb.event)
 end
