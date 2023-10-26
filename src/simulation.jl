@@ -365,8 +365,13 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     accepted && wait(running_update)
     push!(reports, energy)
     put!(output, SimulationStep(mc.step, :zero))
+    newbaseline = @spawn baseline_energy(mc)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
     wait(output_task[])
+    lastenergy = fetch(newbaseline)
+    if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
+        @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
+    end
     fetch(simu.record)
     reports
 end
