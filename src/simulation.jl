@@ -211,9 +211,8 @@ See [`MonteCarloSetup`](@ref) for the definition of the system and
 [`SimulationSetup`](@ref) for the parameters of the simulation.
 """
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
-    # report
+    # energy initialization
     energy = baseline_energy(mc)
-    reports = [energy]
 
     # record and outputs
     mkpath(simu.outdir)
@@ -222,7 +221,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     if mc.step.parallel
         record_task = @spawn $simu.record(startstep, $energy, -simu.ninit, $mc, $simu)
     else
-        simu.record(startstep, energy, -simu.ninit, mc, simu) === :stop && return reports
+        simu.record(startstep, energy, -simu.ninit, mc, simu) === :stop && return [energy]
         record_task = @spawn nothing # for type stability
     end
 
@@ -230,7 +229,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         put!(output, SimulationStep(mc.step, :zero))
         wait(record_task)
         wait(output_task[])
-        return reports
+        return [energy]
     end
 
     # idle initialisations
@@ -240,6 +239,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     local after::MCEnergyReport
 
     # value initialisations
+    reports = typeof(energy)[]
     nummol = max(20, length(mc.indices))
     old_idx = (0,0)
     accepted = false
