@@ -310,7 +310,8 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
-                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead, copy(mc.rng))
+                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead,
+                    copy(mc.mcmoves), copy(mc.rng))
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
