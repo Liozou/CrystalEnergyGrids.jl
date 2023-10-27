@@ -1,13 +1,13 @@
 export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
-struct MonteCarloSetup{N,T}
+struct MonteCarloSetup{N,T,Trng}
     step::SimulationStep{N,T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     ewald::IncrementalEwaldContext
     tailcorrection::Base.RefValue{TK}
     coulomb::EnergyGrid
-    grids::Vector{EnergyGrid} # grids[i] is the VdW grid for atom i in ff.
+    grids::Vector{EnergyGrid} # grids[ix] is the VdW grid for atom ix in ff.
     offsets::Vector{Int}
     # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
     indices::Set{Tuple{Int,Int}}
@@ -17,6 +17,8 @@ struct MonteCarloSetup{N,T}
     atomblocks::Vector{BlockFile}
     # atomblock[ix][pos] is set if pos is blocked for all atoms of index ix in ff.
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
+    mcmoves::Vector{MCMoves} # mcmoves[i] is the set of MC moves for kind i
+    rng::Trng
 end
 
 function Base.show(io::IO, mc::MonteCarloSetup)
@@ -45,27 +47,30 @@ IdSystem(s::AbstractSystem{3}) = IdSystem(atomic_symbol(s), s[:,:atomic_charge])
 Base.length(s::IdSystem) = length(s.atomic_charge)
 
 function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
-                          systems, ff::ForceField, eframework::EwaldFramework,
+                          systems::Vector, ff::ForceField, eframework::EwaldFramework,
                           coulomb::EnergyGrid, grids::Vector{EnergyGrid},
                           blocksetup::Vector{String},
                           num_framework_atoms::Vector{Int},
                           restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,TÅ}}}}};
-                          parallel::Bool=true)
+                          parallel::Bool=true, rng=default_rng(), mcmoves::Vector)
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
+    @assert length(systems) == length(blocksetup) == length(mcmoves)
 
-    kindsdict = Dict{Tuple{Vector{Symbol},String},Int}()
+    kindsdict = Dict{Tuple{Vector{Symbol},String,MCMoves},Int}()
     systemkinds = IdSystem[]
     U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
     poss = restartpositions isa Nothing ? Vector{U}[] : restartpositions
     indices = Tuple{Int,Int}[]
     rev_indices = Vector{Int}[]
     speciesblocks = BlockFile[]
+    newmcmoves = MCMoves[]
     for (i, (s, block)) in enumerate(zip(systems, blocksetup))
         system, n = s isa Tuple ? s : (s, 1)
         m = length(kindsdict)+1
-        kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block), m)
+        mcmove = isnothing(mcmoves[i]) ? MCMoves(length(systems) == 1) : mcmoves[i]
+        kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block, mcmove), m)
         if kind === m
             push!(systemkinds, IdSystem(system)::IdSystem)
             restartpositions isa Nothing && push!(poss, U[])
@@ -75,6 +80,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
             else
                 push!(speciesblocks, parse_blockfile(joinpath(getdir_RASPA(), "structures", "block", block)*".block", csetup))
             end
+            push!(newmcmoves, mcmove)
         end
         push!(indices, (kind, length(poss[kind])+1))
         append!(rev_indices[kind], i for _ in 1:n)
@@ -161,7 +167,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
             s = systems[rev_idx[j]]
             n = restartpositions isa Nothing && s isa Tuple ? s[2]::Int : 1
             if n > 1
-                randomize_position!(positioni[j], 1:length(ffidxi), bead, block, ffidxi, atomblocks, d)
+                randomize_position!(positioni[j], rng, 1:length(ffidxi), bead, block, ffidxi, atomblocks, d)
             end
             push!(ewaldsystems, EwaldSystem(positioni[j], charge))
         end
@@ -171,13 +177,14 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     ewald, Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
-                    speciesblocks, atomblocks, beads), indices
+                    speciesblocks, atomblocks, beads, newmcmoves, rng), indices
 end
 
 """
     setup_montecarlo(framework, forcefield_framework::String, systems;
                      blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
-                     supercell=nothing, new=false, restart=nothing)
+                     supercell=nothing, new=false, restart=nothing, parallel=true,
+                     mcmoves=fill(nothing, length(systems)), rng=default_rng())
 
 Prepare a Monte Carlo simulation of the input list of `systems` in a `framework` with the
 given force field.
@@ -204,10 +211,19 @@ If `new` is set, force recomputing all the grids. Otherwise, existing grids will
 when available.
 
 If `restart` is the path of a raspa restart file, the positions will be taken from the file.
+
+`parallel` mirrors the corresponding argument to [`SimulationStep`](@ref).
+
+`mcmoves` is the list of [`MCMoves`](@ref) for each system. The default value of `nothing`
+leads to the default move probabilities: [98% translation, 2% random translation] for a
+monoatomic species, or [49% translation, 49% rotation, 2% random reinsertion] else.
+
+`rng` is the random number generator, defaulting to `Random.default_rng()`.
 """
 function setup_montecarlo(framework, forcefield_framework::String, systems;
                           blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
-                          supercell=nothing, new=false, restart=nothing, parallel=true)
+                          supercell=nothing, new=false, restart=nothing, parallel=true,
+                          mcmoves=fill(nothing, length(systems)), rng=default_rng())
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
     mat = stack3(bounding_box(syst_framework))
@@ -264,7 +280,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
 
     restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
 
-    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; parallel)
+    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; parallel, rng, mcmoves)
 end
 
 """
@@ -294,7 +310,7 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
-                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead)
+                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead, copy(mc.rng))
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
@@ -472,41 +488,22 @@ function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::
     return false
 end
 
-function random_translation(positions::AbstractVector{SVector{3,TÅ}}, dmax::TÅ)
-    r = SVector{3}(((2*rand()-1)*dmax) for _ in 1:3)
-    [poss + r for poss in positions]
-end
-function random_rotation(positions::AbstractVector{SVector{3,TÅ}}, θmax, bead, _r=nothing)
-    θ = θmax*(2*rand()-1)
-    s, c = sincos(θ)
-    r = _r isa Nothing ? rand(1:3) : _r
-    mat = if r == 1
-        SMatrix{3,3}(1, 0, 0, 0, c, s, 0, -s, c)
-    elseif r == 2
-        SMatrix{3,3}(c, 0, -s, 0, 1, 0, s, 0, c)
-    else
-        SMatrix{3,3}(c, s, 0, -s, c, 0, 0, 0, 1)
-    end
-    refpos = positions[bead]
-    [refpos + mat*(poss - refpos) for poss in positions]
-end
-
-choose_random_species(mc::MonteCarloSetup) = rand(mc.indices)
-function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T)
+choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.indices)
+function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T, rng)
     b = Float64(before)
     a = Float64(after)
     a < b && return true
     e = exp((b-a)*u"K"/T)
-    return rand() < e
+    return rand(rng) < e
 end
 
 
-function randomize_position!(positions, indices, bead, block, ffidxi, atomblocks, d)
+function randomize_position!(positions, rng, indices, bead, block, ffidxi, atomblocks, d)
     pos = @view positions[indices]
     for _ in 1:30
-        posr = random_rotation(random_rotation(random_rotation(pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
+        posr = random_rotation(rng, random_rotation(rng, random_rotation(rng, pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
         for _ in 1:1000
-            post = random_translation(posr, d)
+            post = random_translation(rng, posr, d)
             if !inblockpocket(block, atomblocks, ffidxi, post)
                 positions[indices] .= post
                 return post

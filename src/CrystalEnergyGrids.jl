@@ -3,6 +3,7 @@ module CrystalEnergyGrids
 using Statistics: mean
 using LinearAlgebra: LinearAlgebra, norm, det, cross, dot, mul!
 using Pkg: TOML
+using Random: rand, default_rng
 
 using StaticArrays
 using AtomsBase
@@ -25,6 +26,7 @@ include("energy_minimizer.jl")
 include("raspa.jl")
 include("ewald.jl")
 include("grids.jl")
+include("mcmoves.jl")
 include("montecarlo.jl")
 include("output.jl")
 include("simulation.jl")

@@ -1,4 +1,4 @@
-using Test, Random
+using Test
 using CrystalEnergyGrids
 import CrystalEnergyGrids as CEG
 
@@ -8,6 +8,7 @@ CEG.PRINT_CHARGE_WARNING[] = false
 using StaticArrays
 using Unitful, UnitfulAtomic
 using AtomsBase
+using StableRNGs: StableRNG
 
 using Serialization
 
@@ -235,22 +236,19 @@ end
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])
 
-    Random.seed!(1);
-    mc2, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [(na, 135),]);
-    reports = run_montecarlo!(mc2, SimulationSetup(300.0u"K", 1000, "", 1000))
-    @test length(reports) == 3
-    @test Float64(reports[end]) ≈ -133115043.982755839825 rtol=0.001
+    mc2, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [(na, 135),]; rng=StableRNG(2));
+    reports2 = run_montecarlo!(mc2, SimulationSetup(300.0u"K", 1000; outdir="", printevery=1000))
+    @test length(reports2) == 3
+    @test Float64(reports2[end]) ≈ -133113058.587565258145 rtol=0.001
 
     ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
-    Random.seed!(57)
-    mc3, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [(ar, 30)]);
-    reports = run_montecarlo!(mc3, CEG.SimulationSetup(300.0u"K", 1000, "", 0))
-    @test Float64(reports[end]) ≈ -43070.529261282158 rtol=0.001
+    mc3, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [(ar, 30)]; rng=StableRNG(3));
+    reports3 = run_montecarlo!(mc3, CEG.SimulationSetup(300.0u"K", 1000; outdir="", printevery=0))
+    @test Float64(reports3[end]) ≈ -48842.047447430079 rtol=0.001
 
-    Random.seed!(12)
-    mc4, _ = setup_montecarlo("FAU_1.4_03f7b3ba", "BoulfelfelSholl2021", [(na, 80)]);
-    reports = run_montecarlo!(mc4, SimulationSetup(300.0u"K", 1000, "", 0))
-    @test Float64(reports[end]) ≈ -56085371.993412926793 rtol=0.001
+    mc4, _ = setup_montecarlo("FAU_1.4_03f7b3ba", "BoulfelfelSholl2021", [(na, 80)]; rng=StableRNG(4));
+    reports4 = run_montecarlo!(mc4, SimulationSetup(300.0u"K", 1000, outdir="", printevery=0))
+    @test Float64(reports4[end]) ≈ -56137040.415392756462 rtol=0.001
 end
 
 @testset "Restart" begin
