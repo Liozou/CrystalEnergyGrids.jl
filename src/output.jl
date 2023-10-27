@@ -15,8 +15,8 @@ function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i, atomcou
             abc = invmat * opos
             pos = o.mat*(abc .- floor.(abc))/u"Å"
             symb = String(o.ff.symbols[ix])
-            serial = atomcounter[i, j, k]
-            @printf io "ATOM  %5d %4.4s MOL          %8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" serial symb pos[1] pos[2] pos[3] symb
+            molid, atomid = atomcounter[i, j, k]
+            @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" atomid symb molid pos[1] pos[2] pos[3] symb
         end
         @printf io "ENDMDL\n"
         nothing

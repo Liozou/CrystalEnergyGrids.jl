@@ -492,29 +492,35 @@ end
 using Base.Threads
 
 struct Counter3D
-    A::Vector{Vector{Vector{Int}}}
+    A::Vector{Vector{Tuple{Int,Vector{Int}}}}
     lck::ReentrantLock
-    counter::Base.RefValue{Int}
+    counter2::Base.RefValue{Int}
+    counter3::Base.RefValue{Int}
 end
-Counter3D() = Counter3D(Vector{Vector{Int}}[], ReentrantLock(), Ref(0))
+Counter3D() = Counter3D(Vector{Vector{Int}}[], ReentrantLock(), Ref(0), Ref(0))
 @inbounds function Base.getindex(x::Counter3D, i, j, k)
     lock(x.lck)
     n = length(x.A)
-    n < i && append!(x.A, Vector{Int}[] for _ in 1:(i-n))
+    n < i && append!(x.A, Tuple{Int,Vector{Int}}[] for _ in 1:(i-n))
     I = x.A[i]
     m = length(I)
-    m < j && append!(I, Int[] for _ in 1:(j-m))
-    J = I[j]
+    if m < j
+        c2 = x.counter2[]
+        newc2 = c2 + j - m
+        append!(I, (c, Int[]) for c in c2:(newc2-1))
+        x.counter2[] = newc2
+    end
+    ret2, J = I[j]
     p = length(J)
     if p < k
-        c = x.counter[]
-        newc = c + k - p
-        append!(J, c:(newc-1))
-        x.counter[] = newc
+        c3 = x.counter3[]
+        newc3 = c3 + k - p
+        append!(J, c3:(newc3-1))
+        x.counter3[] = newc3
     end
-    ret = J[k]
+    ret3 = J[k]
     unlock(x.lck)
-    ret
+    ret2, ret3
 end
 
 function stripspawn(@nospecialize(expr), dict::IdDict{Symbol,Symbol}, inspawncall=false)

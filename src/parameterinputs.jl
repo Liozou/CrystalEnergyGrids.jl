@@ -207,7 +207,12 @@ end
 
 function reconstitute_trace(path::AbstractString, skip, keep)
     numdirs = length(readdir(path)) - 1
-    energies = [deserialize(joinpath(path, string(i), "energies.serial")) for i in 1:numdirs]
+    energies = [deserialize(joinpath(path, string(i), "energies.serial")) for i in 1:numdirs if begin
+        x = ispath(joinpath(path, string(i), "energies.serial"))
+        x || @warn "Subfolder $i does not contain energies.serial"
+        x
+    end]
+    numdirs = length(energies)
     trace = Vector{Vector{Float64}}(undef, numdirs)
     for (i, energy) in enumerate(energies)
         n = length(energy)
