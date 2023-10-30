@@ -3,7 +3,7 @@ module CrystalEnergyGrids
 using Statistics: mean
 using LinearAlgebra: LinearAlgebra, norm, det, cross, dot, mul!
 using Pkg: TOML
-using Random: rand, default_rng
+using Random: rand, default_rng, TaskLocalRNG
 
 using StaticArrays
 using AtomsBase
@@ -31,6 +31,7 @@ include("montecarlo.jl")
 include("output.jl")
 include("simulation.jl")
 include("parameterinputs.jl")
+include("averageclusters.jl")
 
 
 end

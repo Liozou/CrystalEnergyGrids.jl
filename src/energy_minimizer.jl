@@ -66,8 +66,60 @@ function local_minima(grid::Array{Float64,3}, tolerance=1e-2)
     return kept
 end
 
-function attraction_basins(grid::Array{Float64,3}, locals=local_minima(grid))
-    basins = Vector{CartesianIndex{3}}[]
-    a1, a2, a3 = size(grid)
-    tovisit = falses(a1, a2, a3)
+"""
+    energy_levels(egrid::Array{Float64,4}, n)
+
+Given an angular energy grids, return the energies and relative volumes of the `n` lowest
+levels (between energy -∞ and 0 K)
+"""
+function energy_levels(egrid::Array{Float64,4}, n)
+    kept = filter(<(0.0), vec(egrid))
+    m = minimum(kept)
+    hist = zeros(Float64, n)
+    γ = n/m
+    for x in kept
+        idx = floor(Int, x*γ)
+        hist[end-idx+(idx==n)] += 1
+    end
+    λ = -m/(2n)
+    hist ./= (length(egrid))
+    [m+(2k-1)*λ for k in 1:n], map(x -> iszero(x) ? missing : x, hist)
 end
+
+function compute_basins(grid::Array{Float64,4}, mine, maxe, T=300)
+    basins = Vector{NTuple{3,Int}}[]
+    _, a1, a2, a3 = size(grid)
+    visited = falses(a1, a2, a3)
+    A = (a1, a2, a3)
+    for i3 in 1:a3, i2 in 1:a2, i1 in 1:a1
+        visited[i1,i2,i3] && continue
+        visited[i1,i2,i3] = true
+        ei = meanBoltzmann(view(grid, :, i1, i2, i3), T)
+        mine ≤ ei ≤ maxe || continue
+        basin = [(i1,i2,i3)]
+        Q = [(i1,i2,i3)]
+        for I in Q
+            for J in PeriodicNeighbors(A, I)
+                j1, j2, j3 = J
+                visited[j1,j2,j3] && continue
+                visited[j1,j2,j3] = true
+                ej = meanBoltzmann(view(grid, :, j1, j2, j3), T)
+                mine < ej < maxe || continue
+                push!(basin, J)
+                push!(Q, J)
+            end
+        end
+        push!(basins, basin)
+    end
+    basins
+end
+
+# function export_basins(path, grid::Array{Float64,4}, mine, maxe, framework, T=300)
+#     basins = compute_basins(grid, mine, maxe, T)
+#     newgrid = zeros(size(grid)[2:end]...)
+#     newgrid .= 0.0
+#     for l in basins, x in l
+#         newgrid[x...] = 1.0
+#     end
+#     output_cube(path, newgrid, framework)
+# end

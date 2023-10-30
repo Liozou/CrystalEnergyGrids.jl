@@ -208,6 +208,29 @@ function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
 end
 
 
+const GLOBAL_LOCK = ReentrantLock()
+# speak(args...) = begin lock(GLOBAL_LOCK); println(args...); flush(stdout); unlock(GLOBAL_LOCK) end
+speak(args...) = nothing
+
+# ALLPOS = Set()
+# ALLSIMU = Set()
+# function recursive_mightalias(x::T, y::T) where {T}
+#     T <: Array && return Base.mightalias(x, y)
+#     names = fieldnames(T)
+#     isempty(names) && return ismutabletype(T) && objectid(x) == objectid(y)
+#     for a in names
+#         a in (:ff, :isrigid, :charges, :eframework, :allcharges, :ffidx, :grids, :grid, :offsets, :speciesblocks, :atomblocks, :bead) && continue
+#         if !isdefined(x, a) || !isdefined(y, a)
+#             println("In type ", T, ", field ", a, " not assigned")
+#         elseif recursive_mightalias(getfield(x, a), getfield(y, a))
+#             @show T,a
+#             return true
+#         end
+#     end
+#     return false
+# end
+
+
 """
     run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
@@ -222,16 +245,35 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     energy = baseline_energy(mc)
     reports = typeof(energy)[]
 
+    thistask = current_task().storage
+    if !(thistask isa Int)
+        thistask = -1
+    end
+    thistask::Int
+
+    # global GLOBAL_LOCK
+    # global ALLPOS
+    # @lock GLOBAL_LOCK begin
+    #     println("Checking alias for ", pointer(mc.step.positions), "...")
+    #     mc in ALLPOS && error("DUPLICATE POSITIONS")
+    #     for othermc in ALLPOS
+    #         recursive_mightalias(mc, othermc)
+    #     end
+    #     push!(ALLPOS, mc)
+    #     println("Check done")
+    # end
+
     # record and outputs
     mkpath(simu.outdir)
     output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
-    startstep = SimulationStep(mc.step, needcomplete(simu.record) ? :all : :output)
-    if mc.step.parallel
-        record_task = @spawn $simu.record(startstep, $energy, -simu.ninit, $mc, $simu)
-    else
-        simu.record(startstep, energy, -simu.ninit, mc, simu) === :stop && return [energy]
-        record_task = @spawn nothing # for type stability
-    end
+    # startstep = SimulationStep(mc.step, needcomplete(simu.record) ? :all : :output)
+    # if mc.step.parallel
+    #     record_task = @spawn $simu.record(startstep, $energy, -simu.ninit, $mc, $simu)
+    # else
+    #     simu.record(startstep, energy, -simu.ninit, mc, simu) === :stop && return [energy]
+    #     record_task = @spawn nothing # for type stability
+    # end
+    record_task = @spawn nothing
 
     if simu.ninit == 0
         if simu.ncycles == 0 && # single-point computation
@@ -259,6 +301,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # main loop
     for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
         temperature = simu.temperatures[counter_cycle]
+
+        speak("Task ", thistask, " cycle ", idx_cycle)
 
         for idnummol in 1:nummol
             # choose the species on which to attempt a move
@@ -290,6 +334,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             i, j = idx
             ij = mc.offsets[i]+j
 
+            speak("Task ", thistask, " core running...")
             if old_idx == idx
                 if accepted
                     before = after
@@ -313,15 +358,17 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                     fer_after = @spawn framework_interactions($mc, $i, $newpos)
                     singlevdw_before = fetch(singlevdw_before_task)::TK
                     singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
-                    before = MCEnergyReport(fetch(fer_before), singlevdw_before, fetch(singlereciprocal_before))
-                    after = MCEnergyReport(fetch(fer_after), singlevdw_after, fetch(singlereciprocal_after))
+                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, singlevdw_before, singlereciprocal_before)
+                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, singlevdw_after, fetch(singlereciprocal_after)::TK)
                 end
             end
+            speak("Task ", thistask, " core run.")
 
             old_idx = idx
             accepted = compute_accept_move(before, after, temperature, mc.rng)
             oldpos = newpos
             if accepted
+                speak("Task ", thistask, " accepting...")
                 if mc.step.parallel
                     # do not use newpos since it can be changed in the next iteration before the Task is run
                     running_update = @spawn update_mc!($mc, $idx, $oldpos)
@@ -336,8 +383,11 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 else
                     energy += diff
                 end
+                speak("Task ", thistask, " accepted.")
             end
         end
+
+        speak("Task ", thistask, " end of cycle")
 
         # end of cycle
         report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
@@ -345,8 +395,10 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             accepted && wait(running_update)
             o = SimulationStep(mc.step, :output)
             if report_now
+                speak("Task ", thistask, " reporting...")
                 put!(output, o)
                 push!(reports, energy)
+                speak("Task ", thistask, " reported.")
             end
             if !(simu.record isa Returns)
                 ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
@@ -356,7 +408,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                     ret_record === :stop && break
                     record_task = @spawn $simu.record($ocomplete, $energy, $idx_cycle, $mc, $simu)
                 else
+                    speak("Task ", thistask, " recording...")
                     simu.record(ocomplete, energy, idx_cycle, mc, simu)
+                    speak("Task ", thistask, " recorded.")
                 end
             end
             yield()
@@ -371,6 +425,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             statistics.θmax = (counter_cycle-1)/counter_cycle*statistics.θmax + rotation_ratio/counter_cycle*120u"°"
         end
     end
+    speak("Task ", thistask, " waiting.")
     wait(record_task)
     accepted && wait(running_update)
     push!(reports, energy)
@@ -378,10 +433,12 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     newbaseline = @spawn baseline_energy(mc)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
     wait(output_task[])
-    lastenergy = fetch(newbaseline)
+    lastenergy = fetch(newbaseline)::BaselineEnergyReport
     if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
         @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
     end
+    speak("Task ", thistask, " fetching.")
     fetch(simu.record)
+    speak("!!! Task ", thistask, " finished"); flush(stdout)
     reports
 end

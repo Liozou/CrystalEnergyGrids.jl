@@ -225,6 +225,7 @@ The `parallel` field is passed on to the created copy (except with `mode === :ze
 """
 function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.parallel) where {N,T}
     if mode === :all
+        return deepcopy(step)
         psystem = PeriodicSystem(; xpositions=copy(step.positions),
                                    ypositions=SVector{3,TÅ}[],
                                    unitcell=step.mat,
@@ -234,6 +235,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                        [[copy(js) for js in is] for is in step.posidx],
                        [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
     elseif mode === :output
+        return deepcopy(step)
         psystem = PeriodicSystem(; xpositions=copy(step.positions),
                                    ypositions=SVector{3,TÅ}[],
                                    unitcell=step.mat,
@@ -242,6 +244,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
         SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
                        step.posidx, step.freespecies, step.isrigid, step.ffidx)
     elseif mode === :complete_output
+        return deepcopy(step)
         SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
                             [[copy(js) for js in is] for is in step.posidx],
                             [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)

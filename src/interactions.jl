@@ -471,6 +471,49 @@ function derivativesGrid(rule::InteractionRule, d2)
     return value-rule.shift, ∂1, ∂2, ∂3
 end
 
+"""
+    first_derivative(rule::InteractionRule, d2)
+
+Derivative of `rule` on vector 𝐫 divided by `abs(𝐫)` where `d2 = abs2(𝐫)`. The value of the
+`rule` is also returned as the first value.
+"""
+function first_derivative(rule::InteractionRule, d2)
+    r2 = @convertifnotfloat u"Å^2" d2
+    if rule.kind === FF.LennardJones
+        ε, σ = rule.params
+        x6 = (σ^2/r2)^3
+        value = 4*ε*x6*(x6 - 1)
+        ∂1 = 24*ε*(x6*(1 - 2*x6))/r2
+    elseif rule.kind === FF.Coulomb
+        error("Derivative of Coulomb not implemented")
+    elseif rule.kind === FF.HardSphere
+        value = ifelse(r2 < (rule.params[1] + rule.params[2])^2, Inf, 0.0)
+        ∂1 = 0.0
+    elseif rule.kind === FF.Buckingham
+        A, B, C = rule.params
+        r4 = r2*r2
+        r = sqrt(r2)
+        r6 = r4*r2
+        x6 = C/r6
+        xe = A*exp(-B*r)
+        value = xe - x6
+        ∂1 = -B*xe/r + 6*x6/r2
+    elseif rule.kind === FF.NoInteraction || rule.kind == FF.CoulombEwaldDirect
+        # CoulombEwaldDirect is not included in the VdW grid but directly taken into
+        # account in the Ewald grid
+        return 0.0, 0.0
+    elseif rule.kind === FF.Monomial
+        error("VdW grid not implemented for Monomial")
+    elseif rule.kind === FF.Exponential
+        error("VdW grid not implemented for Exponential")
+    elseif rule.kind === FF.UndefinedInteraction
+        throw(UndefinedInteractionError())
+    else
+        @assert false # logically impossible
+    end
+    return value-rule.shift, ∂1
+end
+
 
 struct RepeatedRuleKind <: Exception
     x::InteractionRule

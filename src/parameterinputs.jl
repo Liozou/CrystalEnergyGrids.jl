@@ -115,6 +115,7 @@ function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") wh
     energies = Vector{BaselineEnergyReport}(undef, 0)
     lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
+            current_task().storage = ik
             run_montecarlo!(newmc, newsimu)
             positions[ik] = newsimu.record.minpos
             energies[ik] = newsimu.record.mine
@@ -136,7 +137,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     recordminimum = RMinimumEnergy(e, o)
     printevery = Int(!isempty(star.outdir))
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
-    newsimu = SimulationSetup(300u"K", star.length; printevery, outdir, ninit=80, record=recordminimum)
+    newsimu = SimulationSetup(300u"K", star.length; printevery, outdir, ninit=0, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end

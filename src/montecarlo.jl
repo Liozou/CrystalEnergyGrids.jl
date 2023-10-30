@@ -301,17 +301,21 @@ parallelized or not.
     modifying states outside of the API.
 """
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
-    ewaldsystems = EwaldSystem[]
-    for (i, posidxi) in enumerate(o.posidx)
-        ffidxi = o.ffidx[i]
-        charge = [o.charges[k] for k in ffidxi]
-        append!(ewaldsystems, EwaldSystem(o.positions[molpos], charge) for molpos in posidxi)
-    end
-    ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
+    # return deepcopy(mc)
+    # ewaldsystems = EwaldSystem[]
+    # for (i, posidxi) in enumerate(o.posidx)
+    #     ffidxi = o.ffidx[i]
+    #     charge = [o.charges[k] for k in ffidxi]
+    #     append!(ewaldsystems, EwaldSystem(o.positions[molpos], charge) for molpos in posidxi)
+    # end
+    # ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
+    # rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)
+    ewald = deepcopy(mc.ewald)
+    rng = deepcopy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
-                    ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
-                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead,
-                    copy(mc.mcmoves), copy(mc.rng))
+                    ewald, Ref(mc.tailcorrection[]), mc.coulomb, deepcopy(mc.grids), copy(mc.offsets),
+                    copy(mc.indices), deepcopy(mc.speciesblocks), deepcopy(mc.atomblocks), copy(mc.bead),
+                    copy(mc.mcmoves), rng)
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
