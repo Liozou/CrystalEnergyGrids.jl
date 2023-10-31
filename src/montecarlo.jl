@@ -308,10 +308,11 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
         append!(ewaldsystems, EwaldSystem(o.positions[molpos], charge) for molpos in posidxi)
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
+    rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
                     copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead,
-                    copy(mc.mcmoves), copy(mc.rng))
+                    copy(mc.mcmoves), rng)
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)

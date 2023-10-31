@@ -313,8 +313,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                     fer_after = @spawn framework_interactions($mc, $i, $newpos)
                     singlevdw_before = fetch(singlevdw_before_task)::TK
                     singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
-                    before = MCEnergyReport(fetch(fer_before), singlevdw_before, fetch(singlereciprocal_before))
-                    after = MCEnergyReport(fetch(fer_after), singlevdw_after, fetch(singlereciprocal_after))
+                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, singlevdw_before, singlereciprocal_before)
+                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, singlevdw_after, fetch(singlereciprocal_after)::TK)
                 end
             end
 
@@ -378,7 +378,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     newbaseline = @spawn baseline_energy(mc)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
     wait(output_task[])
-    lastenergy = fetch(newbaseline)
+    lastenergy = fetch(newbaseline)::BaselineEnergyReport
     if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
         @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
     end
