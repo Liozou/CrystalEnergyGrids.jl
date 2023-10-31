@@ -7,7 +7,7 @@ SimulationStep(mc::MonteCarloSetup) = SimulationStep(mc.step, :output)
 function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i, atomcounter)
     invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
     open(path, "a") do io
-        @printf io "MODEL %4d\n" i
+        @printf io "MODEL     %4d\n" i
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
         for (l, opos) in enumerate(o.positions)
             i, j, k = o.atoms[l]
