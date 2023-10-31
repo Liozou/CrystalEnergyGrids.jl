@@ -31,6 +31,7 @@ include("montecarlo.jl")
 include("output.jl")
 include("simulation.jl")
 include("parameterinputs.jl")
+include("averageclusters.jl")
 
 
 end
