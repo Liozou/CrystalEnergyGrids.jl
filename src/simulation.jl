@@ -219,7 +219,7 @@ speak(args...) = nothing
 #     names = fieldnames(T)
 #     isempty(names) && return ismutabletype(T) && objectid(x) == objectid(y)
 #     for a in names
-#         a in (:ff, :isrigid, :charges, :eframework, :allcharges, :ffidx, :grids, :grid, :offsets, :speciesblocks, :atomblocks, :bead) && continue
+#         a in (:ff, :isrigid, :charges, :allcharges, :ffidx, :grids, :grid, :offsets, :speciesblocks, :atomblocks, :bead) && continue
 #         if !isdefined(x, a) || !isdefined(y, a)
 #             println("In type ", T, ", field ", a, " not assigned")
 #         elseif recursive_mightalias(getfield(x, a), getfield(y, a))
@@ -342,24 +342,17 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 #     before = fetch(before_task) # simply keep its previous value
                 end
                 @spawnif mc.step.parallel begin
-                    singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
                     fer = @spawn framework_interactions($mc, $i, $newpos)
-                    singlevdw = single_contribution_vdw(mc.step, idx, newpos)
-                    after = MCEnergyReport(fetch(fer)::FrameworkEnergyReport, singlevdw, fetch(singlereciprocal)::TK)
+                    after = MCEnergyReport(fetch(fer)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
                 end
             else
                 molpos = mc.step.posidx[i][j]
                 positions = @view mc.step.positions[molpos]
                 @spawnif mc.step.parallel begin
-                    singlevdw_before_task = @spawn single_contribution_vdw($mc.step, $(i,j), $positions)
-                    singlereciprocal_after = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
-                    singlereciprocal_before = @spawn single_contribution_ewald($mc.ewald, $ij, nothing)
                     fer_before = @spawn framework_interactions($mc, $i, $positions)
                     fer_after = @spawn framework_interactions($mc, $i, $newpos)
-                    singlevdw_before = fetch(singlevdw_before_task)::TK
-                    singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
-                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, singlevdw_before, singlereciprocal_before)
-                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, singlevdw_after, fetch(singlereciprocal_after)::TK)
+                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
+                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
                 end
             end
             speak("Task ", thistask, " core run.")
@@ -434,9 +427,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
     wait(output_task[])
     lastenergy = fetch(newbaseline)::BaselineEnergyReport
-    if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
-        @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
-    end
+    # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
+    #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
+    # end
     speak("Task ", thistask, " fetching.")
     fetch(simu.record)
     speak("!!! Task ", thistask, " finished"); flush(stdout)

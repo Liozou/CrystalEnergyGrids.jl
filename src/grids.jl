@@ -154,11 +154,6 @@ end
 
 function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::TÅ, _ewald=nothing)
     cset, num_unitcell = _create_grid_common(file, framework, spacing, 12.0u"Å")
-    ewald = if _ewald isa EwaldFramework
-        _ewald
-    else
-        initialize_ewald(framework, num_unitcell)
-    end
     grid = Array{Cfloat,4}(undef, cset.dims[3]+1, cset.dims[2]+1, cset.dims[1]+1, 8)
     probe_coulomb = ProbeSystem(framework, forcefield)
     Δ = NoUnits.(cset.Δ/u"Å")
@@ -270,7 +265,6 @@ struct CrystalEnergySetup{TFramework,TMolecule}
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid}
     atomsidx::Vector{Int} # index of the grid corresponding to the atom
-    ewald::EwaldFramework
     forcefield::ForceField
     block::BlockFile
 end
@@ -298,9 +292,7 @@ function energy_point(setup::CrystalEnergySetup, positions)
     vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], positions[i]) for i in 1:num_atoms)
     setup.coulomb.ewald_precision == -Inf && return vdw, 0.0u"K"
     coulomb_direct = sum((Float64(setup.molecule[i,:atomic_charge]/u"e_au"))*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
-    newmolecule = ChangePositionSystem(setup.molecule, positions)
-    coulomb_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
-    return (vdw, coulomb_direct + coulomb_reciprocal)
+    return (vdw, coulomb_direct)
 end
 
 

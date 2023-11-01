@@ -321,7 +321,7 @@ end
 
 function retrieve_or_create_grid(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework, mat, new)
     isempty(grid_path) && return EnergyGrid()
-    iscoulomb = atom_or_eframework isa EwaldFramework
+    iscoulomb = atom_or_eframework isa Nothing
     if new || !isfile(grid_path)
         text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
         mkpath(dirname(grid_path))
@@ -384,9 +384,8 @@ function setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15u"â
     coulomb_grid_path, vdws = grid_locations(framework, forcefield_framework, rev_atomdict, gridstep, supercell)
 
     needcoulomb = any(!iszero(syst_mol[i,:atomic_charge])::Bool for i in 1:length(syst_mol))
-    coulomb, ewald = if needcoulomb
-        _eframework = initialize_ewald(syst_framework, supercell)
-        retrieve_or_create_grid(coulomb_grid_path, syst_framework, forcefield, gridstep, _eframework, mat, new), _eframework
+    coulomb = if needcoulomb
+        retrieve_or_create_grid(coulomb_grid_path, syst_framework, forcefield, gridstep, nothing, mat, new)
     else
         EnergyGrid(), EwaldFramework(mat)
     end
@@ -397,7 +396,7 @@ function setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15u"â
         grids[i] = retrieve_or_create_grid(vdw_grid_path, syst_framework, forcefield, gridstep, atom, mat, new)
     end
 
-    CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald, forcefield, block)
+    CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, forcefield, block)
 end
 function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=0.15u"â„«", supercell=nothing, blockfile=nothing, new=false)
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
