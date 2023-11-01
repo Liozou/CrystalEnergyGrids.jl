@@ -5,7 +5,7 @@ using CellListMap.PeriodicSystems
 import LinearAlgebra
 
 """
-    SimulationStep{N,T}
+    SimulationStep{N}
 
 Represent a set of systems in space along with a force-field, i.e. a single frame in time.
 
@@ -56,12 +56,13 @@ In particular, the list of valid indices `j` for kind `i` is
 `setdiff(eachindex(posidx[i]), freespecies[i])` and the number of species of kind `i` is
 `length(posidx[i]) - length(freespecies[i])`.
 """
-struct SimulationStep{N,T}
+struct SimulationStep{N}
     ff::ForceField
     charges::Vector{Te_au}
     # charges[ix] is the charge of the atom of index ix in ff, i.e. the charge of the k-th
     # atom in a system of kind i is charges[ffidx[i][k]].
-    psystem::T
+    positions::Vector{SVector{3,TÅ}}
+    mat::SMatrix{3,3,TÅ,9}
     atoms::Vector{Tuple{Int,Int,Int}} # one index per atom
     posidx::Vector{Vector{Vector{Int}}}
     # the position of the k-th atom in the j-th system of kind i is positions[l] where
@@ -79,17 +80,6 @@ struct SimulationStep{N,T}
     # in the force field for the k-th atom in a system of kind i
 end
 
-@inline function Base.getproperty(s::SimulationStep, x::Symbol)
-    if x === :positions
-        return getfield(s, :psystem).xpositions
-    elseif x === :mat
-        return getfield(s, :psystem).unitcell
-    elseif x === :parallel
-        return getfield(s, :psystem).parallel
-    else
-        return getfield(s, x)
-    end
-end
 
 function Base.show(io::IO, step::SimulationStep)
     n = length(step.atoms)
@@ -101,8 +91,7 @@ end
 
 function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                         inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
-                        isrigid::BitVector, ffidx::Vector{Vector{Int}}, cell::CellMatrix;
-                        parallel::Bool=true) where N
+                        isrigid::BitVector, ffidx::Vector{Vector{Int}}, cell::CellMatrix) where N
 
     numatoms = sum(x -> sum(length, x; init=0), inputpos; init=0)
     positions = Vector{SVector{N,TÅ}}(undef, numatoms)
@@ -122,14 +111,7 @@ function SimulationStep(ff::ForceField, charges::Vector{Te_au},
         end
     end
     freespecies = [Int[] for _ in inputpos]
-    psystem = PeriodicSystem(; xpositions=positions,
-                               ypositions=SVector{3,TÅ}[],
-                               unitcell=cell.mat,
-                               cutoff=ff.cutoff,
-                               parallel,
-                               output=0.0u"K")
-
-    SimulationStep{N,typeof(psystem)}(ff, charges, psystem, atoms, posidx, freespecies, isrigid, ffidx)
+    SimulationStep{N}(ff, charges, positions, cell.mat, atoms, posidx, freespecies, isrigid, ffidx)
 end
 
 """
@@ -162,12 +144,11 @@ without having to specify the system kinds.
 function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
                         inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
                         cell::CellMatrix,
-                        isrigid::BitVector=trues(length(systemkinds));
-                        parallel::Bool=true) where N
+                        isrigid::BitVector=trues(length(systemkinds))) where N
     @assert length(systemkinds) == length(inputpos) == length(isrigid)
     ffidx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
     charges = [[uconvert(u"e_au", s[k,:atomic_charge])::Te_au for k in 1:length(s)] for s in systemkinds]
-    SimulationStep(ff, charges, inputpos, isrigid, ffidx, cell; parallel)
+    SimulationStep(ff, charges, inputpos, isrigid, ffidx, cell)
 end
 
 """
@@ -186,7 +167,7 @@ considered as having the same system kind (e.g. several molecules of water).
 If unspecified, `cell` is set to an open (i.e. aperiodic) box.
 """
 function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatrix(),
-                   isrigid::BitVector=trues(length(systems)); parallel::Bool=true) where T<:AbstractSystem
+                   isrigid::BitVector=trues(length(systems))) where T<:AbstractSystem
     length(isrigid) > length(systems) && error("Less systems provided than `isrigid` specifications")
     if length(isrigid) < length(systems)
         @info "All systems beyond the $(length(isrigid)) first ones are implicitly considered rigid."
@@ -209,7 +190,7 @@ function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatr
         push!(poss[kind], position(system))
         push!(indices, (kind, length(poss[kind])))
     end
-    SimulationStep(ff, systemkinds, poss, cell, newisrigid; parallel), indices
+    SimulationStep(ff, systemkinds, poss, cell, newisrigid), indices
 end
 
 """
@@ -223,33 +204,23 @@ If `mode === :zero`, create a `SimulationStep` with an empty `ffidx` field.
 
 The `parallel` field is passed on to the created copy (except with `mode === :zero`)
 """
-function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.parallel) where {N,T}
+function SimulationStep(step::SimulationStep{N}, mode=:all) where {N}
     if mode === :all
         return deepcopy(step)
-        psystem = PeriodicSystem(; xpositions=copy(step.positions),
-                                   ypositions=SVector{3,TÅ}[],
-                                   unitcell=step.mat,
-                                   parallel,
-                                   cutoff=step.ff.cutoff, output=0.0u"K")
-        SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
+        SimulationStep{N}(step.ff, step.charges, copy(step.positions), step.mat, copy(step.atoms),
                        [[copy(js) for js in is] for is in step.posidx],
                        [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
     elseif mode === :output
         return deepcopy(step)
-        psystem = PeriodicSystem(; xpositions=copy(step.positions),
-                                   ypositions=SVector{3,TÅ}[],
-                                   unitcell=step.mat,
-                                   parallel,
-                                   cutoff=step.ff.cutoff, output=0.0u"K")
-        SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
+        SimulationStep{N}(step.ff, step.charges, copy(step.positions), step.mat, copy(step.atoms),
                        step.posidx, step.freespecies, step.isrigid, step.ffidx)
     elseif mode === :complete_output
         return deepcopy(step)
-        SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
+        SimulationStep{N}(step.ff, step.charges, step.positions, step.mat, step.atoms,
                             [[copy(js) for js in is] for is in step.posidx],
                             [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
     elseif mode === :zero
-        SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
+        SimulationStep{N}(step.ff, step.charges, step.positions, step.mat, step.atoms,
                        step.posidx, step.freespecies, step.isrigid, Vector{Int}[])
     else
         error("Please use either :all, :output or :zero as value for argument mode")
@@ -282,14 +253,8 @@ the `j`-th system of kind `i` in `step`.
 
 See also [`update_position!`](@ref) to modify `step` in-place.
 """
-function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
-    psystem = PeriodicSystem(; xpositions=copy(step.positions),
-                               ypositions=SVector{3,TÅ}[],
-                               unitcell=step.mat,
-                               parallel=step.parallel,
-                               cutoff=step.ff.cutoff, output=0.0u"K")
-
-    x = SimulationStep{N,T}(step.ff, step.charges, psystem, step.atoms, step.posidx, step.freespecies, step.isrigid, step.ffidx)
+function update_position(step::SimulationStep{N}, (i,j), newpos) where {N}
+    x = SimulationStep{N}(step.ff, step.charges, copy(step.positions), step.mat, step.atoms, step.posidx, step.freespecies, step.isrigid, step.ffidx)
     update_position!(x, (i,j), newpos)
     x
 end
