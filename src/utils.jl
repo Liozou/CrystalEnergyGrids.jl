@@ -81,6 +81,12 @@ function cell_parameters(mat::AbstractMatrix)
     (a, b, c), (α, β, γ)
 end
 
+function mat_from_parameters((a, b, c), (α, β, γ))
+    cosα = cosd(α); cosβ = cosd(β); sinγ, cosγ = sincosd(γ)
+    ω = sqrt(1 - cosα^2 - cosβ^2 - cosγ^2 + 2*cosα*cosβ*cosγ)
+    SMatrix{3,3,eltype(a),9}(a, 0, 0, b*cosγ, b*sinγ, 0, c*cosβ, c*(cosα - cosβ*cosγ)/sinγ, c*ω/sinγ)
+end
+
 function prepare_periodic_distance_computations(mat)
     (a, b, c), (α, β, γ) = cell_parameters(mat)
     ortho = all(x -> isapprox(Float16(x), 90; rtol=0.02), (α, β, γ))

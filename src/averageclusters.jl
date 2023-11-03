@@ -1,50 +1,113 @@
-function pdb_properties(trajectory::AbstractString)
-    open(trajectory) do io
-        readline(io)
-        l0 = readline(io)
-        a, b, c, α, β, γ = parse.(Float64, l0[rge] for rge in (7:15, 16:24, 25:33, 34:40, 41:47, 48:54))::Vector{Float64}
-        cosα = cosd(α); cosβ = cosd(β); sinγ, cosγ = sincosd(γ)
-        ω = sqrt(1 - cosα^2 - cosβ^2 - cosγ^2 + 2*cosα*cosβ*cosγ)
-        mat = SMatrix{3,3,Float64,9}(a, 0, 0, b*cosγ, b*sinγ, 0, c*cosβ, c*(cosα - cosβ*cosγ)/sinγ, c*ω/sinγ)
-        l = readline(io)
-        counter = 0
-        while !startswith(l, "ENDMDL")
-            l = readline(io)
-            counter += 1
+struct PDBModelIterator
+    io::IOStream
+end
+PDBModelIterator(path::AbstractString) = PDBModelIterator(open(path))
+Base.IteratorSize(::Type{PDBModelIterator}) = Base.SizeUnknown()
+Base.eltype(::Type{PDBModelIterator}) = Tuple{Int,SMatrix{3,3,TÅ,9},Vector{Tuple{Int,SubString{String},SVector{3,TÅ}}}}
+Base.isdone(stream::PDBModelIterator, _=nothing) = eof(stream.io)
+function Base.iterate(stream::PDBModelIterator, _=nothing)
+    record = Tuple{Int,SubString{String},SVector{3,TÅ}}[]
+    modelid = 0
+    mat = SMatrix{3,3,Float64,9}(NaN,0,0,0,NaN,0,0,0,NaN)
+    while true
+        if eof(stream.io)
+            close(stream.io)
+            isempty(record) && return nothing
+            return (modelid, stream.mat, record), nothing
         end
-        mat*u"Å", counter
+        l = readline(stream.io)
+        if startswith(l, "MODEL")
+            modelid = parse(Int, @view l[7:end])
+        elseif startswith(l, "CRYST1")
+            a, b, c, α, β, γ = parse.(Float64, l[rge] for rge in (7:15, 16:24, 25:33, 34:40, 41:47, 48:54))::Vector{Float64}
+            mat = mat_from_parameters((a, b, c), (α, β, γ))
+        elseif startswith(l, "ATOM")
+            num = parse(Int, @view l[7:11])
+            el = @view l[77:78]
+            pos = SVector{3,Float64}(parse(Float64, @view l[31:38]), parse(Float64, @view l[39:46]), parse(Float64, @view l[47:54]))
+            push!(record, (num, el, pos*u"Å"))
+        elseif startswith(l, "ENDMDL")
+            return (modelid, mat, record), nothing
+        end
     end
 end
 
-function bin_trajectory(trajectory, energies::Vector{TK}; refT::TK=300.0u"K", step=0.15u"Å")
-    mat, numatoms = pdb_properties(trajectory)
-    numatoms > 0 || error(lazy"Invalid or empty PDB file at $trajectory: could not find any atom")
+
+"""
+    mat_from_output(path::AbstractString, ::Val{EXT}) where EXT
+
+Given the `path` to an output file, return the unit cell extracted from it.
+`EXT` is either `:pdb` for .pdb files, or `:stream` for `.stream` or `.zst` output.
+"""
+function mat_from_output(path::AbstractString, ::Val{EXT}) where EXT
+    if EXT === :pdb
+        open(path) do io
+            l = readline(io)
+            while !startswith(l, "CRYST1")
+                l = readline(io)
+            end
+            a, b, c, α, β, γ = parse.(Float64, l[rge] for rge in (7:15, 16:24, 25:33, 34:40, 41:47, 48:54))::Vector{Float64}
+            mat_from_parameters((a, b, c), (α, β, γ)).*u"Å"
+        end
+    else
+        @assert EXT === :stream
+        stream = StreamSimulationStep(path)
+        mat = first(stream).mat
+        close(stream)
+        mat
+    end
+end
+
+"""
+    bin_trajectory(dir; refT::TK=300.0u"K", step=0.15u"Å")
+
+Given the path to a directory `dir` containing the outputs of a simulation,
+return a grid of specified `step` where each point is mapped to the Boltzmann average (at
+temperature `refT`) of the atomic density.
+
+Also return `(mine, λ)` where `mine` is the minimum of `energies` and `λ` is the sum of
+`exp((mine-e)/refT)` for `e` in `energies`.
+"""
+function bin_trajectory(dir; refT::TK=300.0u"K", step=0.15u"Å")
+    epath = joinpath(dir, "energies.serial")
+    isfile(epath) || error(lazy"Cannot bin trajectory: missing file $epath.")
+    energies = Float64.(deserialize(epath)::Vector{BaselineEnergyReport})*u"K"
+    path = joinpath(dir, "steps.stream")
+    isfile(path) && return _bin_trajectory(path, energies, Val(:stream); refT, step)
+    path = joinpath(dir, "steps.zst")
+    isfile(path) && return _bin_trajectory(path, energies, Val(:stream); refT, step)
+    path = joinpath(dir, "trajectory.pdb")
+    isfile(path) && return _bin_trajectory(path, energies, Val(:pdb); refT, step)
+    error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $dir.")
+end
+
+function _bin_trajectory(path, energies::Vector{TK}, ::Val{EXT}; refT::TK=300.0u"K", step=0.15u"Å") where EXT
+    @assert EXT === :pdb || EXT === :stream
+    steps = (EXT === :pdb ? PDBModelIterator : StreamSimulationStep)(path)
+    mat = mat_from_output(path, Val(EXT))
     invmat = inv(NoUnits.(mat./u"Å"))
     na, nb, nc = floor.(Int, NoUnits.(cell_lengths(mat) ./ step))
     bins = zeros(Float64, na, nb, nc)
     mine::TK = minimum(energies)
-    lines = eachline(trajectory)
-    state = iterate(lines)
-    modelcounter = 1
-    while !isnothing(state) && startswith(state[1], "MODEL")
-        energy = energies[modelcounter]
-        iterate(lines)
-        for _ in 1:numatoms
-            l = first(iterate(lines))
-            pos = SVector{3,Float64}(parse(Float64, @view l[31:38]), parse(Float64, @view l[39:46]), parse(Float64, @view l[47:54]))
-            y = invmat*pos
+
+    stepcounter = 0
+    for step in steps
+        stepcounter += 1
+        energy = energies[stepcounter]
+        for x in (EXT === :stream ? step.positions : step[3])
+            pos = EXT === :stream ? x : x[3]
+            y = invmat*NoUnits.(pos./u"Å")
             i, j, k = y .- floor.(y)
             val = exp((mine-energy)/refT)
             bins[ceil(Int, i*na)+(i==0), ceil(Int, j*nb)+(j==0), ceil(Int, k*nc)+(k==0)] += val
         end
-        lend = first(iterate(lines))
-        @assert startswith(lend, "ENDMDL")
-        modelcounter += 1
-        state = iterate(lines)
     end
+    @show stepcounter
+    @show length(energies)
+    @assert stepcounter == length(energies)
     λ = sum(exp((mine-e)/refT) for e in energies; init=0.0)
     bins ./= λ
-    bins
+    bins, (mine, λ)
 end
 
 function _add_cyclic((x, y, z), (i, j, k), (a, b, c), λ=true)
@@ -55,7 +118,18 @@ function _add_cyclic((x, y, z), (i, j, k), (a, b, c), λ=true)
     SVector{3,Float64}(λ*u, λ*v, λ*w)
 end
 
-function average_clusters(bins::Array{Float64,3}; merge_manhattan=3, threshold=1e-5)
+"""
+    average_clusters(bins::Array{Float64,3}; merge_manhattan=3, threshold=1e-4)
+
+Takes a grid `bins` of atomic densities and group them into sites, each site corresponding
+to a local maximum in density. If two sites are closer than `merge_manhattan` (in terms of
+Manhattan distance on the grid), they are merged. Sites whose total density is lower than
+`threshold` are discared.
+
+Return a list of pairs `(p, center)` where `p` is the probability of having an atom on site
+at position `center`. The coordinates of `center` are in [0, 1).
+"""
+function average_clusters(bins::Array{Float64,3}; merge_manhattan=3, threshold=1e-4)
     basinsets = local_basins(bins, -Inf; lt=(>), merge_manhattan, skip=iszero)
     n = length(basinsets)
     @assert !any(isempty, basinsets)
@@ -73,12 +147,121 @@ function average_clusters(bins::Array{Float64,3}; merge_manhattan=3, threshold=1
             center[b] += _add_cyclic(center[b], SVector{3,Float64}(i,j,k), size(bins), λ)
         end
     end
-    ret = [(p, c/λ) for (p, c, λ) in zip(probabilities, center, numnodes)]
+    ret = [begin
+        center = c/λ
+        (p, center .- floor.(Int, center))
+    end for (p, c, λ) in zip(probabilities, center, numnodes)]
     filter!((>(threshold))∘first, ret)
     ret
 end
 
-function average_clusters(trajectory, energies::Vector{TK}; merge_manhattan=3,
-                          refT::TK=300.0u"K", step=0.15u"Å", threshold=1e-5)
-    average_clusters(bin_trajectory(trajectory, energies; refT, step); merge_manhattan, threshold)
+"""
+    average_clusters(dir; merge_manhattan=3, refT::TK=300.0u"K", step=0.15u"Å", threshold=1e-4)
+
+Given the path to a folder `dir` containing the outputs of a simulation, group atomic
+densities into sites.
+
+See [`bin_trajectory`](@ref) for the meaning of `step` and `refT` and
+[`average_clusters`](@ref) for the return type and the meaning of `merge_manhattan` and
+`threshold`.
+"""
+function average_clusters(dir; merge_manhattan=3, refT::TK=300.0u"K", step=0.15u"Å", threshold=1e-4)
+    average_clusters(bin_trajectory(dir; refT, step)[1]; merge_manhattan, threshold)
+end
+
+
+"""
+    output_sites(path::AbstractString, framework_path::AbstractString, sites, atomsymbol::Union{AbstractString,Symbol})
+
+Output to `path` a .cif file representing the framework (whose .cif file is stored at
+`framework_path`) as well as a number of `sites` with their respective occupancies, each
+corresponding to a species of symbol `atomsymbol`.
+
+The `sites` can be obtained from [`average_clusters`](@ref).
+"""
+function output_sites(path::AbstractString, framework_path::AbstractString, sites, atomsymbol::Union{AbstractString,Symbol})
+    if isdir(path) || isdirpath(path)
+        name = string(splitext(basename(framework_path))[1], '_', atomsymbol)
+        path = joinpath(path, name*".cif")
+    else
+        name = basename(path)
+        if splitext(path)[2] != ".cif"
+            path = path*".cif"
+        end
+    end
+    mkpath(dirname(path))
+
+    open(framework_path) do input; open(path, "w") do output
+        inloop = inatomloop = loopstarted = false
+        counter = 0
+        order = Symbol[]
+        hasoccupancy = false
+        for l in eachline(input)
+            if isempty(l)
+                if inloop && inatomloop && loopstarted
+                    for (p, (x, y, z)) in sites
+                        counter += 1
+                        for o in order
+                            if o === :?
+                                print(output, "? ")
+                            elseif o === :label
+                                print(output, atomsymbol, '_', counter, '\t')
+                            elseif o === :symbol
+                                print(output, atomsymbol, '\t')
+                            elseif o === :x
+                                @printf output "%12g" x
+                            elseif o === :y
+                                @printf output "%12g" y
+                            elseif o === :z
+                                @printf output "%12g" z
+                            elseif o === :occ
+                                @printf output "%12g" min(p, 1.0)
+                            end
+                        end
+                        println(output)
+                    end
+                end
+                inloop = false
+                inatomloop = loopstarted = false
+            elseif l == "loop_"
+                inloop = true
+                empty!(order)
+                inatomloop = loopstarted = false
+            elseif inloop
+                if !loopstarted && l[1] != '_'
+                    loopstarted = true
+                    counter = 0
+                    if inatomloop && !hasoccupancy
+                        println(output, "_atom_site_occupancy")
+                        push!(order, :occ)
+                    end
+                end
+                if loopstarted
+                    counter += 1
+                    if inatomloop && !hasoccupancy
+                        l = l * " 1.0"
+                    end
+                else
+                    if l == "_atom_site_occupancy"
+                        hasoccupancy = true
+                        push!(order, :occ)
+                    elseif l == "_atom_site_fract_x"
+                        inatomloop = true
+                        push!(order, :x)
+                    elseif l == "_atom_site_fract_y"
+                        push!(order, :y)
+                    elseif l == "_atom_site_fract_z"
+                        push!(order, :z)
+                    elseif l == "_atom_site_label"
+                        push!(order, :label)
+                    elseif l == "_atom_site_type_symbol"
+                        push!(order, :symbol)
+                    else
+                        push!(order, :?)
+                    end
+                end
+            end
+            println(output, l)
+        end
+    end end # open(input) and open(output)
 end
