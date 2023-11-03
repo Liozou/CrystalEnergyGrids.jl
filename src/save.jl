@@ -1,9 +1,8 @@
 using CodecZstd, TranscodingStreams
 
-function _save_init(io::IO, step::SimulationStep{N,T}) where {N,T}
+function _save_init(io::IO, step::SimulationStep)
     s = Serializer(io)
     Serialization.writeheader(s)
-    serialize(s, SimulationStep{N,T})
     serialize(s, step.ff)
     serialize(s, step.charges)
     serialize(s, step.isrigid)
@@ -64,78 +63,86 @@ function save(path::AbstractString, step::SimulationStep)
 end
 
 
-struct StreamSimulationStep{N,T}
+"""
+    ProtoSimulationStep
+
+Structure that contains the same information as a [`SimulationStep`](@ref) but organized to
+be fast to create and read, not to be used in a simulation.
+
+All fields documented for a [`SimulationStep`](@ref) are accessible on a
+`ProtoSimulationStep` except `freespecies` and `posidx`, by assuming that
+`freespecies` is empty and `posidx` is the reciprocal function to `atoms`.
+
+Use `SimulationStep(x::ProtoSimulationStep)` to construct a `SimulationStep` from it.
+"""
+struct ProtoSimulationStep
+    ff::ForceField
+    charges::Vector{Te_au}
+    mat::SMatrix{3,3,TÅ,9}
+    positions::Vector{SVector{3,TÅ}}
+    parallel::Bool
+    atoms::Vector{NTuple{3,Int}}
+    isrigid::BitVector
+    ffidx::Vector{Vector{Int}}
+end
+
+function SimulationStep(x::ProtoSimulationStep)
+    posidx = [Vector{Int}[] for _ in x.ffidx]
+    not_in_freespecies = [BitSet() for _ in x.ffidx]
+    for (l, (i,j,k)) in enumerate(x.atoms)
+        I = posidx[i]
+        if length(I) < j
+            lenJ = length(x.ffidx[i])
+            append!(I, Vector{Int}(undef, lenJ) for _ in j-length(I))
+        end
+        J = I[j]
+        J[k] = l
+        push!(not_in_freespecies[i], j)
+    end
+    freespecies = [setdiff(1:length(posidxi), not_in_i) for (posidxi, not_in_i) in zip(posidx, not_in_freespecies)]
+    psystem = PeriodicSystem(; xpositions=x.positions,
+                            ypositions=SVector{3,TÅ}[],
+                            unitcell=x.mat,
+                            parallel=x.parallel,
+                            cutoff=x.ff.cutoff, output=0.0u"K")
+    SimulationStep(x.ff, x.charges, psystem, x.atoms, posidx, freespecies, x.isrigid, x.ffidx)
+end
+
+
+struct StreamSimulationStep
     io::Union{IOStream,TranscodingStream{ZstdDecompressor,IOStream}}
     ff::ForceField
     charges::Vector{Te_au}
     isrigid::BitVector
     ffidx::Vector{Vector{Int}}
     parallel::Bool
-    runnable::Bool
 end
 
-function _load_init(io::IO, ::Type{SimulationStep{N,T}}; runnable=true) where {N,T}
+function _load_init(io::IO)
     s = Serializer(io)
-    deserialize(s) == SimulationStep{N,T} || error(lazy"$path does not correspond to a SimulationStep")
     ff = deserialize(s)::ForceField
     charges = deserialize(s)::Vector{Te_au}
     isrigid = deserialize(s)::BitVector
     ffidx = deserialize(s)::Vector{Vector{Int}}
     parallel = deserialize(s)::Bool
-    StreamSimulationStep{N,T}(io, ff, charges, isrigid, ffidx, parallel, runnable)
+    StreamSimulationStep(io, ff, charges, isrigid, ffidx, parallel)
 end
 
-function load_init(path, ::Type{SimulationStep{N,T}}; runnable=true) where {N,T}
+function StreamSimulationStep(path)
     if splitext(path)[2] == ".zst"
-        _load_init(ZstdDecompressorStream(open(path)), SimulationStep{N,T}; runnable)
+        _load_init(ZstdDecompressorStream(open(path)))
     else
-        _load_init(open(path), SimulationStep{N,T}; runnable)
+        _load_init(open(path))
     end
 end
 
-function StreamSimulationStep(path; runnable=true)
-    T = if splitext(path)[2] == ".zst"
-        open(ZstdDecompressorStream, path) do io
-            deserialize(io)
-        end
-    else
-        deserialize(path)
-    end
-    load_init(path, T; runnable)
-end
 
-
-function _load(io::IO, stream::StreamSimulationStep{N,T}) where {N,T}
+function _load(io::IO, stream::StreamSimulationStep)
     mat = read(io, SMatrix{3,3,TÅ,9})
     atoms = read_vector(io, Vector{Tuple{Int,Int,Int}})
     positions = read_vector(io, Vector{SVector{3,TÅ}})
-    if stream.runnable
-        # the position of the k-th atom in the j-th system of kind i is positions[l] where
-        # atoms[l] == (i,j,k) and posidx[i][j][k] == l
-        posidx = [Vector{Int}[] for _ in stream.ffidx]
-        not_in_freespecies = [BitSet() for _ in stream.ffidx]
-        for (l, (i,j,k)) in enumerate(atoms)
-            I = posidx[i]
-            if length(I) < j
-                lenJ = length(stream.ffidx[i])
-                append!(I, Vector{Int}(undef, lenJ) for _ in j-length(I))
-            end
-            J = I[j]
-            J[k] = l
-            push!(not_in_freespecies[i], j)
-        end
-        freespecies = [setdiff(1:length(posidxi), not_in_i) for (posidxi, not_in_i) in zip(posidx, not_in_freespecies)]
-    else
-        posidx = Vector{Vector{Vector{Int}}}(undef, length(stream.ffidx))
-        freespecies = Vector{Vector{Int}}(undef, length(stream.ffidx))
-    end
-    psystem = PeriodicSystem(; xpositions=positions,
-                               ypositions=SVector{3,TÅ}[],
-                               unitcell=mat,
-                               parallel=stream.parallel,
-                               cutoff=stream.ff.cutoff, output=0.0u"K")
     eof(io) && close(io)
-    SimulationStep{N,T}(stream.ff, stream.charges, psystem, atoms, posidx, freespecies, stream.isrigid, stream.ffidx)
+    ProtoSimulationStep(stream.ff, stream.charges, mat, positions, stream.parallel, atoms, stream.isrigid, stream.ffidx)
 end
 load(stream::StreamSimulationStep) = _load(stream.io, stream)
 
@@ -144,6 +151,6 @@ function Base.iterate(stream::StreamSimulationStep, _=nothing)
     return load(stream), nothing
 end
 
-Base.IteratorSize(::Type{StreamSimulationStep{N,T}}) where {N,T} = Base.SizeUnknown()
-Base.eltype(::Type{StreamSimulationStep{N,T}}) where {N,T} = SimulationStep{N,T}
-Base.isdone(stream::StreamSimulationStep, _=nothing) = !isopen(stream.io)
+Base.IteratorSize(::Type{StreamSimulationStep}) = Base.SizeUnknown()
+Base.eltype(::Type{StreamSimulationStep})= ProtoSimulationStep
+Base.isdone(stream::StreamSimulationStep, _=nothing) = eof(stream.io)
