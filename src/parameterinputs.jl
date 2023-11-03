@@ -78,13 +78,13 @@ end
 ## Record inputs
 abstract type RecordFunction <: Function end
 
-mutable struct RMinimumEnergy{N,T} <: RecordFunction
+mutable struct RMinimumEnergy{T} <: RecordFunction
     mine::BaselineEnergyReport
-    minpos::SimulationStep{N,T}
+    minpos::SimulationStep{T}
 
-    RMinimumEnergy{N,T}() where {N,T} = new{N,T}(BaselineEnergyReport(Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
-    function RMinimumEnergy(mine::BaselineEnergyReport, minpos::SimulationStep{N,T}) where {N,T}
-        new{N,T}(mine, minpos)
+    RMinimumEnergy{T}() where {T} = new{T}(BaselineEnergyReport(Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
+    function RMinimumEnergy(mine::BaselineEnergyReport, minpos::SimulationStep{T}) where T
+        new{T}(mine, minpos)
     end
 end
 function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k::Int,
@@ -101,19 +101,19 @@ function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k:
 end
 
 
-struct ShootingStarMinimizer{N,T} <: RecordFunction
+struct ShootingStarMinimizer{T} <: RecordFunction
     every::Int
     length::Int
-    positions::Vector{SimulationStep{N,T}}
+    positions::Vector{SimulationStep{T}}
     energies::Vector{BaselineEnergyReport}
     outdir::String
-    lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
+    lb::LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}
 end
-function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") where {N}
-    T = typeof_psystem(Val(N))
-    positions = Vector{SimulationStep{N,T}}(undef, 0)
+function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="")
+    T = typeof_psystem(Val(3))
+    positions = Vector{SimulationStep{T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
-    lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
+    lb = LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}(nthreads()) do (ik, newmc, newsimu)
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
             run_montecarlo!(newmc, newsimu)
             positions[ik] = newsimu.record.minpos
@@ -134,7 +134,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     r == 0 || return
     newmc = MonteCarloSetup(mc, o; parallel=false)
     recordminimum = RMinimumEnergy(e, o)
-    printevery = Int(!isempty(star.outdir))
+    printevery = Int(!isempty(star.outdir))*10
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
     newsimu = SimulationSetup(300u"K", star.length; printevery, outdir, ninit=80, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
@@ -144,20 +144,20 @@ end
 Base.fetch(x::ShootingStarMinimizer) = wait(x.lb)
 
 
-struct RainfallMinimizer{N,T} <: RecordFunction
+struct RainfallMinimizer{T} <: RecordFunction
     every::Int
     length::Int
-    positions::Vector{SimulationStep{N,T}}
+    positions::Vector{SimulationStep{T}}
     energies::Vector{BaselineEnergyReport}
     tasks::Vector{Task}
 end
 
-function RainfallMinimizer{N}(; length::Int=100, every::Int=1) where {N}
-    T = typeof_psystem(Val(N))
-    positions = Vector{SimulationStep{N,T}}(undef, 0)
+function RainfallMinimizer(; length::Int=100, every::Int=1)
+    T = typeof_psystem(Val(3))
+    positions = Vector{SimulationStep{T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
     tasks = Vector{Task}(undef, 0)
-    RainfallMinimizer{N,T}(every, length, positions, energies, tasks)
+    RainfallMinimizer{T}(every, length, positions, energies, tasks)
 end
 
 function initialize_record!(rain::T, simu::SimulationSetup{T}) where {T<:RainfallMinimizer}

@@ -1,7 +1,7 @@
 export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
-struct MonteCarloSetup{N,T,Trng}
-    step::SimulationStep{N,T}
+struct MonteCarloSetup{T,Trng}
+    step::SimulationStep{T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     ewald::IncrementalEwaldContext
