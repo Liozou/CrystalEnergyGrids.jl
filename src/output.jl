@@ -150,22 +150,29 @@ function output_restart(path, step::SimulationStep)
 end
 output_restart(path, mc::MonteCarloSetup) = output_restart(path, SimulationStep(mc))
 
-function pdb_output_handler(path, mat::SMatrix{3,3,TÅ,9})
+function output_handler(outdir::AbstractString, outtype::Vector{Symbol}, step::SimulationStep)
     taskref = Ref{Task}()
-    if isempty(path)
+    if isempty(outdir) || length(outtype)  == (:energies in outtype)
         Channel{SimulationStep}(Inf; taskref) do channel
             while !isempty(take!(channel).ffidx) end # skip until isempty(o.ffidx)
         end
     else
-        lengths, angles = cell_parameters(mat)
+        lengths, angles = cell_parameters(step.mat)
         atomcounter = Counter3D()
+        stream_path = :stream in outtype ? joinpath(outdir, "steps.stream") : ""
+        isempty(stream_path) || save_init(stream_path, step)
+        zst_path = :zst in outtype ? joinpath(outdir, "steps.zst") : ""
+        isempty(zst_path) || save_init(zst_path, step)
+        pdb_path = :pdb in outtype ? joinpath(outdir, "positions.pdb") : ""
         Channel{SimulationStep}(Inf; taskref) do channel
             i = 0
             while true
                 i += 1
                 o = take!(channel)
                 isempty(o.ffidx) && break
-                output_pdb(path, o, lengths, angles, i, atomcounter)
+                isempty(zst_path) || save(zst_path, o)
+                isempty(stream_path) || save(stream_path, o)
+                isempty(pdb_path) || output_pdb(pdb_path, o, lengths, angles, i, atomcounter)
             end
             nothing
         end

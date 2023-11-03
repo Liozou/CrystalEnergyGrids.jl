@@ -18,9 +18,20 @@ Definition of the simulation setup, which must provide the following information
   initialization cycles.
 - `outdir` the path to a directory in which the result is stored. If not provided (or set
   to an empty string), no record will be stored on file.
-- `printevery`: one record of the positions is stored at the end of every `printevery`
+- `printevery`: one output of the positions is stored at the end of every `printevery`
   cycles. Default to 1000. The first (at the end of initialization) and last positions
   are always recorded: use a value of 0 in printevery to only record those.
+- `outtype`: a `Vector{Symbol}` whose elements represent the different outputs that
+  should be produced in `outdir`. The elements can be:
+  + `:energies` to have the list of energies output as a serialized
+    `Vector{BaselineEnergyReport}` in a "energies.serial" file.
+  + `:pdb` to have the positions of the atoms output as a "positions.pdb" file.
+  + `:stream` to have the positions of the atoms output as a [`StreamSimulationStep`](@ref)
+    in a "steps.stream" file.
+  + `:zst` to have the positions of the atoms output as a compressed
+    [`StreamSimulationStep`](@ref) in a "steps.zst" file.
+  The default is `[:energies, :zst]`. See [`stream_to_pdb`] to convert a "steps.stream"
+  or "steps.zst" file into the corresponding "positions.pdb" output.
 - `record::Trecord` a function which can be used to record extra information at the end of
   each cycle. `record` can return `:stop` to end the computation at that point, otherwise
   its return value is ignored. Stopping may not be immediate and can take up to one
@@ -109,9 +120,10 @@ Base.@kwdef struct SimulationSetup{Trecord}
     ninit::Int=0
     outdir::String=""
     printevery::Int=1000
+    outtype::Vector{Symbol}=[:energies, :zst]
     record::Trecord=Returns(nothing)
 
-    function SimulationSetup(T, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=1000, record=Returns(nothing))
+    function SimulationSetup(T, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=1000, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
         @assert ncycles ≥ 0 && ninit ≥ 0
         n = ncycles + ninit
         temperatures = if T isa Number
@@ -121,7 +133,7 @@ Base.@kwdef struct SimulationSetup{Trecord}
         else
             n ≤ 1 ? [T(1,2)] : T.(1:n, n)
         end
-        ret = new{typeof(record)}(temperatures, ncycles, ninit, outdir, printevery, record)
+        ret = new{typeof(record)}(temperatures, ncycles, ninit, outdir, printevery, outtype, record)
         initialize_record!(record, ret)
         ret
     end
@@ -224,8 +236,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     # record and outputs
     mkpath(simu.outdir)
-    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
     startstep = SimulationStep(mc.step, needcomplete(simu.record) ? :all : :output)
+    output, output_task = output_handler(simu.outdir, simu.outtype, startstep)
     if mc.step.parallel
         record_task = @spawn $simu.record(startstep, $energy, -simu.ninit, $mc, $simu)
     else
@@ -376,7 +388,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     push!(reports, energy)
     put!(output, SimulationStep(mc.step, :zero))
     newbaseline = @spawn baseline_energy(mc)
-    isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
+    if !isempty(simu.outdir) && :energies in simu.outtype
+        serialize(joinpath(simu.outdir, "energies.serial"), reports)
+    end
     wait(output_task[])
     lastenergy = fetch(newbaseline)::BaselineEnergyReport
     if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
