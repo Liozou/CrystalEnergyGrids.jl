@@ -86,7 +86,17 @@ struct ProtoSimulationStep
     ffidx::Vector{Vector{Int}}
 end
 
+function Base.show(io::IO, step::Union{ProtoSimulationStep,SimulationStep})
+    n = length(step.atoms)
+    m = length(step.ffidx)
+    print(io, step isa SimulationStep ? "S" : "Proto-s", "imulation step with ", n , " atoms across ", m, " molecule kind")
+    m > 1 && print(io, 's')
+end
+
 """
+    SimulationStep(x::ProtoSimulationStep)
+
+Convert a [`ProtoSimulationStep`](@ref) into a full [`SimulationStep`](@ref).
 """
 function SimulationStep(x::ProtoSimulationStep)
     posidx = [Vector{Int}[] for _ in x.ffidx]
@@ -143,6 +153,8 @@ function StreamSimulationStep(path)
         _load_init(open(path))
     end
 end
+
+Base.close(stream::StreamSimulationStep) = close(stream.io)
 
 
 function _load(io::IO, stream::StreamSimulationStep)
