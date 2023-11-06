@@ -16,15 +16,23 @@ end
 PeriodicNeighbors(a::NTuple{N,Int}, i::NTuple{N,Int}) where {N} = PeriodicNeighbors{N}(a, i)
 Base.length(::PeriodicNeighbors{N}) where {N} = 2*N
 Base.eltype(::PeriodicNeighbors{N}) where {N} = NTuple{N,Int}
-function Base.iterate(x::PeriodicNeighbors{N}, state=(0,true)) where N
-    i, ispos = state
+function Base.iterate(x::PeriodicNeighbors{N}, state=(0,true,MVector{3,Int}())) where N
+    i, ispos, mofs = state
     if ispos
         i += 1
         i == N+1 && return nothing
     end
-    return (ntuple(N) do j
-        j == i ? mod1(x.i[j] + ifelse(ispos, 1, -1), x.a[j]) : x.i[j]
-    end, (i, !ispos))
+    return ((ntuple(N) do j
+        if j == i
+            sign = ifelse(ispos, 1, -1)
+            o, val = fldmod1(x.i[j] + sign, x.a[j])
+            mofs[j] = o*sign
+            val
+        else
+            mofs[j] = 0
+            x.i[j]
+        end
+    end, SVector{3,Int}(mofs)), (i, !ispos))
 end
 
 """
@@ -88,9 +96,10 @@ end
     local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smoothing=0, skip=Returns(false), inplace=false)
 
 Return a list `basinsets` whose elements are the local attraction basins around each energy
-minimum given in `minima`. Each element is a `Set` of grid points `(i,j,k)` such that there
-is a path that only decreases in energy when going from the corresponding energy minimum to
-`(i,j,k)`.
+minimum given in `minima`. Each element is a `Set` of pairs `((i,j,k), offset)` such that
+there is a path that only decreases in energy when going from the corresponding energy
+minimum to the point of coordinates `(i,j,k)` in the unit cell displaced from the energy
+minimum by the `offset`.
 
 For each pair of minima whose Manhattan distance on the grid is lower or equal to
 `smoothing`, their corresponding basins are merged into a single one.
@@ -105,34 +114,33 @@ function local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}};
                       lt=(<), smoothing=0, skip=Returns(false), inplace=false)
     a, b, c, = dims = size(grid)
     nminima = length(minima)
-    basinsets = Vector{Set{NTuple{3,Int}}}(undef, nminima)
+    basinsets = Vector{Set{Tuple{NTuple{3,Int},SVector{3,Int}}}}(undef, nminima)
     @threads for itask in 1:nminima
-        start = minima[itask]
+        start = minima[(itask, zero(SVector{3,Int}))]
         visited = falses(dims)
         istart, jstart, kstart = Tuple(start)
         if skip(grid[istart, jstart, kstart])
-            basinsets[itask] = Set{NTuple{3,Int}}() # filtered below
+            basinsets[itask] = Set{Tuple{NTuple{3,Int},SVector{3,Int}}}() # filtered below
             continue
         end
         visited[istart, jstart, kstart] = true
         Q = [Tuple(start)]
-        for u in Q
+        for (u, ofsu) in Q
             iu, ju, ku = u
             gu = grid[iu,ju,ku]
-            for v in PeriodicNeighbors(dims, u)
+            for (v, ofsv) in PeriodicNeighbors(dims, u)
                 iv, jv, kv = v
                 visited[iv, jv, kv] && continue
                 gv = grid[iv, jv, kv]
                 skip(gv) && continue
                 if lt(gu, grid[iv, jv, kv])
-                    push!(Q, v)
+                    push!(Q, (v, ofsu+ofsv))
                     visited[iv, jv, kv] = true
                 end
             end
         end
         basinsets[itask] = Set(Q)
     end
-    basinsets
     emptysets = findall(isempty, basinsets)
     deleteat!(basinsets, emptysets)
     newminima = deleteat!(inplace || isempty(emptysets) ? minima : copy(minima), emptysets)
@@ -195,7 +203,7 @@ end
 # Base.getindex(x::BasinDecompositon, I...) = x.tree[I...]
 
 """
-    decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3,Int}}})
+    decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{Tuple{NTuple{3,Int},SVector{3,Int}}}})
     decompose_basins(grid::Array{Float64,3}, tolerance::Float64=-Inf; lt=(<), smoothing=0, skip=Returns(false))
 
 Decompose the provided `basinsets` into a grid `nodes` where `nodes[i,j,k]` is the list of
@@ -205,15 +213,15 @@ basins to which the grid point `(i,j,k)` belongs to. Return `(points, nodes)` wh
 If `basinsets` is not provided, it will be computed from [`local_basins`](@ref) with the
 given `tolerance` and keyword arguments.
 """
-function decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3,Int}}})
+function decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{Tuple{NTuple{3,Int},SVector{3,Int}}}})
     nodes = fill(Int[], size(grid))
     n = length(basinsets)
     refvectors = [[i] for i in 1:n]
     refidx = Dict{Vector{Int},Int}([[i] => i for i in 1:n])
-    pointsset = Set{NTuple{3,Int}}()
+    pointsset = Set{Tuple{NTuple{3,Int},SVector{3,Int}}}()
     for (iset, set) in enumerate(basinsets)
         union!(pointsset, set)
-        for (i, j, k) in set
+        for ((i, j, k), _) in set
             node = nodes[i,j,k]
             push!(node, iset)
             ref = get(refidx, node, nothing)
@@ -228,7 +236,7 @@ function decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3
         end
     end
     points = collect(pointsset)
-    sort!(points; lt=((i1,j1,k1),(i2,j2,k2)) -> (k1<k2 || (k1==k2&&(j1<j2 || (j1==j2 && i1<i2)))))
+    sort!(points; lt=(((i1,j1,k1),_),((i2,j2,k2),_)) -> (k1<k2 || (k1==k2&&(j1<j2 || (j1==j2 && ((@assert i1 != i2); i1<i2))))))
     points, nodes
 end
 
@@ -271,7 +279,7 @@ function compute_levels(grid::Array{Float64,4}, mine, maxe, T=300)
         basin = [(i1,i2,i3)]
         Q = [(i1,i2,i3)]
         for I in Q
-            for J in PeriodicNeighbors(A, I)
+            for (J, _) in PeriodicNeighbors(A, I)
                 j1, j2, j3 = J
                 visited[j1,j2,j3] && continue
                 visited[j1,j2,j3] = true
