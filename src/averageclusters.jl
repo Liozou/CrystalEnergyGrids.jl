@@ -151,13 +151,6 @@ function bin_trajectories(path; refT::TK=300.0u"K", step=0.15u"Å", except=())
     totalbins, (totalmine, μ)
 end
 
-function _add_cyclic((x, y, z), (i, j, k), (a, b, c), λ=true, μ=true)
-    ma, mb, mc = (a÷2)*μ, (b÷2)*μ, (c÷2)*μ
-    u = x ≤ ma && i > ma ? (i-a) : x > ma && i ≤ ma ? (i+a) : i
-    v = y ≤ mb && j > mb ? (j-b) : y > mb && j ≤ mb ? (j+b) : j
-    w = z ≤ mc && k > mc ? (k-c) : z > mc && k ≤ mc ? (k+c) : k
-    SVector{3,Float64}(λ*u, λ*v, λ*w)
-end
 
 """
     average_clusters(bins::Array{Float64,3}; smoothing=3, threshold=0.01)
@@ -170,7 +163,7 @@ Manhattan distance on the grid), they are merged. Sites whose total density is l
 Return a list of pairs `(p, center)` where `p` is the probability of having an atom on site
 at position `center`. The coordinates of `center` are in [0, 1).
 """
-function average_clusters(bins::Array{Float64,3}, smoothing=3, threshold=0.01)
+function average_clusters(bins::Array{Float64,3}; smoothing=3, threshold=0.01)
     if smoothing > 0
         grid = imfilter(bins, Kernel.gaussian((smoothing, smoothing, smoothing)), "circular")
         # skip = ≤(maximum(grid[I] for I in eachindex(bins) if iszero(bins[I])))
@@ -181,23 +174,25 @@ function average_clusters(bins::Array{Float64,3}, smoothing=3, threshold=0.01)
     n = length(basinsets)
     @assert !any(isempty, basinsets)
     points, nodes = decompose_basins(grid, basinsets)
+    a, b, c = size(nodes)
     probabilities = zeros(n)
-    center = [zero(SVector{3,Float64}) for _ in 1:n]
+    centers = [zero(SVector{3,Float64}) for _ in 1:n]
     numnodes = zeros(Float64, n)
     for (i,j,k) in points
-        belongs = nodes[i,j,k]
+        u, v, w = mod1(i, a), mod1(j, b), mod1(k, c)
+        belongs = nodes[u,v,w]
         @assert !isempty(belongs)
         λ = inv(length(belongs))
-        for b in belongs
-            probabilities[b] += grid[i,j,k]*λ
-            center[b] += _add_cyclic(center[b], SVector{3,Float64}(i,j,k), size(grid), λ, numnodes[b])
-            numnodes[b] += λ
+        for belong in belongs
+            probabilities[belong] += grid[u,v,w]*λ
+            centers[belong] += λ*SVector{3,Float64}(i,j,k) # not u,v,w, keep the offset!
+            numnodes[belong] += λ
         end
     end
     ret = Tuple{Float64,SVector{3,Float64}}[]
-    for (p, c, λ) in zip(probabilities, center, numnodes)
+    for (p, center, λ) in zip(probabilities, centers, numnodes)
         p > threshold || continue
-        normalized_c = c ./ λ
+        normalized_c = center ./ λ
         push!(ret, (p, normalized_c .- floor.(Int, normalized_c)))
     end
     ret

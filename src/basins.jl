@@ -2,29 +2,20 @@ using Base.Threads: nthreads, @threads
 
 using ImageFiltering: imfilter, Kernel
 
-struct PeriodicNeighbors{N}
-    a::NTuple{N,Int}
+struct GridNeighbors{N}
     i::NTuple{N,Int}
-
-    function PeriodicNeighbors{N}(a::NTuple{N,Int}, i::NTuple{N,Int}) where {N}
-        if any(≤(2), a)
-            error(lazy"Cannot construct a PeriodicNeighbors with dims $a")
-        end
-        new{N}(a,i)
-    end
 end
-PeriodicNeighbors(a::NTuple{N,Int}, i::NTuple{N,Int}) where {N} = PeriodicNeighbors{N}(a, i)
-Base.length(::PeriodicNeighbors{N}) where {N} = 2*N
-Base.eltype(::PeriodicNeighbors{N}) where {N} = NTuple{N,Int}
-function Base.iterate(x::PeriodicNeighbors{N}, state=(0,true)) where N
-    i, ispos = state
-    if ispos
+Base.length(::GridNeighbors{N}) where {N} = 2*N
+Base.eltype(::GridNeighbors{N}) where {N} = NTuple{N,Int}
+function Base.iterate(x::GridNeighbors{N}, state=(0,1)) where N
+    i, sign = state
+    if sign == 1
         i += 1
         i == N+1 && return nothing
     end
     return (ntuple(N) do j
-        j == i ? mod1(x.i[j] + ifelse(ispos, 1, -1), x.a[j]) : x.i[j]
-    end, (i, !ispos))
+        j == i ? x.i[j] + sign : x.i[j]
+    end, (i, -sign))
 end
 
 """
@@ -117,10 +108,10 @@ function local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}};
         visited[istart, jstart, kstart] = true
         Q = [Tuple(start)]
         for u in Q
-            iu, ju, ku = u
+            iu, ju, ku = mod1.(u, dims)
             gu = grid[iu,ju,ku]
-            for v in PeriodicNeighbors(dims, u)
-                iv, jv, kv = v
+            for v in GridNeighbors(u)
+                iv, jv, kv = mod1.(v, dims)
                 visited[iv, jv, kv] && continue
                 gv = grid[iv, jv, kv]
                 skip(gv) && continue
@@ -207,6 +198,7 @@ given `tolerance` and keyword arguments.
 """
 function decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3,Int}}})
     nodes = fill(Int[], size(grid))
+    a, b, c = size(nodes)
     n = length(basinsets)
     refvectors = [[i] for i in 1:n]
     refidx = Dict{Vector{Int},Int}([[i] => i for i in 1:n])
@@ -214,7 +206,8 @@ function decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3
     for (iset, set) in enumerate(basinsets)
         union!(pointsset, set)
         for (i, j, k) in set
-            node = nodes[i,j,k]
+            u, v, w = mod1(i, a), mod1(j, b), mod1(k, c)
+            node = nodes[u, v, w]
             push!(node, iset)
             ref = get(refidx, node, nothing)
             if ref isa Nothing
@@ -224,11 +217,11 @@ function decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3
                 ref = length(refvectors)
             end
             pop!(node)
-            nodes[i,j,k] = refvectors[ref]
+            nodes[u, v, w] = refvectors[ref]
         end
     end
     points = collect(pointsset)
-    sort!(points; lt=((i1,j1,k1),(i2,j2,k2)) -> (k1<k2 || (k1==k2&&(j1<j2 || (j1==j2 && i1<i2)))))
+    sort!(points; lt=((i1,j1,k1),(i2,j2,k2)) -> (k1<k2 || (k1==k2&&(j1<j2 || (j1==j2 && (@assert(i1!=i2); i1<i2))))))
     points, nodes
 end
 
@@ -261,6 +254,7 @@ end
 function compute_levels(grid::Array{Float64,4}, mine, maxe, T=300)
     basins = Vector{NTuple{3,Int}}[]
     _, a1, a2, a3 = size(grid)
+    dims = (a1, a2, a3)
     visited = falses(a1, a2, a3)
     A = (a1, a2, a3)
     for i3 in 1:a3, i2 in 1:a2, i1 in 1:a1
@@ -271,8 +265,8 @@ function compute_levels(grid::Array{Float64,4}, mine, maxe, T=300)
         basin = [(i1,i2,i3)]
         Q = [(i1,i2,i3)]
         for I in Q
-            for J in PeriodicNeighbors(A, I)
-                j1, j2, j3 = J
+            for J in GridNeighbors(A, I)
+                j1, j2, j3 = mod1.(J, dims)
                 visited[j1,j2,j3] && continue
                 visited[j1,j2,j3] = true
                 ej = meanBoltzmann(view(grid, :, j1, j2, j3), T)
