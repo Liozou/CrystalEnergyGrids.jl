@@ -4,7 +4,7 @@ export output_pdb, output_restart
 
 SimulationStep(mc::MonteCarloSetup) = SimulationStep(mc.step, :output)
 
-function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i, atomcounter)
+function output_pdb(path, o::Union{ProtoSimulationStep,SimulationStep}, (a, b, c), (α, β, γ), i, atomcounter)
     invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
     open(path, "a") do io
         @printf io "MODEL     %4d\n" i

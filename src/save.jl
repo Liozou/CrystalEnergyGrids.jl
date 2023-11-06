@@ -86,6 +86,8 @@ struct ProtoSimulationStep
     ffidx::Vector{Vector{Int}}
 end
 
+"""
+"""
 function SimulationStep(x::ProtoSimulationStep)
     posidx = [Vector{Int}[] for _ in x.ffidx]
     not_in_freespecies = [BitSet() for _ in x.ffidx]
@@ -108,7 +110,13 @@ function SimulationStep(x::ProtoSimulationStep)
     SimulationStep(x.ff, x.charges, psystem, x.atoms, posidx, freespecies, x.isrigid, x.ffidx)
 end
 
+"""
+    StreamSimulationStep
 
+Iterable reader of a "steps.stream" or "steps.zst" output file.
+
+Each iteration returns a [`ProtoSimulationStep`](@ref).
+"""
 struct StreamSimulationStep
     io::Union{IOStream,TranscodingStream{ZstdDecompressor,IOStream}}
     ff::ForceField
@@ -154,3 +162,24 @@ end
 Base.IteratorSize(::Type{StreamSimulationStep}) = Base.SizeUnknown()
 Base.eltype(::Type{StreamSimulationStep})= ProtoSimulationStep
 Base.isdone(stream::StreamSimulationStep, _=nothing) = eof(stream.io)
+
+"""
+    stream_to_pdb(dir::AbstractString)
+
+Takes either "steps.serial" or "steps.zst" for the given folder `dir` and
+create an `output.pdb` file in the same folder containing the same information.
+"""
+function stream_to_pdb(dir::AbstractString)
+    trajectory = joinpath(dir, "trajectory.pdb")
+    if isfile(joinpath(dir, "trajectory.pdb"))
+        error(lazy"$(joinpath(dir, \"trajectory.pdb\")) already exists.")
+    end
+    _serialfile = joinpath(dir, "steps.serial")
+    stream = StreamSimulationStep(isfile(_serialfile) ? _serialfile : joinpath(dir, "steps.zst"))
+    atomcounter = Counter3D()
+    for (i, step) in enumerate(stream)
+        lengths, angles = cell_parameters(step.mat)
+        output_pdb(trajectory, step, lengths, angles, i, atomcounter)
+    end
+    nothing
+end
