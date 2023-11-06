@@ -163,7 +163,7 @@ function output_handler(outdir::AbstractString, outtype::Vector{Symbol}, step::S
         isempty(stream_path) || save_init(stream_path, step)
         zst_path = :zst in outtype ? joinpath(outdir, "steps.zst") : ""
         isempty(zst_path) || save_init(zst_path, step)
-        pdb_path = :pdb in outtype ? joinpath(outdir, "positions.pdb") : ""
+        pdb_path = :pdb in outtype ? joinpath(outdir, "trajectory.pdb") : ""
         Channel{SimulationStep}(Inf; taskref) do channel
             i = 0
             while true
