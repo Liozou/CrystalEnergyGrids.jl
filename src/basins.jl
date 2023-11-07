@@ -76,12 +76,12 @@ end
 
 
 """
-    local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smoothing=0, skip=Returns(false), inplace=false)
+    local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smoothing=0, skip=Returns(false), maxdist=0, inplace=false)
 
 Return a list `basinsets` whose elements are the local attraction basins around each energy
 minimum given in `minima`. Each element is a `Set` of grid points `(i,j,k)` such that there
 is a path that only decreases in energy when going from the corresponding energy minimum to
-`(i,j,k)`.
+`(i,j,k)`. If `maxdist > 0`, the path length must be below `maxdist`.
 
 For each pair of minima whose Manhattan distance on the grid is lower or equal to
 `smoothing`, their corresponding basins are merged into a single one.
@@ -93,7 +93,7 @@ If `inplace` is set, the list `minima` will be filtered in-place by removing all
 that should be `skip`ped.
 """
 function local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}};
-                      lt=(<), smoothing=0, skip=Returns(false), inplace=false)
+                      lt=(<), smoothing=0, skip=Returns(false), maxdist=0, inplace=false)
     a, b, c, = dims = size(grid)
     nminima = length(minima)
     basinsets = Vector{Set{NTuple{3,Int}}}(undef, nminima)
@@ -107,7 +107,14 @@ function local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}};
         end
         visited[istart, jstart, kstart] = true
         Q = [Tuple(start)]
-        for u in Q
+        current_dist = 0
+        start_dist = 1
+        mark_dist = false
+        for (idx, u) in enumerate(Q)
+            if idx == start_dist
+                current_dist += 1
+                mark_dist = true
+            end
             iu, ju, ku = mod1.(u, dims)
             gu = grid[iu,ju,ku]
             for v in GridNeighbors(u)
@@ -115,8 +122,12 @@ function local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}};
                 visited[iv, jv, kv] && continue
                 gv = grid[iv, jv, kv]
                 skip(gv) && continue
-                if lt(gu, grid[iv, jv, kv])
+                if (maxdist == 0 || current_dist < maxdist) && lt(gu, grid[iv, jv, kv])
                     push!(Q, v)
+                    if mark_dist
+                        start_dist = length(Q)
+                        mark_dist = false
+                    end
                     visited[iv, jv, kv] = true
                 end
             end
@@ -152,15 +163,15 @@ function local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}};
 end
 
 """
-    local_basins(grid::Array{Float64,3}, tolerance::Float64=-Inf; lt=(<), smoothing=0, skip=Returns(false))
+    local_basins(grid::Array{Float64,3}, tolerance::Float64=-Inf; lt=(<), smoothing=0, skip=Returns(false), maxdist=0)
 
 Equivalent to [`local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smoothing=0, skip=Returns(false))`](@ref)
 where `minima` is computed from [`local_minima`](@ref) with the given `tolerance` and
 keyword arguments.
 """
 function local_basins(grid::Array{Float64,3}, tolerance::Float64=-Inf;
-                      lt=(<), smoothing=0, skip=Returns(false))
-    local_basins(grid, local_minima(grid, tolerance; lt); lt, smoothing, skip)
+                      lt=(<), smoothing=0, skip=Returns(false), maxdist=0)
+    local_basins(grid, local_minima(grid, tolerance; lt); lt, smoothing, skip, maxdist, inplace=true)
 end
 
 
