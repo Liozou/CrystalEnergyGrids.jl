@@ -79,15 +79,15 @@ end
 abstract type RecordFunction <: Function end
 
 mutable struct RMinimumEnergy{N,T} <: RecordFunction
-    mine::BaselineEnergyReport
+    mine::Float64
     minpos::SimulationStep{N,T}
 
-    RMinimumEnergy{N,T}() where {N,T} = new{N,T}(BaselineEnergyReport(Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
-    function RMinimumEnergy(mine::BaselineEnergyReport, minpos::SimulationStep{N,T}) where {N,T}
+    RMinimumEnergy{N,T}() where {N,T} = new{N,T}(Inf)
+    function RMinimumEnergy(mine::Float64, minpos::SimulationStep{N,T}) where {N,T}
         new{N,T}(mine, minpos)
     end
 end
-function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k::Int,
+function (record::RMinimumEnergy)(o::SimulationStep, e::Float64, k::Int,
                                   mc::MonteCarloSetup, simu::SimulationSetup)
     if Float64(e) < Float64(record.mine)
         record.mine = e
@@ -105,14 +105,14 @@ struct ShootingStarMinimizer{N,T} <: RecordFunction
     every::Int
     length::Int
     positions::Vector{SimulationStep{N,T}}
-    energies::Vector{BaselineEnergyReport}
+    energies::Vector{Float64}
     outdir::String
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
 end
 function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") where {N}
     T = typeof_psystem(Val(N))
     positions = Vector{SimulationStep{N,T}}(undef, 0)
-    energies = Vector{BaselineEnergyReport}(undef, 0)
+    energies = Vector{Float64}(undef, 0)
     # lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
     lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(7) do (ik, newmc, newsimu)
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
@@ -130,7 +130,7 @@ function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: Shoot
     resize!(star.energies, n)
 end
 
-function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
+function (star::ShootingStarMinimizer)(o::SimulationStep, e::Float64, k::Int, mc::MonteCarloSetup, _)
     k ≤ 0 && return
     ik, r = divrem(k, star.every)
     r == 0 || return
@@ -150,14 +150,14 @@ struct RainfallMinimizer{N,T} <: RecordFunction
     every::Int
     length::Int
     positions::Vector{SimulationStep{N,T}}
-    energies::Vector{BaselineEnergyReport}
+    energies::Vector{Float64}
     tasks::Vector{Task}
 end
 
 function RainfallMinimizer{N}(; length::Int=100, every::Int=1) where {N}
     T = typeof_psystem(Val(N))
     positions = Vector{SimulationStep{N,T}}(undef, 0)
-    energies = Vector{BaselineEnergyReport}(undef, 0)
+    energies = Vector{Float64}(undef, 0)
     tasks = Vector{Task}(undef, 0)
     RainfallMinimizer{N,T}(every, length, positions, energies, tasks)
 end
@@ -169,7 +169,7 @@ function initialize_record!(rain::T, simu::SimulationSetup{T}) where {T<:Rainfal
     resize!(rain.tasks, n)
 end
 
-function (rain::RainfallMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
+function (rain::RainfallMinimizer)(o::SimulationStep, e::Float64, k::Int, mc::MonteCarloSetup, _)
     k ≤ 0 && return
     ik, r = divrem(k, rain.every)
     r == 0 || return

@@ -199,8 +199,8 @@ See [`MonteCarloSetup`](@ref) for the definition of the system and
 """
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # energy initialization
-    energy = baseline_energy(mc)
-    reports = typeof(energy)[]
+    energy = rand()
+    reports = Float64[]
 
     thistask = current_task().storage
     if !(thistask isa Int)
@@ -258,8 +258,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             oldpos = newpos
             speak("Task ", thistask, " accepting...")
             mc.step.positions[mc.step.posidx[idx[1]][idx[2]]] .= oldpos
-            diff = MCEnergyReport(FrameworkEnergyReport(rand()*u"K", rand()*u"K"), rand()*u"K", rand()*u"K")
-            energy += diff
+            energy += rand()
             speak("Task ", thistask, " accepted.")
         end
 
@@ -283,9 +282,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         end
     end
     push!(reports, energy)
-    newbaseline = @spawn baseline_energy(mc)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
-    lastenergy = fetch(newbaseline)::BaselineEnergyReport
     # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
     #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
     # end
@@ -300,8 +297,8 @@ end
 
 function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
     # energy initialization
-    energy = baseline_energy(mc)
-    reports = typeof(energy)[]
+    energy = rand()
+    reports = Float64[]
 
     thistask = current_task().storage
     if !(thistask isa Int)
@@ -345,8 +342,7 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
             oldpos = newpos
             speak("Task ", thistask, " accepting...")
             mc.step.positions[mc.step.posidx[idx[1]][idx[2]]] .= oldpos
-            diff = MCEnergyReport(FrameworkEnergyReport(rand()*u"K", rand()*u"K"), rand()*u"K", rand()*u"K")
-            energy += diff
+            energy += rand()
             speak("Task ", thistask, " accepted.")
         end
 
@@ -359,9 +355,7 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
         speak("Task ", thistask, " recorded.")
     end
     push!(reports, energy)
-    newbaseline = @spawn baseline_energy(mc)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
-    lastenergy = fetch(newbaseline)::BaselineEnergyReport
     # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
     #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
     # end
