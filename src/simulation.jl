@@ -230,7 +230,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # value initialisations
     nummol = max(20, length(mc.indices))
     old_idx = (0,0)
-    accepted = false
     statistics = MoveStatistics(1.3u"Å", 30.0u"°")
 
     # main loop
@@ -246,15 +245,11 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
+            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
 
             # newpos is the position after the trial move
             attempt!(statistics.translation)
             newpos = random_translation(mc.rng, currentposition, statistics.dmax)
-
-            # if the previous move was accepted, wait for mc to be completely up to date
-            # before computing
-            accepted && wait(running_update)
 
             speak("Task ", thistask, " core running...")
             speak("Task ", thistask, " core run.")
@@ -273,7 +268,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         # end of cycle
         report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
         if !(simu.record isa Returns) || report_now
-            accepted && wait(running_update)
             if report_now
                 speak("Task ", thistask, " reporting...")
                 push!(reports, energy)
@@ -287,14 +281,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             end
             yield()
         end
-
-        translation_ratio = statistics.translation()
-        if !isnan(translation_ratio)
-            statistics.dmax *= 1 + rand()/100
-        end
     end
-    speak("Task ", thistask, " waiting.")
-    accepted && wait(running_update)
     push!(reports, energy)
     newbaseline = @spawn baseline_energy(mc)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
@@ -332,7 +319,6 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
     # value initialisations
     nummol = max(20, length(mc.indices))
     old_idx = (0,0)
-    accepted = false
 
     # main loop
     for idx_cycle in 1:10
@@ -347,14 +333,10 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
+            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
 
             # newpos is the position after the trial move
             newpos = random_translation(mc.rng, currentposition, 1.3u"Å")
-
-            # if the previous move was accepted, wait for mc to be completely up to date
-            # before computing
-            accepted && wait(running_update)
 
             speak("Task ", thistask, " core running...")
             speak("Task ", thistask, " core run.")
@@ -376,8 +358,6 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
         simu.record(ocomplete, energy, idx_cycle, mc, simu)
         speak("Task ", thistask, " recorded.")
     end
-    speak("Task ", thistask, " waiting.")
-    accepted && wait(running_update)
     push!(reports, energy)
     newbaseline = @spawn baseline_energy(mc)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
