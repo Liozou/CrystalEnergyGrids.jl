@@ -1,7 +1,7 @@
 export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
 
-struct MonteCarloSetup{N,Trng}
-    step::SimulationStep{N}
+struct MonteCarloSetup{N,T,Trng}
+    step::SimulationStep{N,T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     tailcorrection::Base.RefValue{TK}
@@ -51,7 +51,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
                           blocksetup::Vector{String},
                           num_framework_atoms::Vector{Int},
                           restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,TÅ}}}}};
-                          rng=default_rng(), mcmoves::Vector)
+                          parallel::Bool=true, rng=default_rng(), mcmoves::Vector)
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
@@ -172,7 +172,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         end
     end
 
-    MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell),
+    MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
                     speciesblocks, atomblocks, beads, newmcmoves, rng), indices
 end
@@ -219,7 +219,7 @@ monoatomic species, or [49% translation, 49% rotation, 2% random reinsertion] el
 """
 function setup_montecarlo(framework, forcefield_framework::String, systems;
                           blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
-                          supercell=nothing, new=false, restart=nothing,
+                          supercell=nothing, new=false, restart=nothing, parallel=true,
                           mcmoves=fill(nothing, length(systems)), rng=default_rng())
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
@@ -276,7 +276,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
 
     restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
 
-    setup_montecarlo(cell, csetup, systems, ff, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; rng, mcmoves)
+    setup_montecarlo(cell, csetup, systems, ff, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; parallel, rng, mcmoves)
 end
 
 """
@@ -296,9 +296,9 @@ parallelized or not.
     `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
     modifying states outside of the API.
 """
-function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; )
+function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
     rng = deepcopy(mc.rng)
-    MonteCarloSetup(SimulationStep(o, :all),
+    MonteCarloSetup(SimulationStep(o, :all; parallel),
                     Ref(mc.tailcorrection[]), deepcopy(mc.coulomb), deepcopy(mc.grids), copy(mc.offsets),
                     copy(mc.indices), deepcopy(mc.speciesblocks), deepcopy(mc.atomblocks), copy(mc.bead),
                     copy(mc.mcmoves), rng)

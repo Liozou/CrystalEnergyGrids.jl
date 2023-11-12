@@ -457,6 +457,19 @@ function get_atom_name(atom)
     return name
 end
 
+
+Base.@assume_effects :foldable function typeof_psystem(::Val{N}) where N
+    typeof(PeriodicSystem(;
+        xpositions=SVector{N,typeof(1.0u"Å")}[],
+        ypositions=SVector{N,typeof(1.0u"Å")}[],
+        unitcell=SMatrix{3,3,Float64,9}(LinearAlgebra.I)*30.0u"Å",
+        cutoff=12.0u"Å",
+        parallel=true,
+        output=0.0u"K"
+    ))
+end
+
+
 function block_average(l; num=nothing, size=nothing)
     n = length(l)
     sizeint = size isa AbstractFloat ? round(Int, n*size) : size

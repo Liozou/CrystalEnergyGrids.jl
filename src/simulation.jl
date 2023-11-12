@@ -266,7 +266,13 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # record and outputs
     mkpath(simu.outdir)
     output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
-
+    # startstep = SimulationStep(mc.step, needcomplete(simu.record) ? :all : :output)
+    # if mc.step.parallel
+    #     record_task = @spawn $simu.record(startstep, $energy, -simu.ninit, $mc, $simu)
+    # else
+    #     simu.record(startstep, energy, -simu.ninit, mc, simu) === :stop && return [energy]
+    #     record_task = @spawn nothing # for type stability
+    # end
     record_task = @spawn nothing
 
     if simu.ninit == 0
@@ -335,15 +341,19 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 # else
                 #     before = fetch(before_task) # simply keep its previous value
                 end
-                fer = framework_interactions(mc, i, newpos)
-                after = MCEnergyReport(fer, rand()*u"K", rand()*u"K")
+                @spawnif mc.step.parallel begin
+                    fer = @spawn framework_interactions($mc, $i, $newpos)
+                    after = MCEnergyReport(fetch(fer)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
+                end
             else
                 molpos = mc.step.posidx[i][j]
                 positions = @view mc.step.positions[molpos]
-                fer_before = framework_interactions(mc, i, positions)
-                fer_after = framework_interactions(mc, i, newpos)
-                before = MCEnergyReport(fer_before, rand()*u"K", rand()*u"K")
-                after = MCEnergyReport(fer_after, rand()*u"K", rand()*u"K")
+                @spawnif mc.step.parallel begin
+                    fer_before = @spawn framework_interactions($mc, $i, $positions)
+                    fer_after = @spawn framework_interactions($mc, $i, $newpos)
+                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
+                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
+                end
             end
             speak("Task ", thistask, " core run.")
 
@@ -352,7 +362,12 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             oldpos = newpos
             if accepted
                 speak("Task ", thistask, " accepting...")
-                update_mc!(mc, idx, oldpos)
+                if mc.step.parallel
+                    # do not use newpos since it can be changed in the next iteration before the Task is run
+                    running_update = @spawn update_mc!($mc, $idx, $oldpos)
+                else
+                    update_mc!(mc, idx, oldpos)
+                end
                 diff = after - before
                 accept!(statistics, move)
                 if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
@@ -380,9 +395,16 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             end
             if !(simu.record isa Returns)
                 ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
-                speak("Task ", thistask, " recording...")
-                simu.record(ocomplete, energy, idx_cycle, mc, simu)
-                speak("Task ", thistask, " recorded.")
+                if mc.step.parallel
+                    # ret_record cannot be inferred, but that's fine
+                    ret_record = fetch(record_task)
+                    ret_record === :stop && break
+                    record_task = @spawn $simu.record($ocomplete, $energy, $idx_cycle, $mc, $simu)
+                else
+                    speak("Task ", thistask, " recording...")
+                    simu.record(ocomplete, energy, idx_cycle, mc, simu)
+                    speak("Task ", thistask, " recorded.")
+                end
             end
             yield()
         end
