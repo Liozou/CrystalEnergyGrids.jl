@@ -441,17 +441,6 @@ function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     MCEnergyReport(fetch(fer), singlevdw, rand())
 end
 
-"""
-    update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}})
-
-Following a call to [`movement_energy(mc, idx, positions)`](@ref), update the internal
-state of `mc` so that the species of index `idx` is now at `positions`.
-"""
-function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}})
-    L = mc.step.posidx[i][j]
-    mc.step.positions[L] .= positions
-    nothing
-end
 
 
 function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::Vector{Int}, newpos::Vector{SVector{3,TÅ}})

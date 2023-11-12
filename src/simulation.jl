@@ -163,49 +163,6 @@ end
 # function MoveStatistics(dmax, θmax)
 #     MoveStatistics(dmax, θmax, MoveKind()...)
 # end
-function accept!(statistics, move)
-    # avoid using a type-unstable getfield here by explicitly splitting
-    if move === :translation
-        accept!(statistics.translation)
-    elseif move === :rotation
-        accept!(statistics.rotation)
-    end
-    nothing
-end
-
-
-"""
-    choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup, pos::Vector{SVector{3,TÅ}}, randomdmax::TÅ, i::Int)
-
-Choose an MC move for the molecule at positions given by `pos` and return a pair
-`(newpos, movekind)` where `newpos` is the list of atom positions after the move, and
-`movekind` is the kind of move that was chosen, as a `Symbol`.
-
-`i` is the kind of the molecule
-
-`randomdmax` is the maximum distance between two points in the unit cell (used in random
-translations for instance).
-"""
-function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
-                        pos::AbstractVector{SVector{3,TÅ}}, randomdmax::TÅ, i::Int)
-    r = rand(mc.rng)
-    movekind = mc.mcmoves[i](r)
-    if movekind === :translation
-        attempt!(statistics.translation)
-        random_translation(mc.rng, pos, statistics.dmax)
-    elseif movekind === :rotation
-        attempt!(statistics.rotation)
-        random_rotation(mc.rng, pos, statistics.θmax, mc.bead[i])
-    elseif movekind === :random_translation
-        random_translation(mc.rng, pos, randomdmax)
-    elseif movekind === :random_rotation
-        random_rotation(mc.rng, pos, 180u"°", mc.bead[i])
-    elseif movekind === :random_reinsertion
-        random_rotation(mc.rng, random_translation(mc.rng, pos, randomdmax), 180u"°", mc.bead[i])
-    else
-        error(lazy"Unknown move kind: $movekind")
-    end, movekind
-end
 
 
 const GLOBAL_LOCK = ReentrantLock()
@@ -266,41 +223,21 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # record and outputs
     mkpath(simu.outdir)
     output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
-    # startstep = SimulationStep(mc.step, needcomplete(simu.record) ? :all : :output)
-    # if mc.step.parallel
-    #     record_task = @spawn $simu.record(startstep, $energy, -simu.ninit, $mc, $simu)
-    # else
-    #     simu.record(startstep, energy, -simu.ninit, mc, simu) === :stop && return [energy]
-    #     record_task = @spawn nothing # for type stability
-    # end
     record_task = @spawn nothing
-
-    if simu.ninit == 0
-        if simu.ncycles == 0 && # single-point computation
-            put!(output, SimulationStep(mc.step, :zero))
-            wait(record_task)
-            wait(output_task[])
-            return [energy]
-        end
-        push!(reports, energy)
-    end
 
     # idle initialisations
     running_update = @spawn nothing
     local oldpos::Vector{SVector{3,TÅ}}
-    local before::MCEnergyReport
-    local after::MCEnergyReport
 
     # value initialisations
     nummol = max(20, length(mc.indices))
     old_idx = (0,0)
     accepted = false
     statistics = MoveStatistics(1.3u"Å", 30.0u"°")
-    randomdmax = maximum(norm, eachcol(mc.step.mat))
 
     # main loop
-    for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
-        temperature = simu.temperatures[counter_cycle]
+    for idx_cycle in 1:10
+        temperature = 300u"K"
 
         speak("Task ", thistask, " cycle ", idx_cycle)
 
@@ -314,47 +251,16 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
 
             # newpos is the position after the trial move
-            newpos, move = choose_newpos!(statistics, mc, currentposition, randomdmax, idx[1])
-
-            # check blocking pockets to refuse the trial early when possible
-            if inblockpocket(mc.speciesblocks[idx[1]], mc.atomblocks, ffidxi, newpos)
-                # note that if the move is blocked here, neither oldpos, old_idx nor
-                # accepted are updated.
-                # This is allows waiting for the next cycle before waiting on the
-                # running_update task.
-                # However it will still be taken it into account for the translation and
-                # rotation trial values updates.
-                continue
-            end
+            attempt!(statistics.translation)
+            newpos = random_translation(mc.rng, currentposition, statistics.dmax)
 
             # if the previous move was accepted, wait for mc to be completely up to date
             # before computing
             accepted && wait(running_update)
 
-            i, j = idx
-            ij = mc.offsets[i]+j
-
             speak("Task ", thistask, " core running...")
-            if old_idx == idx
-                if accepted
-                    before = after
-                # else
-                #     before = fetch(before_task) # simply keep its previous value
-                end
-                @spawnif mc.step.parallel begin
-                    fer = @spawn framework_interactions($mc, $i, $newpos)
-                    after = MCEnergyReport(fetch(fer)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
-                end
-            else
-                molpos = mc.step.posidx[i][j]
-                positions = @view mc.step.positions[molpos]
-                @spawnif mc.step.parallel begin
-                    fer_before = @spawn framework_interactions($mc, $i, $positions)
-                    fer_after = @spawn framework_interactions($mc, $i, $newpos)
-                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
-                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, rand()*u"K", rand()*u"K")
-                end
-            end
+            before = MCEnergyReport(FrameworkEnergyReport(rand()*u"K", rand()*u"K"), rand()*u"K", rand()*u"K")
+            after = MCEnergyReport(FrameworkEnergyReport(rand()*u"K", rand()*u"K"), rand()*u"K", rand()*u"K")
             speak("Task ", thistask, " core run.")
 
             old_idx = idx
@@ -362,20 +268,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             oldpos = newpos
             if accepted
                 speak("Task ", thistask, " accepting...")
-                if mc.step.parallel
-                    # do not use newpos since it can be changed in the next iteration before the Task is run
-                    running_update = @spawn update_mc!($mc, $idx, $oldpos)
-                else
-                    update_mc!(mc, idx, oldpos)
-                end
+                mc.step.positions[mc.step.posidx[idx[1]][idx[2]]] .= oldpos
                 diff = after - before
-                accept!(statistics, move)
-                if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
-                    wait(running_update)
-                    energy = baseline_energy(mc) # to avoid underflows
-                else
-                    energy += diff
-                end
+                energy += diff
                 speak("Task ", thistask, " accepted.")
             end
         end
@@ -395,27 +290,16 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             end
             if !(simu.record isa Returns)
                 ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
-                if mc.step.parallel
-                    # ret_record cannot be inferred, but that's fine
-                    ret_record = fetch(record_task)
-                    ret_record === :stop && break
-                    record_task = @spawn $simu.record($ocomplete, $energy, $idx_cycle, $mc, $simu)
-                else
-                    speak("Task ", thistask, " recording...")
-                    simu.record(ocomplete, energy, idx_cycle, mc, simu)
-                    speak("Task ", thistask, " recorded.")
-                end
+                speak("Task ", thistask, " recording...")
+                simu.record(ocomplete, energy, idx_cycle, mc, simu)
+                speak("Task ", thistask, " recorded.")
             end
             yield()
         end
 
         translation_ratio = statistics.translation()
         if !isnan(translation_ratio)
-            statistics.dmax *= 1 + (translation_ratio - 0.5)*(1.0 + 3*translation_ratio)*100/(99+counter_cycle)
-        end
-        rotation_ratio = statistics.rotation()
-        if !isnan(rotation_ratio)
-            statistics.θmax = (counter_cycle-1)/counter_cycle*statistics.θmax + rotation_ratio/counter_cycle*120u"°"
+            statistics.dmax *= 1 + rand()/100
         end
     end
     speak("Task ", thistask, " waiting.")

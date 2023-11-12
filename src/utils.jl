@@ -547,18 +547,6 @@ function stripspawn(@nospecialize(expr), dict::IdDict{Symbol,Symbol}, inspawncal
     end
 end
 
-macro spawnif(dospawn, expr)
-    stripped = stripspawn(expr, IdDict{Symbol,Symbol}())
-    esc(quote
-        if $dospawn
-            $expr
-        else
-            $stripped
-        end
-    end)
-end
-
-
 """
     LoadBalancer{T}
 
