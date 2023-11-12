@@ -222,8 +222,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     # record and outputs
     mkpath(simu.outdir)
-    output, output_task = pdb_output_handler(isempty(simu.outdir) ? "" : joinpath(simu.outdir, "trajectory.pdb"), mc.step.mat)
-    record_task = @spawn nothing
 
     # idle initialisations
     running_update = @spawn nothing
@@ -281,15 +279,13 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
         if !(simu.record isa Returns) || report_now
             accepted && wait(running_update)
-            o = SimulationStep(mc.step, :output)
             if report_now
                 speak("Task ", thistask, " reporting...")
-                put!(output, o)
                 push!(reports, energy)
                 speak("Task ", thistask, " reported.")
             end
             if !(simu.record isa Returns)
-                ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
+                ocomplete = SimulationStep(mc.step, :all)
                 speak("Task ", thistask, " recording...")
                 simu.record(ocomplete, energy, idx_cycle, mc, simu)
                 speak("Task ", thistask, " recorded.")
@@ -303,13 +299,117 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         end
     end
     speak("Task ", thistask, " waiting.")
-    wait(record_task)
     accepted && wait(running_update)
     push!(reports, energy)
-    put!(output, SimulationStep(mc.step, :zero))
     newbaseline = @spawn baseline_energy(mc)
     isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
-    wait(output_task[])
+    lastenergy = fetch(newbaseline)::BaselineEnergyReport
+    # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
+    #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
+    # end
+    speak("Task ", thistask, " fetching.")
+    fetch(simu.record)
+    speak("!!! Task ", thistask, " finished"); flush(stdout)
+    reports
+end
+
+
+
+
+function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
+    # energy initialization
+    energy = baseline_energy(mc)
+    reports = typeof(energy)[]
+
+    thistask = current_task().storage
+    if !(thistask isa Int)
+        thistask = -1
+    end
+    thistask::Int
+
+    # record and outputs
+    mkpath(simu.outdir)
+
+    # idle initialisations
+    running_update = @spawn nothing
+    local oldpos::Vector{SVector{3,TÅ}}
+
+    # value initialisations
+    nummol = max(20, length(mc.indices))
+    old_idx = (0,0)
+    accepted = false
+    statistics = MoveStatistics(1.3u"Å", 30.0u"°")
+
+    # main loop
+    for idx_cycle in 1:10
+        temperature = 300u"K"
+
+        speak("Task ", thistask, " cycle ", idx_cycle)
+
+        for idnummol in 1:nummol
+            # choose the species on which to attempt a move
+            idx = choose_random_species(mc)
+            ffidxi = mc.step.ffidx[idx[1]]
+
+            # currentposition is the position of that species
+            # currentposition is either a Vector or a @view, that's OK
+            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
+
+            # newpos is the position after the trial move
+            attempt!(statistics.translation)
+            newpos = random_translation(mc.rng, currentposition, statistics.dmax)
+
+            # if the previous move was accepted, wait for mc to be completely up to date
+            # before computing
+            accepted && wait(running_update)
+
+            speak("Task ", thistask, " core running...")
+            before = MCEnergyReport(FrameworkEnergyReport(rand()*u"K", rand()*u"K"), rand()*u"K", rand()*u"K")
+            after = MCEnergyReport(FrameworkEnergyReport(rand()*u"K", rand()*u"K"), rand()*u"K", rand()*u"K")
+            speak("Task ", thistask, " core run.")
+
+            old_idx = idx
+            accepted = compute_accept_move(before, after, temperature, mc.rng)
+            oldpos = newpos
+            if accepted
+                speak("Task ", thistask, " accepting...")
+                mc.step.positions[mc.step.posidx[idx[1]][idx[2]]] .= oldpos
+                diff = after - before
+                energy += diff
+                speak("Task ", thistask, " accepted.")
+            end
+        end
+
+        speak("Task ", thistask, " end of cycle")
+
+        # end of cycle
+        report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
+        if !(simu.record isa Returns) || report_now
+            accepted && wait(running_update)
+            if report_now
+                speak("Task ", thistask, " reporting...")
+                push!(reports, energy)
+                speak("Task ", thistask, " reported.")
+            end
+            if !(simu.record isa Returns)
+                ocomplete = SimulationStep(mc.step, :all)
+                speak("Task ", thistask, " recording...")
+                simu.record(ocomplete, energy, idx_cycle, mc, simu)
+                speak("Task ", thistask, " recorded.")
+            end
+            yield()
+        end
+
+        translation_ratio = statistics.translation()
+        if !isnan(translation_ratio)
+            statistics.dmax *= 1 + rand()/100
+        end
+    end
+    speak("Task ", thistask, " waiting.")
+    accepted && wait(running_update)
+    push!(reports, energy)
+    newbaseline = @spawn baseline_energy(mc)
+    isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
     lastenergy = fetch(newbaseline)::BaselineEnergyReport
     # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
     #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
