@@ -321,15 +321,8 @@ choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.indices)
 
 function randomize_position!(positions, rng, indices, bead, block, ffidxi, atomblocks, d)
     pos = @view positions[indices]
-    for _ in 1:30
-        posr = random_rotation(rng, random_rotation(rng, random_rotation(rng, pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
-        for _ in 1:1000
-            post = random_translation(rng, posr, d)
-            if !inblockpocket(block, atomblocks, ffidxi, post)
-                positions[indices] .= post
-                return post
-            end
-        end
-    end
-    error(lazy"Could not find a suitable position for molecule $((i,j))!")
+    posr = random_rotation(rng, random_rotation(rng, random_rotation(rng, pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
+    post = random_translation(rng, posr, d)
+    positions[indices] .= post
+    post
 end
