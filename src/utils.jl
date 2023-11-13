@@ -581,19 +581,20 @@ end
 using Serialization
 
 """
-    LoadBalancer{T}(f, n::Integer=nthreads())
+    LoadBalancer{T}(f, n::Integer=nthreads()-1)
 
-Given a function `f`, create `n` tasks that wait on an input `x::T` to execute `f(x)`.
+Given a function `f`, create `n` tasks that wait on an input `x::T` to execute `f(x, i)`
+where `i` is between 1 and `n` and uniquely identifies each task.
 With `lb = LoadBalancer(f, n)`, use `put!(lb, x)` to send `x` to one of the tasks: this
-call is not blocking and will always return immediately, but the `f(x)` call will not occur
-until one of the `n` tasks is free. Use `wait(lb)` to wait until all inputs have been
-processed.
+call is not blocking and will always return immediately, but the `f(x, i)` call will not
+occur until one of the `n` tasks is free.
+Use `wait(lb)` to wait until all inputs have been processed.
 
 ## Example
 
 ```julia
-lb = LoadBalancer{Tuple{Int,String}}() do (i,s)
-    some_complicated_function(i, s)
+lb = LoadBalancer{Tuple{Int,String}}() do (k,s), _
+    some_complicated_function(k, s)
 end
 
 for i in 1:1000
@@ -612,7 +613,7 @@ function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
     tasks = [(@spawn while true
         x = take!($channel)
         atomic_add!($busy, 1)
-        $f(x)
+        $f(x, $i)
         atomic_sub!($busy, 1)
         notify($event)
     end) for i in 1:n]
