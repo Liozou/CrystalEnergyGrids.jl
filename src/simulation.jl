@@ -325,8 +325,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                     fer_after = @spawn framework_interactions($mc, $i, $newpos)
                     singlevdw_before = fetch(singlevdw_before_task)::TK
                     singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
-                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, singlevdw_before, singlereciprocal_before)
-                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, singlevdw_after, fetch(singlereciprocal_after)::TK)
+                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, singlevdw_before, fetch(singlereciprocal_before)::TK)
+                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, fetch(singlevdw_after)::TK, fetch(singlereciprocal_after)::TK)
                 end
             end
 
