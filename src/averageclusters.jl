@@ -1,3 +1,6 @@
+using ImageFiltering: Kernel, mapwindow
+using StatsBase: median, AnalyticWeights
+
 struct PDBModelIterator
     io::IOStream
 end
@@ -58,158 +61,162 @@ function mat_from_output(path::AbstractString, ::Val{EXT}) where EXT
     end
 end
 
-function find_output_file(dir)
-    path = joinpath(dir, "steps.stream")
-    isfile(path) && return path, :stream, Val(:stream)
-    path = joinpath(dir, "steps.zst")
-    isfile(path) && return path, :zst, Val(:stream)
-    path = joinpath(dir, "trajectory.pdb")
-    isfile(path) && return path, :pdb, Val(:pdb)
+function find_output_file(path)
+    if isfile(path)
+        basename(path) == "steps.stream" && return path, :stream, Val(:stream)
+        basename(path) == "steps.zst" && return path, :zst, Val(:stream)
+        basename(path) == "trajectory.pdb" && return path, :pdb, Val(:pdb)
+    else
+        isdir(path) || error(lazy"Input $path is neither a directory nor a file.")
+        file = joinpath(path, "steps.stream")
+        isfile(file) && return file, :stream, Val(:stream)
+        file = joinpath(path, "steps.zst")
+        isfile(file) && return file, :zst, Val(:stream)
+        file = joinpath(path, "trajectory.pdb")
+        isfile(file) && return file, :pdb, Val(:pdb)
+    end
     return "", :none, Val(:stream)
 end
 
 """
-    bin_trajectory(dir; refT::TK=300.0u"K", step=0.15u"Å")
+    bin_trajectory(path; step=0.15u"Å", bins=nothing)
 
-Given the path to a directory `dir` containing the outputs of a simulation,
-return a grid of specified `step` where each point is mapped to the Boltzmann average (at
-temperature `refT`) of the atomic density.
+Given the `path` to a directory containing the outputs of a simulation, or directly to the
+output file, return a pair `(bins, total)` such that `bins` is a grid of specified `step`
+size, where each point is mapped to the number of atoms found in that position, and `total`
+is the number of frames of the output.
 
-Also return `(mine, λ)` where `mine` is the minimum of `energies` and `λ` is the sum of
-`exp((mine-e)/refT)` for `e` in `energies`.
+As a consequence, `bins ./ total` is a map of the average atomic density.
+
+A preallocated `bins` array can be given if it has the correct size. It will be filled by
+the appropriate values and returned instead of a new array.
 """
-function bin_trajectory(dir; refT::TK=300.0u"K", step=0.15u"Å", mat=nothing, bins=nothing)
-    epath = joinpath(dir, "energies.serial")
-    isfile(epath) || error(lazy"Cannot bin trajectory: missing file $epath.")
-    energies = Float64.(deserialize(epath)::Vector{BaselineEnergyReport})*u"K"
-    output, kind, valkind = find_output_file(dir)
+function bin_trajectory(path; step=0.15u"Å", bins=nothing)
+    output, kind, valkind = find_output_file(path)
     kind === :none && error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $dir.")
-    _bin_trajectory(output, energies, valkind; refT, step, _mat=mat, _bins=bins)
+    _bin_trajectory(output, valkind; step, _bins=bins)
 end
 
-function _bin_trajectory(path, energies::Vector{TK}, ::Val{EXT}; refT, step, _mat, _bins) where EXT
+function _bin_trajectory(path, ::Val{EXT}; step, _bins) where EXT
     @assert EXT === :pdb || EXT === :stream
     steps = (EXT === :pdb ? PDBModelIterator : StreamSimulationStep)(path)
-    mat = _mat isa Nothing ? mat_from_output(path, Val(EXT)) : _mat
+    mat = mat_from_output(path, Val(EXT))
     invmat = inv(NoUnits.(mat./u"Å"))
     if _bins isa Nothing
         na, nb, nc = floor.(Int, NoUnits.(cell_lengths(mat) ./ step))
-        bins = zeros(Float64, na, nb, nc)
+        bins = zeros(Int, na, nb, nc)
     else
         na, nb, nc = size(_bins)
         bins = _bins
+        bins .= 0
     end
-    mine::TK = minimum(energies)
 
     stepcounter = 0
     for step in steps
         stepcounter += 1
-        energy = energies[stepcounter]
         for x in (EXT === :stream ? step.positions : step[3])
             pos = EXT === :stream ? x : x[3]
             y = invmat*NoUnits.(pos./u"Å")
             i, j, k = y .- floor.(y)
-            val = exp((mine-energy)/refT)
-            bins[ceil(Int, i*na)+(i==0), ceil(Int, j*nb)+(j==0), ceil(Int, k*nc)+(k==0)] += val
+            bins[ceil(Int, i*na)+(i==0), ceil(Int, j*nb)+(j==0), ceil(Int, k*nc)+(k==0)] += 1
         end
     end
-    @assert stepcounter == length(energies)
-    λ = sum(exp((mine-e)/refT) for e in energies; init=0.0)
-    bins ./= λ
-    bins, (mine, λ)
+    bins, stepcounter
 end
 
-function bin_trajectories(path; refT::TK=300.0u"K", step=0.15u"Å", except=())
-    dirs = filter(∉(except), readdir(path; join=false))
+function bin_trajectories(path; step=0.15u"Å", except=())
+    dirs = filter(x -> isdir(joinpath(path, x)) && x ∉ except, readdir(path; join=false))
     isempty(dirs) && error(lazy"Directory $path does not contain any valid folder")
     output, kind, valkind = find_output_file(joinpath(path, first(dirs)))
     kind === :none && error(lazy"Could not find any suitable output at $(joinpath(path, first(dirs)))")
     mat = mat_from_output(output, valkind)
     na, nb, nc = floor.(Int, NoUnits.(cell_lengths(mat) ./ step))
-    bins = zeros(Float64, na, nb, nc)
-    totalbins = zeros(Float64, na, nb, nc)
-    totalmine = Inf*u"K"
-    μ = 0.0
+    bins = zeros(Int, na, nb, nc)
+    totalbins = zeros(Int, na, nb, nc)
+    totalcounter = 0
     for dir in dirs
-        _, (mine, λ) =  bin_trajectory(joinpath(path, dir); refT, step, mat, bins)
-        if mine < totalmine
-            α = exp((mine - totalmine)/refT)
-            β = λ
-            totalmine = mine
-        else
-            α = 1.0
-            β = λ*exp((totalmine - mine)/refT)
-        end
-        μ = α*μ + β
-        for k in 1:nc, j in 1:nb, i in 1:na
-            totalbins[i,j,k] = α*totalbins[i,j,k] + β*bins[i,j,k]
-        end
-        bins .= 0.0
+        _, counter = bin_trajectory(joinpath(path, dir); step, bins)
+        totalbins .+= bins
+        totalcounter += counter
         yield()
     end
-    totalbins ./= μ
-    totalbins, (totalmine, μ)
+    totalbins, totalcounter
 end
 
 
 """
-    average_clusters(bins::Array{Float64,3}; smoothing=3, threshold=0.01)
+    average_clusters(bins::Array{Float64,3}; clustering=3, smoothing=3, threshold=0.01)
 
 Takes a grid `bins` of atomic densities and group them into sites, each site corresponding
-to a local maximum in density. If two sites are closer than `smoothing` (in terms of
+to a local maximum in density. If two sites are closer than `clustering` (in terms of
 Manhattan distance on the grid), they are merged. Sites whose total density is lower than
 `threshold` are discared.
 
 Return a list of pairs `(p, center)` where `p` is the probability of having an atom on site
 at position `center`. The coordinates of `center` are in [0, 1).
 """
-function average_clusters(bins::Array{Float64,3}; smoothing=3, threshold=0.01)
+function average_clusters(bins::Array{Float64,3}; clustering=3, smoothing=5, threshold=0.01)
     if smoothing > 0
-        grid = imfilter(bins, Kernel.gaussian((smoothing, smoothing, smoothing)), "circular")
+        # grid = imfilter(bins, Kernel.gaussian((smoothing, smoothing, smoothing)), "circular")
+        weights = [inv(1+sqrt((i-(smoothing+1)/2)^2+(j-(smoothing+1)/2)^2+(k-(smoothing+1)/2)^2)) for i in 1:smoothing, j in 1:smoothing, k in 1:smoothing]
+        grid = mapwindow(bins, (smoothing, smoothing, smoothing), "circular") do buf
+            median(vec(buf), weights)
+        end
+        grid .*= sum(bins)/sum(grid)
         # skip = ≤(maximum(grid[I] for I in eachindex(bins) if iszero(bins[I])))
     else
         grid = bins
     end
-    basinsets = local_basins(grid, -Inf; lt=(>), smoothing, skip=iszero)
+    basinsets = if smoothing > 0
+        local_basins(grid, -Inf; lt=(>), clustering, maxdist=0, skip=Returns(false))
+    else
+        local_basins(grid, -Inf; lt=(>), clustering, maxdist=0, skip=iszero)
+    end
+    _average_clusters(grid, basinsets, threshold)
+end
+
+function _average_clusters(grid, basinsets, threshold)
     n = length(basinsets)
     @assert !any(isempty, basinsets)
     points, nodes = decompose_basins(grid, basinsets)
+    _average_clusters(grid, points, nodes, n, threshold)
+end
+
+function _average_clusters(grid, points, nodes, n, threshold)
     a, b, c = size(nodes)
     probabilities = zeros(n)
     centers = [zero(SVector{3,Float64}) for _ in 1:n]
-    numnodes = zeros(Float64, n)
     for (i,j,k) in points
         u, v, w = mod1(i, a), mod1(j, b), mod1(k, c)
         belongs = nodes[u,v,w]
         @assert !isempty(belongs)
-        λ = inv(length(belongs))
+        density = grid[u,v,w]/length(belongs)
         for belong in belongs
-            probabilities[belong] += grid[u,v,w]*λ
-            centers[belong] += λ*SVector{3,Float64}(i,j,k) # not u,v,w, keep the offset!
-            numnodes[belong] += λ
+            probabilities[belong] += density
+            centers[belong] += density*SVector{3,Float64}(i,j,k) # not u,v,w, keep the offset!
         end
     end
     ret = Tuple{Float64,SVector{3,Float64}}[]
-    for (p, center, λ) in zip(probabilities, centers, numnodes)
+    for (p, center) in zip(probabilities, centers)
         p > threshold || continue
-        normalized_c = center ./ λ
+        normalized_c = center ./ (p*a, p*b, p*c)
         push!(ret, (p, normalized_c .- floor.(Int, normalized_c)))
     end
     ret
 end
 
 """
-    average_clusters(dir; smoothing=3, refT::TK=300.0u"K", step=0.15u"Å", threshold=0.01)
+    average_clusters(dir; smoothing=3, step=0.15u"Å", threshold=0.01)
 
 Given the path to a folder `dir` containing the outputs of a simulation, group atomic
 densities into sites.
 
-See [`bin_trajectory`](@ref) for the meaning of `step` and `refT` and
+See [`bin_trajectory`](@ref) for the meaning of `step` and
 [`average_clusters`](@ref) for the return type and the meaning of `smoothing` and
 `threshold`.
 """
-function average_clusters(dir; smoothing=3, refT::TK=300.0u"K", step=0.15u"Å", threshold=0.01)
-    average_clusters(bin_trajectory(dir; refT, step)[1]; smoothing, threshold)
+function average_clusters(dir; smoothing=3, step=0.15u"Å", threshold=0.01)
+    average_clusters(bin_trajectory(dir; step)[1]; smoothing, threshold)
 end
 
 

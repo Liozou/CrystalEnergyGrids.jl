@@ -1,7 +1,5 @@
 using Base.Threads: nthreads, @threads
 
-using ImageFiltering: imfilter, Kernel
-
 struct GridNeighbors{N}
     i::NTuple{N,Int}
 end
@@ -14,12 +12,12 @@ function Base.iterate(x::GridNeighbors{N}, state=(0,1)) where N
         i == N+1 && return nothing
     end
     return (ntuple(N) do j
-        j == i ? x.i[j] + sign : x.i[j]
-    end, (i, -sign))
+        (j == i ? x.i[j] + (sign::Int) : x.i[j])::Int
+    end::NTuple{3,Int}, (i, -sign))
 end
 
 """
-    local_minima(grid::Array{Float64,3}, tolerance=1e-2; lt=(<))
+    local_minima(grid::Array{<:Any,3}, tolerance=1e-2; lt=(<))
 
 Find the positions of the local minima of an energy grid.
 
@@ -32,22 +30,31 @@ Use a negative `tolerance` to return all local minima.
 
 `lt` is the "lower than" operator: use `lt=(>)` to compute local maxima.
 """
-function local_minima(grid::Array{Float64,3}, tolerance=1e-2; lt=(<))
+function local_minima(grid::Array{<:Any,3}, tolerance=1e-2; lt=(<))
     a1, a2, a3 = size(grid)
-    localmins_t = [CartesianIndex{3}[] for _ in 1:nthreads()]
-    @threads :static for i3 in 1:a3
+    localmins = CartesianIndex{3}[]
+    # for i3 in 1:a3
+    N = nthreads()
+    localmins_t = [CartesianIndex{3}[] for _ in 1:N]
+    lb = LoadBalancer{Int}(N) do i3, taskid
         for i2 in 1:a2, i1 in 1:a1
             val = grid[i1,i2,i3]
             if lt(val, grid[mod1(i1-1,a1),i2,i3]) &&
-               lt(val, grid[mod1(i1+1,a1),i2,i3]) &&
-               lt(val, grid[i1,mod1(i2-1,a2),i3]) &&
-               lt(val, grid[i1,mod1(i2+1,a2),i3]) &&
-               lt(val, grid[i1,i2,mod1(i3-1,a3)]) &&
-               lt(val, grid[i1,i2,mod1(i3+1,a3)])
-                push!(localmins_t[threadid()], CartesianIndex(i1, i2, i3))
+                lt(val, grid[mod1(i1+1,a1),i2,i3]) &&
+                lt(val, grid[i1,mod1(i2-1,a2),i3]) &&
+                lt(val, grid[i1,mod1(i2+1,a2),i3]) &&
+                lt(val, grid[i1,i2,mod1(i3-1,a3)]) &&
+                lt(val, grid[i1,i2,mod1(i3+1,a3)])
+                push!(localmins_t[taskid], CartesianIndex(i1, i2, i3))
+                # push!(localmins, CartesianIndex(i1, i2, i3))
             end
         end
     end
+    for i3 in 1:a3
+        put!(lb, i3)
+    end
+    wait(lb)
+    # close(lb) # this causes spurious errors to be printed from the `take!`ing tasks
     localmins = reduce(vcat, localmins_t)
     min_energy = minimum(Base.Fix1(getindex, grid), localmins)
     tolerance < 0 && return localmins
@@ -60,6 +67,7 @@ function local_minima(grid::Array{Float64,3}, tolerance=1e-2; lt=(<))
     end
     return kept
 end
+
 
 """
     circular_distance(a::Int, (m, n))
@@ -74,17 +82,78 @@ function circular_distance(a::Int, (m, n))
     return j - i
 end
 
+function clean_clustering!(basinsets::Vector{Set{NTuple{3,Int}}}, minima::Vector{CartesianIndex{3}}, clustering::Real, (a,b,c)::NTuple{3,Int})
+    clustering > 0 || return
+    nminima = length(minima)
+    unions = collect(1:nminima)
+    for i1 in 1:nminima
+        a1, b1, c1 = Tuple(minima[i1])
+        for i2 in (i1+1):nminima
+            a2, b2, c2 = Tuple(minima[i2])
+            if circular_distance(a, (a1,a2)) + circular_distance(b, (b1,b2)) + circular_distance(c, (c1,c2)) ≤ clustering
+                unions[i2] = unions[i1]
+            end
+        end
+    end
+    todelete = Int[]
+    for i in 1:nminima
+        j = unions[i]
+        i == j && continue
+        union!(basinsets[j], basinsets[i])
+        push!(todelete, i)
+    end
+    deleteat!(basinsets, todelete)
+    nothing
+end
+
+function keep_shortest_distance!(protobasinsets::Vector{Tuple{Vector{NTuple{3,Int}},Vector{Int}}}, dims::NTuple{3,Int})
+    n = length(protobasinsets)
+    basinsets = [Set(Q) for (Q, _) in protobasinsets]
+    old = Set{CartesianIndex{3}}()
+    new = Set{CartesianIndex{3}}()
+    indices = fill(1, n)
+    while true
+        noadvance = true
+        for itask in 1:n
+            basin = basinsets[itask]
+            Q, dists = protobasinsets[itask]
+            start = indices[itask]
+            if isempty(dists)
+                start == length(Q) && continue
+                stop = length(Q)
+            else
+                noadvance = false
+                stop = popfirst!(dists) - 1
+            end
+            indices[itask] = stop + 1
+            for i in start:stop
+                u = Q[i]
+                iu = CartesianIndex(mod1.(u, dims))
+                iu in old && delete!(basin, u)
+                push!(new, iu)
+            end
+        end
+        noadvance && break
+        union!(old, new)
+        empty!(new)
+    end
+    basinsets
+end
 
 """
-    local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smoothing=0, skip=Returns(false), maxdist=0, inplace=false)
+    local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}}; lt=(<), clustering=0, skip=Returns(false), maxdist=0, inplace=false)
 
 Return a list `basinsets` whose elements are the local attraction basins around each energy
-minimum given in `minima`. Each element is a `Set` of grid points `(i,j,k)` such that there
-is a path that only decreases in energy when going from the corresponding energy minimum to
-`(i,j,k)`. If `maxdist > 0`, the path length must be below `maxdist`.
+minimum `p` given in `minima`. Each element is a `Set` of grid points `(i,j,k)` such that
+`p` is the closest local minimum for which there is a path that only decreases in energy
+when going from `p` to `(i,j,k)`.
+If `maxdist > 0`, the path length must be below `maxdist`.
+
+The indices `i`, `j` and `k` may not be in the bounds of `grid` if the point is in a
+periodic image of the unit cell.
 
 For each pair of minima whose Manhattan distance on the grid is lower or equal to
-`smoothing`, their corresponding basins are merged into a single one.
+`clustering`, their corresponding basins are merged into a single one.
 
 Grid points whose energy `e` is such that `skip(e)` are not included in the basins. If such
 a point is an element of `minima`, the corresponding basin will be skipped as well.
@@ -92,86 +161,75 @@ a point is an element of `minima`, the corresponding basin will be skipped as we
 If `inplace` is set, the list `minima` will be filtered in-place by removing all indices
 that should be `skip`ped.
 """
-function local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}};
-                      lt=(<), smoothing=0, skip=Returns(false), maxdist=0, inplace=false)
-    a, b, c, = dims = size(grid)
+function local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}};
+                      lt=(<), clustering=0, skip=Returns(false), maxdist=0, inplace=false)
     nminima = length(minima)
-    basinsets = Vector{Set{NTuple{3,Int}}}(undef, nminima)
+    dims = size(grid)
+    protobasinsets = Vector{Tuple{Vector{NTuple{3,Int}},Vector{Int}}}(undef, nminima)
     @threads for itask in 1:nminima
         start = minima[itask]
         visited = falses(dims)
         istart, jstart, kstart = Tuple(start)
         if skip(grid[istart, jstart, kstart])
-            basinsets[itask] = Set{NTuple{3,Int}}() # filtered below
+            protobasinsets[itask] = (NTuple{3,Int}[], Int[]) # filtered below
             continue
         end
         visited[istart, jstart, kstart] = true
         Q = [Tuple(start)]
         current_dist = 0
         start_dist = 1
+        dists = Int[1]
         mark_dist = false
         for (idx, u) in enumerate(Q)
             if idx == start_dist
                 current_dist += 1
                 mark_dist = true
             end
-            iu, ju, ku = mod1.(u, dims)
-            gu = grid[iu,ju,ku]
+            iu = CartesianIndex(mod1.(u, dims))
+            gu = grid[iu]
             for v in GridNeighbors(u)
-                iv, jv, kv = mod1.(v, dims)
-                visited[iv, jv, kv] && continue
-                gv = grid[iv, jv, kv]
+                iv = CartesianIndex(mod1.(v, dims))
+                visited[iv] && continue
+                gv = grid[iv]
                 skip(gv) && continue
-                if (maxdist == 0 || current_dist < maxdist) && lt(gu, grid[iv, jv, kv])
+                if (maxdist == 0 || current_dist < maxdist) && lt(gu, grid[iv])
                     push!(Q, v)
                     if mark_dist
                         start_dist = length(Q)
+                        push!(dists, start_dist)
                         mark_dist = false
                     end
-                    visited[iv, jv, kv] = true
+                    visited[iv] = true
                 end
             end
         end
-        basinsets[itask] = Set(Q)
+        protobasinsets[itask] = (Q, dists)
     end
-    basinsets
-    emptysets = findall(isempty, basinsets)
-    deleteat!(basinsets, emptysets)
-    newminima = deleteat!(inplace || isempty(emptysets) ? minima : copy(minima), emptysets)
-    newnminima = length(newminima)
-    if smoothing > 0
-        unions = collect(1:newnminima)
-        for i1 in 1:newnminima
-            a1, b1, c1 = Tuple(newminima[i1])
-            for i2 in (i1+1):newnminima
-                a2, b2, c2 = Tuple(newminima[i2])
-                if circular_distance(a, (a1,a2)) + circular_distance(b, (b1,b2)) + circular_distance(c, (c1,c2)) ≤ smoothing
-                    unions[i2] = unions[i1]
-                end
-            end
-        end
-        todelete = Int[]
-        for i in 1:newnminima
-            j = unions[i]
-            i == j && continue
-            union!(basinsets[j], basinsets[i])
-            push!(todelete, i)
-        end
-        deleteat!(basinsets, todelete)
-    end
+    emptysets1 = findall(isempty∘first, protobasinsets)
+    deleteat!(protobasinsets, emptysets1)
+    newminima = deleteat!(inplace || isempty(emptysets1) ? minima : copy(minima), emptysets1)
+
+    basinsets = keep_shortest_distance!(protobasinsets, dims)
+    emptysets2 = findall(isempty, basinsets)
+    deleteat!(basinsets, emptysets2)
+    deleteat!(newminima, emptysets2)
+
+    # clean_clustering!(basinsets, newminima, clustering, dims)
+    # basinsets = [Set([Tuple(m)]) for m in minima]
+    clean_clustering!(basinsets, minima, clustering, dims)
     basinsets
 end
 
 """
-    local_basins(grid::Array{Float64,3}, tolerance::Float64=-Inf; lt=(<), smoothing=0, skip=Returns(false), maxdist=0)
+    local_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf; lt=(<), clustering=0, skip=Returns(false), maxdist=0)
 
-Equivalent to [`local_basins(grid::Array{Float64,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smoothing=0, skip=Returns(false))`](@ref)
+Equivalent to [`local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smoothing=0, skip=Returns(false))`](@ref)
 where `minima` is computed from [`local_minima`](@ref) with the given `tolerance` and
 keyword arguments.
 """
-function local_basins(grid::Array{Float64,3}, tolerance::Float64=-Inf;
-                      lt=(<), smoothing=0, skip=Returns(false), maxdist=0)
-    local_basins(grid, local_minima(grid, tolerance; lt); lt, smoothing, skip, maxdist, inplace=true)
+function local_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf;
+                      lt=(<), clustering=0, skip=Returns(false), maxdist=0)
+    local_basins(grid, local_minima(grid, tolerance; lt); lt, clustering, skip, maxdist, inplace=true)
 end
 
 
@@ -197,8 +255,8 @@ end
 # Base.getindex(x::BasinDecompositon, I...) = x.tree[I...]
 
 """
-    decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3,Int}}})
-    decompose_basins(grid::Array{Float64,3}, tolerance::Float64=-Inf; lt=(<), smoothing=0, skip=Returns(false))
+    decompose_basins(grid::Array{<:Any,3}, basinsets::Vector{Set{NTuple{3,Int}}})
+    decompose_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf; lt=(<), smoothing=0, skip=Returns(false))
 
 Decompose the provided `basinsets` into a grid `nodes` where `nodes[i,j,k]` is the list of
 basins to which the grid point `(i,j,k)` belongs to. Return `(points, nodes)` where
@@ -207,7 +265,7 @@ basins to which the grid point `(i,j,k)` belongs to. Return `(points, nodes)` wh
 If `basinsets` is not provided, it will be computed from [`local_basins`](@ref) with the
 given `tolerance` and keyword arguments.
 """
-function decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3,Int}}})
+function decompose_basins(grid::Array{<:Any,3}, basinsets::Vector{Set{NTuple{3,Int}}})
     nodes = fill(Int[], size(grid))
     a, b, c = size(nodes)
     n = length(basinsets)
@@ -236,31 +294,53 @@ function decompose_basins(grid::Array{Float64,3}, basinsets::Vector{Set{NTuple{3
     points, nodes
 end
 
-function decompose_basins(grid::Array{Float64,3}, tolerance::Float64=-Inf;
+function decompose_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf;
                           lt=(<), smoothing=0, skip=Returns(false))
     decompose_basins(grid, local_basins(grid, tolerance; lt, smoothing, skip))
 end
 
 
 """
-    energy_levels(egrid::Array{Float64,4}, n)
+    energy_levels(egrid::Array{Float64,4}, n::Integer)
+    energy_levels(egrid::Array{Float64,4}, step::AbstractFloat)
+    energy_levels(egrid::Array{Float64,4}, steps::AbstractRange{<:AbstractFloat})
 
-Given an angular energy grids, return the energies and relative volumes of the `n` lowest
-levels (between energy -∞ and 0 K)
+Given an angular energy grids, return the energies and relative volumes of the lowest
+levels (between energy -∞ and 0 K).
+
+If `n` is given, split the energy equally between `n` levels.
+If `step` is given, split the energy between levels of size `step` until reaching 0 K.
+If `steps` is given, split the energy at the given steps.
 """
-function energy_levels(egrid::Array{Float64,4}, n)
+function energy_levels(egrid::Array{Float64,4}, x::Union{Integer,AbstractFloat,AbstractRange{<:AbstractFloat}})
     kept = filter(<(0.0), vec(egrid))
-    m = minimum(kept)
-    hist = zeros(Float64, n)
-    γ = n/m
-    for x in kept
-        idx = floor(Int, x*γ)
-        hist[end-idx+(idx==n)] += 1
+    if x isa Integer
+        n = x
+        m = minimum(kept)
+        λ = -m/(2n)
+        rnge = (m+λ):(2λ):0.0
+    elseif x isa AbstractFloat
+        n = round(Int, cld(abs(m), x))
+        m = minimum(kept)
+        λ = x/2
+        rnge = (m+λ):x:(m+(2n-1)*λ)
+    else
+        n = length(x)
+        λ = step(x)/2
+        m = first(x)
+        rnge = x
     end
-    λ = -m/(2n)
+    ofsm = m - 2λ
+    γ = n/abs(m)
+    hist = zeros(Float64, n)
+    for x in kept
+        idx = floor(Int, (x-ofsm)*γ)
+        hist[clamp(idx, 1, n)] += 1
+    end
     hist ./= (length(egrid))
-    [m+(2k-1)*λ for k in 1:n], map(x -> iszero(x) ? missing : x, hist)
+    rnge, hist
 end
+
 
 function compute_levels(grid::Array{Float64,4}, mine, maxe, T=300)
     basins = Vector{NTuple{3,Int}}[]
