@@ -34,7 +34,8 @@ function local_minima(grid::Array{<:Any,3}, tolerance=1e-2; lt=(<))
     a1, a2, a3 = size(grid)
     localmins = CartesianIndex{3}[]
     # for i3 in 1:a3
-    N = nthreads()
+    # N = nthreads()
+    N = 1 # FIXME: remove
     localmins_t = [CartesianIndex{3}[] for _ in 1:N]
     lb = LoadBalancer{Int}(N) do i3, taskid
         for i2 in 1:a2, i1 in 1:a1
@@ -82,15 +83,16 @@ function circular_distance(a::Int, (m, n))
     return j - i
 end
 
-function clean_clustering!(basinsets::Vector{Set{NTuple{3,Int}}}, minima::Vector{CartesianIndex{3}}, clustering::Real, (a,b,c)::NTuple{3,Int})
-    clustering > 0 || return
+# Perform union-find to group together basins whose origins are closer than `cluster`
+function clean_cluster!(basinsets::Vector{Set{NTuple{3,Int}}}, minima::Vector{CartesianIndex{3}}, cluster::Real, (a,b,c)::NTuple{3,Int})
+    cluster > 0 || return
     nminima = length(minima)
     unions = collect(1:nminima)
     for i1 in 1:nminima
         a1, b1, c1 = Tuple(minima[i1])
         for i2 in (i1+1):nminima
             a2, b2, c2 = Tuple(minima[i2])
-            if circular_distance(a, (a1,a2)) + circular_distance(b, (b1,b2)) + circular_distance(c, (c1,c2)) ≤ clustering
+            if circular_distance(a, (a1,a2)) + circular_distance(b, (b1,b2)) + circular_distance(c, (c1,c2)) ≤ cluster
                 unions[i2] = unions[i1]
             end
         end
@@ -141,7 +143,7 @@ function keep_shortest_distance!(protobasinsets::Vector{Tuple{Vector{NTuple{3,In
 end
 
 """
-    local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}}; lt=(<), clustering=0, skip=Returns(false), maxdist=0, inplace=false)
+    local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}}; lt=(<), cluster=0, skip=Returns(false), maxdist=0, inplace=false)
 
 Return a list `basinsets` whose elements are the local attraction basins around each energy
 minimum `p` given in `minima`. Each element is a `Set` of grid points `(i,j,k)` such that
@@ -153,7 +155,7 @@ The indices `i`, `j` and `k` may not be in the bounds of `grid` if the point is 
 periodic image of the unit cell.
 
 For each pair of minima whose Manhattan distance on the grid is lower or equal to
-`clustering`, their corresponding basins are merged into a single one.
+`cluster`, their corresponding basins are merged into a single one.
 
 Grid points whose energy `e` is such that `skip(e)` are not included in the basins. If such
 a point is an element of `minima`, the corresponding basin will be skipped as well.
@@ -162,7 +164,7 @@ If `inplace` is set, the list `minima` will be filtered in-place by removing all
 that should be `skip`ped.
 """
 function local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}};
-                      lt=(<), clustering=0, skip=Returns(false), maxdist=0, inplace=false)
+                      lt=(<), cluster=0, skip=Returns(false), maxdist=0, inplace=false)
     nminima = length(minima)
     dims = size(grid)
     protobasinsets = Vector{Tuple{Vector{NTuple{3,Int}},Vector{Int}}}(undef, nminima)
@@ -214,22 +216,22 @@ function local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}};
     deleteat!(basinsets, emptysets2)
     deleteat!(newminima, emptysets2)
 
-    # clean_clustering!(basinsets, newminima, clustering, dims)
+    # clean_cluster!(basinsets, newminima, cluster, dims)
     # basinsets = [Set([Tuple(m)]) for m in minima]
-    clean_clustering!(basinsets, minima, clustering, dims)
+    clean_cluster!(basinsets, minima, cluster, dims)
     basinsets
 end
 
 """
-    local_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf; lt=(<), clustering=0, skip=Returns(false), maxdist=0)
+    local_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf; lt=(<), cluster=0, skip=Returns(false), maxdist=0)
 
-Equivalent to [`local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smoothing=0, skip=Returns(false))`](@ref)
+Equivalent to [`local_basins(grid::Array{<:Any,3}, minima::Vector{CartesianIndex{3}}; lt=(<), smooth=0, skip=Returns(false))`](@ref)
 where `minima` is computed from [`local_minima`](@ref) with the given `tolerance` and
 keyword arguments.
 """
 function local_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf;
-                      lt=(<), clustering=0, skip=Returns(false), maxdist=0)
-    local_basins(grid, local_minima(grid, tolerance; lt); lt, clustering, skip, maxdist, inplace=true)
+                      lt=(<), cluster=0, skip=Returns(false), maxdist=0)
+    local_basins(grid, local_minima(grid, tolerance; lt); lt, cluster, skip, maxdist, inplace=true)
 end
 
 
@@ -256,7 +258,7 @@ end
 
 """
     decompose_basins(grid::Array{<:Any,3}, basinsets::Vector{Set{NTuple{3,Int}}})
-    decompose_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf; lt=(<), smoothing=0, skip=Returns(false))
+    decompose_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf; lt=(<), smooth=0, skip=Returns(false))
 
 Decompose the provided `basinsets` into a grid `nodes` where `nodes[i,j,k]` is the list of
 basins to which the grid point `(i,j,k)` belongs to. Return `(points, nodes)` where
@@ -295,8 +297,8 @@ function decompose_basins(grid::Array{<:Any,3}, basinsets::Vector{Set{NTuple{3,I
 end
 
 function decompose_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf;
-                          lt=(<), smoothing=0, skip=Returns(false))
-    decompose_basins(grid, local_basins(grid, tolerance; lt, smoothing, skip))
+                          lt=(<), smooth=0, skip=Returns(false))
+    decompose_basins(grid, local_basins(grid, tolerance; lt, smooth, skip))
 end
 
 
