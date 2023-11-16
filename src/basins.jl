@@ -358,7 +358,7 @@ function compute_levels(grid::Array{Float64,4}, mine, maxe, T=300)
         basin = [(i1,i2,i3)]
         Q = [(i1,i2,i3)]
         for I in Q
-            for J in GridNeighbors(A, I)
+            for J in GridNeighbors(I)
                 j1, j2, j3 = mod1.(J, dims)
                 visited[j1,j2,j3] && continue
                 visited[j1,j2,j3] = true

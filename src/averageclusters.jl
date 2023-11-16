@@ -63,9 +63,10 @@ end
 
 function find_output_file(path)
     if isfile(path)
-        basename(path) == "steps.stream" && return path, :stream, Val(:stream)
-        basename(path) == "steps.zst" && return path, :zst, Val(:stream)
-        basename(path) == "trajectory.pdb" && return path, :pdb, Val(:pdb)
+        ext = splitext(path)[2]
+        ext == ".stream" && return path, :stream, Val(:stream)
+        ext == ".zst" && return path, :zst, Val(:stream)
+        ext == ".pdb" && return path, :pdb, Val(:pdb)
     else
         isdir(path) || error(lazy"Input $path is neither a directory nor a file.")
         file = joinpath(path, "steps.stream")
@@ -93,7 +94,7 @@ the appropriate values and returned instead of a new array.
 """
 function bin_trajectory(path; step=0.15u"Å", bins=nothing)
     output, kind, valkind = find_output_file(path)
-    kind === :none && error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $dir.")
+    kind === :none && error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $path.")
     _bin_trajectory(output, valkind; step, _bins=bins)
 end
 
@@ -322,15 +323,17 @@ end
 
 
 """
-    output_sites(path::AbstractString, framework_path::AbstractString, sites, atomsymbol::Union{AbstractString,Symbol})
+    output_sites(path::AbstractString, framework_path::AbstractString, sites, atomsymbol::Union{AbstractString,Symbol}, keepsource=true)
 
 Output to `path` a .cif file representing the framework (whose .cif file is stored at
 `framework_path`) as well as a number of `sites` with their respective occupancies, each
 corresponding to a species of symbol `atomsymbol`.
 
+Unset `keepsource` to only output the sites (not the atoms of the framework).
+
 The `sites` can be obtained from [`average_clusters`](@ref).
 """
-function output_sites(path::AbstractString, framework_path::AbstractString, sites, atomsymbol::Union{AbstractString,Symbol})
+function output_sites(path::AbstractString, framework_path::AbstractString, sites, atomsymbol::Union{AbstractString,Symbol}, keepsource=true)
     if isdir(path) || isdirpath(path)
         name = string(splitext(basename(framework_path))[1], '_', atomsymbol)
         path = joinpath(path, name*".cif")
@@ -388,6 +391,7 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
                     end
                 end
                 if loopstarted
+                    inatomloop && !keepsource && continue # do not print framework atoms
                     counter += 1
                     if inatomloop && !hasoccupancy
                         l = l * " 1.0"
@@ -415,4 +419,5 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
             println(output, l)
         end
     end end # open(input) and open(output)
+    nothing
 end
