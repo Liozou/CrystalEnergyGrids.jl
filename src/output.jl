@@ -226,8 +226,30 @@ function output_basins_pdb(path, points, nodes, mat)
             px, py, pz = mat * SVector{3,Float64}(i/na, j/nb, k/nc)
             basins = nodes[mod1(i, na),mod1(j, nb),mod1(k, nc)]
             for basin in basins
-                counter = mod(1, 100000)
+                counter = mod(counter+1, 100000)
                 @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" counter :X basin (px+ϵ*(rand()-0.5)) (py+ϵ*(rand()-0.5)) (pz+ϵ*(rand()-0.5)) :Y
+            end
+        end
+    end
+end
+
+
+function output_density_pdb(path, density, mat)
+    (a, b, c), (α, β, γ) = cell_parameters(mat)
+    na, nb, nc = size(density)
+    ϵ = min(ustrip(a)/na, ustrip(b)/nb, ustrip(c)/nc)/2
+    counter = 0
+    open(path, "w") do io
+        @printf io "MODEL     %4d\n" 0
+        @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" ustrip(a) ustrip(b) ustrip(c) α β γ
+        for k in 1:nc, j in 1:nb, i in 1:na
+            ρ = density[i,j,k]
+            ρ > 0 || continue
+            num = floor(Int, ρ*(1000 + 1000randexp()))
+            px, py, pz = mat * SVector{3,Float64}(i/na, j/nb, k/nc)
+            for _ in 1:num
+                counter = mod(counter+1, 100000)
+                @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" counter :X 1 (px+ϵ*(2rand()-1)) (py+ϵ*(2rand()-1)) (pz+ϵ*(2rand()-1)) :Y
             end
         end
     end

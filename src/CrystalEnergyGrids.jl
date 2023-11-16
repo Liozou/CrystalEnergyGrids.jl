@@ -3,7 +3,7 @@ module CrystalEnergyGrids
 using Statistics: mean
 using LinearAlgebra: LinearAlgebra, norm, det, cross, dot, mul!
 using Pkg: TOML
-using Random: rand, default_rng, TaskLocalRNG
+using Random: rand, default_rng, TaskLocalRNG, randexp
 
 using StaticArrays
 using AtomsBase
