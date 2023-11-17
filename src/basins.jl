@@ -1,4 +1,5 @@
 using Base.Threads: nthreads, @threads
+using ImageFiltering: Kernel, imfilter
 
 struct GridNeighbors{N}
     i::NTuple{N,Int}
@@ -280,6 +281,67 @@ function local_components(grid::Array{T,3}; atol=0.0, rtol=1.0, ntol=Inf) where 
             break
         end
     end
+    ret
+end
+
+"""
+    coalescing_basins(grid::Array{T,3}; atol=0.0, rtol=1.0, ntol=Inf)
+
+Return basins found by a proximity algorithm looking at the values of the grid in
+decreasing order.
+"""
+function coalescing_basins(grid::Array{T,3}, maxdist, mat; smooth=3, atol=0.0, rtol=1.0, ntol=Inf) where T
+    a, b, c = size(grid); ab = a*b
+    ret = Tuple{T,SVector{3,Float64}}[] # basin center and total value
+    smoothed = smooth == 0 ? grid : imfilter(grid, Kernel.gaussian(ntuple(Returns(smooth), Val(3))), "circular")
+    sortedidx = sortperm(vec(smoothed), rev=true)
+    buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
+    ofs = MVector{3,Float64}(undef)
+    in_distance = Tuple{Int,SVector{3,Float64},Float64}[]
+    js = Int[]
+    newcenter = MVector{3,Float64}(undef)
+    for newidx in sortedidx
+        smval = smoothed[newidx]
+        smval ≤ atol/1000 && break
+        val = grid[newidx]
+        k, retk = fldmod1(newidx, ab)
+        j, i = fldmod1(retk, a)
+        pos = SVector{3,Float64}(i/a, j/b, k/c)
+        empty!(in_distance)
+        for (idx, (_, center)) in enumerate(ret)
+            buffer .= pos .- center
+            d = periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
+            d > maxdist && continue
+            push!(in_distance, (idx, SVector{3,Float64}(ofs), d))
+        end
+        if isempty(in_distance) && smval ≥ atol
+            push!(ret, (val, pos))
+        else
+            if length(in_distance) > 1
+                sort!(in_distance; by=last)
+                submid = val < atol ? 1 : something(findfirst(x -> last(x) < maxdist/2, in_distance), 1)
+                resize!(in_distance, submid)
+            end
+            newcenter .= pos .* val
+            newval = val
+            for (j2, o2, _) in in_distance
+                val2, center2 = ret[j2]
+                newcenter .+= (center2.+o2).*val2
+                newval += val2
+            end
+            newcenter ./= (iszero(newval) ? 1.0 : newval)
+            if length(in_distance) == 1
+                ret[in_distance[1][1]] = (newval, newcenter)
+            else
+                resize!(js, length(in_distance))
+                js .= first.(in_distance)
+                sort!(js)
+                deleteat!(ret, js)
+                push!(ret, (newval, newcenter))
+            end
+        end
+    end
+    filter!(≥(atol)∘first, ret)
     ret
 end
 

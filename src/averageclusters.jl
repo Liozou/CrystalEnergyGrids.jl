@@ -1,4 +1,4 @@
-using ImageFiltering: Kernel, mapwindow
+using ImageFiltering: mapwindow
 using StatsBase: median, AnalyticWeights
 
 struct PDBModelIterator
