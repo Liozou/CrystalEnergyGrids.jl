@@ -153,6 +153,21 @@ coordinates corresponding to the closest image.
 """
 function periodic_distance2_fromcartesian!(buffer, mat, invmat, ortho, safemin2, buffer2)
     mul!(buffer2, invmat, buffer)
+    periodic_distance2!(buffer, mat, ortho, safemin2, buffer2)
+end
+
+"""
+    periodic_distance2!(buffer, mat, ortho, safemin2, buffer2)
+
+Similar to `periodic_distance!` except that:
+- the input fractional coordinates are stored in `buffer2`
+- `safemin2` should be `safemin^2`
+- the result is the squared distance.
+
+After this function returns the squared distance, `buffer` contains the cartesian
+coordinates corresponding to the closest image.
+"""
+function periodic_distance2!(buffer, mat, ortho, safemin2, buffer2)
     @simd for i in 1:3
         diff = buffer2[i] + 0.5
         buffer2[i] = diff - floor(diff) - 0.5

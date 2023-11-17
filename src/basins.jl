@@ -284,15 +284,157 @@ function local_components(grid::Array{T,3}; atol=0.0, rtol=1.0, ntol=Inf) where 
     ret
 end
 
-"""
-    coalescing_basins(grid::Array{T,3}; atol=0.0, rtol=1.0, ntol=Inf)
 
-Return basins found by a proximity algorithm looking at the values of the grid in
-decreasing order.
+function closest_to_sites(grid::Array{T,3}, sites::Union{Vector{SVector{3,Float64}},Vector{NTuple{3,Float64}}}, mat) where T
+    a, b, c = dims = size(grid)
+    protobuffer, ortho, safemin = prepare_periodic_distance_computations(mat)
+    safemin2 = safemin^2
+    protoskin = norm(mat * SVector{3,Float64}(inv(a), inv(b), inv(c)))
+    Qs = [NTuple{3,Int}[(1+round(Int, a*i), 1+round(Int, b*j), 1+round(Int, c*k))] for (i,j,k) in sites]
+    deletesite = Int[]
+    knownsites = Set{NTuple{3,Int}}()
+    for (idxQ, Q) in enumerate(Qs)
+        ijk = only(Q)
+        if ijk in knownsites
+            push!(deletesite, idxQ)
+        else
+            push!(knownsites, ijk)
+        end
+    end
+    deleteat!(Qs, deletesite)
+    deleteat!(sites, deletesite)
+    n = length(sites)
+
+    @threads for isite in 1:n
+        site = sites[isite]
+        Q = Qs[isite]
+        todelete = Int[]
+        bufferA = similar(protobuffer)
+        bufferB = MVector{3,Float64}(undef)
+        maxdist2 = Inf # squared half smallest distance between a site and its neighbor sites)
+        for i2 in 1:n
+            isite == i2 && continue
+            bufferB .= site .- sites[i2]
+            dsites2 = periodic_distance2!(bufferA, mat, ortho, safemin2, bufferB)
+            maxdist2 = min(maxdist2, dsites2)
+        end
+        maxdist2 /= 4
+        skin2 = (protoskin + sqrt(maxdist2))^2
+        visited = falses(a, b, c)
+        visited[mod1.(Q[1], dims)...] = true
+        ρ = grid[mod1.(Q[1], dims)...]
+        for I in Q
+            for J in GridNeighbors(I)
+                j1, j2, j3 = mod1.(J, dims)
+                visited[j1,j2,j3] && continue
+                visited[j1,j2,j3] = true
+                bufferB .= site .- (J.-1)./dims
+                mul!(bufferA, mat, bufferB)
+                d2 = norm2(bufferA) # no periodic_distance! since the offset is known
+                d2 ≥ skin2 && continue
+                d2 ≥ maxdist2 && push!(todelete, length(Q)+1)
+                push!(Q, J)
+                ρ += grid[j1,j2,j3]
+                ρ > 1 && break
+            end
+            ρ > 1 && break
+        end
+        deleteat!(Q, todelete)
+    end
+
+    allvisited = falses(a, b, c)
+    counter = 0
+    for Q in Qs
+        for pos in Q
+            i,j,k = mod1.(pos, dims)
+            allvisited[i,j,k] && @show i,j,k
+            @assert !allvisited[i,j,k]
+            allvisited[i,j,k] = true
+            counter += 1
+        end
+    end
+    tovisit = CartesianIndex{3}[]
+    sizehint!(tovisit, length(allvisited) - counter)
+    for k in 1:c, j in 1:b, i in 1:a
+        if !allvisited[i,j,k] && !iszero(grid[i,j,k])
+            push!(tovisit, CartesianIndex{3}(i,j,k))
+        end
+    end
+    m = length(tovisit)
+    alldists = fill((Inf, zero(SVector{3,Int})), m, n)
+
+    @threads for isite in 1:n
+        site = sites[isite]
+        bufferX = MVector{3,Float64}(undef)
+        ofs = MVector{3,Int}(undef)
+        for ivisit in 1:m
+            ijk = Tuple(tovisit[ivisit]) ./ dims
+            bufferX .= site .- ijk
+            d = periodic_distance_with_ofs!(bufferX, ofs, mat, ortho, safemin)
+            ofs .*= dims
+            alldists[ivisit, isite] = (d, SVector{3,Float64}(ofs))
+        end
+    end
+    tosites = findmin(alldists; dims=2)[2]
+    weights = [[grid[mod1(i, a), mod1(j, b), mod1(k, c)] for (i,j,k) in Q] for Q in Qs]
+    sumweights = sum.(weights)
+    for jvisit in 1:m
+        jsite = Tuple(tosites[jvisit])[2]
+        s = sumweights[jsite]
+        visit = tovisit[jvisit]
+        ρ = grid[visit]
+        s + ρ > 1 && continue
+        sumweights[jsite] = s + ρ
+        push!(weights[jsite], ρ)
+        push!(Qs[jsite], Tuple(visit) .+ Tuple(alldists[jvisit,jsite][2]))
+    end
+
+    [(s, sum((SVector{3,Int}(ijk).-1)./dims.*w for (ijk, w) in zip(Q, ws))/s) for (Q, ws, s) in zip(Qs, weights, sumweights)]
+end
+
+function cluster_closer_than!(ret::Vector{Tuple{Float64,SVector{3,Float64}}}, mat, maxdist)
+    n = length(ret)
+    todelete = falses(length(ret))
+    buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
+    ofs = MVector{3,Float64}(undef)
+    maxdist2 = maxdist^2
+    for i1 in 1:n
+        todelete[i1] && continue
+        ρ1, pos1 = ret[i1]
+        for i2 in (i1+1):n
+            todelete[i2] && continue
+            ρ2, pos2 = ret[i2]
+            ρ = ρ1 + ρ2
+            ρ > 1 && continue
+            buffer .= pos1 .- pos2
+            d2 = periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
+            d2 ≥ maxdist2 && continue
+            todelete[i2] = true
+            pos1 = (ρ1.*pos1 .+ ρ2.*(pos2.+ofs))./ρ
+            ρ1 = ρ
+            ret[i1] = (ρ1, pos1)
+        end
+    end
+    deleteat!(ret, todelete)
+    nothing
+end
+
 """
-function coalescing_basins(grid::Array{T,3}, maxdist, mat; smooth=3, atol=0.0, rtol=1.0, ntol=Inf) where T
+    coalescing_basins(grid::Array{T,3}, maxdist, mat; smooth=3, atol=0.1, maxbasins=Inf)
+
+Return basins found by a proximity algorithm looking at the values of the `grid` in
+decreasing order.
+
+The value of `smooth` is the width of the smoothing Gaussian applied to `grid` before
+sorting the values to choose which ones to visit in decreasing order. The value should be
+
+`atol` is the minimum density of any returned site.
+
+`maxbasins` is a limit on the maximal number of basins explored.
+"""
+function coalescing_basins(grid::Array{<:Any,3}, maxdist, mat; smooth=3, atol=0.1, maxbasins=Inf)
     a, b, c = size(grid); ab = a*b
-    ret = Tuple{T,SVector{3,Float64}}[] # basin center and total value
+    ret = Tuple{Float64,SVector{3,Float64}}[] # total value and basin center
     smoothed = smooth == 0 ? grid : imfilter(grid, Kernel.gaussian(ntuple(Returns(smooth), Val(3))), "circular")
     sortedidx = sortperm(vec(smoothed), rev=true)
     buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
@@ -316,6 +458,7 @@ function coalescing_basins(grid::Array{T,3}, maxdist, mat; smooth=3, atol=0.0, r
         end
         if isempty(in_distance) && smval ≥ atol
             push!(ret, (val, pos))
+            length(ret) ≥ maxbasins && break
         else
             if length(in_distance) > 1
                 sort!(in_distance; by=last)
@@ -329,7 +472,8 @@ function coalescing_basins(grid::Array{T,3}, maxdist, mat; smooth=3, atol=0.0, r
                 newcenter .+= (center2.+o2).*val2
                 newval += val2
             end
-            newcenter ./= (iszero(newval) ? 1.0 : newval)
+            iszero(newval) && continue
+            newcenter ./= iszero(newval) ? 1.0 : newval
             if length(in_distance) == 1
                 ret[in_distance[1][1]] = (newval, newcenter)
             else
@@ -341,8 +485,15 @@ function coalescing_basins(grid::Array{T,3}, maxdist, mat; smooth=3, atol=0.0, r
             end
         end
     end
+    ret = closest_to_sites(grid, last.(ret), mat)
+    cluster_closer_than!(ret, mat, maxdist)
+    n1 = length(ret)
     filter!(≥(atol)∘first, ret)
-    ret
+    length(ret) == n1 && return ret # no need for re-clustering
+    ret = closest_to_sites(grid, last.(ret), mat) # after filtering, correct number of basins
+    cluster_closer_than!(ret, mat, maxdist)
+    @assert all(≥(atol)∘first, ret)
+    return ret
 end
 
 # struct FrontierTree{T}
