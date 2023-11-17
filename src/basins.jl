@@ -235,6 +235,54 @@ function local_basins(grid::Array{<:Any,3}, tolerance::Float64=-Inf;
 end
 
 
+"""
+    local_components(grid::Array{T,3}; atol=0.0, rtol=1.0, ntol=Inf) where T
+
+Return a list of `Vector{Tuple{NTuple{3,Int},T}`, each pair being made of a sublist
+representing a connected component of `grid` point coordinates that have a non-zero value
+and the corresponding sum of its values.
+
+The returned list is sorted by decreasing sum of the value of its sublists. Any sublist of
+total value below `atol` is removed. The list is has at most `ntol` elements and it is also
+truncated to the last sublist such that the sum of the kept values are below the fraction
+`rtol` of the total value of `grid`.
+"""
+function local_components(grid::Array{T,3}; atol=0.0, rtol=1.0, ntol=Inf) where T
+    a, b, c = dims = size(grid)
+    visited = falses(a, b, c)
+    ret = Tuple{Vector{NTuple{3,Int}},T}[]
+    for k in 1:c, j in 1:b, i in 1:a
+        visited[i,j,k] && continue
+        tot = grid[i,j,k]
+        iszero(tot) && continue
+        visited[i,j,k] = true
+        Q = [(i,j,k)]
+        for I in Q
+            for J in GridNeighbors(I)
+                iv, jv, kv = mod1.(J, dims)
+                visited[iv,jv,kv] && continue
+                val = grid[iv,jv,kv]
+                iszero(val) && continue
+                tot += val
+                visited[iv,jv,kv] = true
+                push!(Q, J)
+            end
+        end
+        tot < atol && continue
+        push!(ret, (Q, tot))
+    end
+    sort!(ret; by=last, rev=true)
+    max_tot = rtol < 1 ? sum(last, grid)*rtol : Inf
+    total = 0.0
+    for (i, (_, subtot)) in enumerate(ret)
+        if i > ntol || (total += subtot) > max_tot
+            resize!(ret, i-1)
+            break
+        end
+    end
+    ret
+end
+
 # struct FrontierTree{T}
 #     children::Union{Vector{T}, Vector{Tuple{Int,FrontierTree}}}
 # end
