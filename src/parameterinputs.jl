@@ -110,7 +110,7 @@ struct ShootingStarMinimizer{N,T} <: RecordFunction
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
 end
 function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") where {N}
-    T = typeof_psystem(Val(N))
+    T = TÅ
     positions = Vector{SimulationStep{N,T}}(undef, 0)
     energies = Vector{Float64}(undef, 0)
     # lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
@@ -134,7 +134,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::Float64, k::Int, mc
     k ≤ 0 && return
     ik, r = divrem(k, star.every)
     r == 0 || return
-    newmc = MonteCarloSetup(mc, o; parallel=false)
+    newmc = MonteCarloSetup(mc, o)
     recordminimum = RMinimumEnergy(e, o)
     printevery = Int(!isempty(star.outdir))
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
@@ -155,7 +155,7 @@ struct RainfallMinimizer{N,T} <: RecordFunction
 end
 
 function RainfallMinimizer{N}(; length::Int=100, every::Int=1) where {N}
-    T = typeof_psystem(Val(N))
+    T = TÅ
     positions = Vector{SimulationStep{N,T}}(undef, 0)
     energies = Vector{Float64}(undef, 0)
     tasks = Vector{Task}(undef, 0)
@@ -173,7 +173,7 @@ function (rain::RainfallMinimizer)(o::SimulationStep, e::Float64, k::Int, mc::Mo
     k ≤ 0 && return
     ik, r = divrem(k, rain.every)
     r == 0 || return
-    newmc = MonteCarloSetup(mc, o; parallel=false)
+    newmc = MonteCarloSetup(mc, o)
     recordminimum = RMinimumEnergy(e, o)
     newsimu = SimulationSetup(300u"K", rain.length; printevery=0, record=recordminimum)
     task = let newmc=newmc, newsimu=newsimu, rain=rain, ik=ik

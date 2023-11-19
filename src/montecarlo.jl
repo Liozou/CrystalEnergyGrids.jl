@@ -170,7 +170,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         end
     end
 
-    MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
+    MonteCarloSetup(SimulationStep(poss),
                     Ref(tcorrection), offsets, Set(indices_list),
                     speciesblocks, atomblocks, beads, newmcmoves, rng), indices
 end
@@ -274,11 +274,11 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
 
     restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
 
-    setup_montecarlo(cell, csetup, systems, ff, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; parallel, rng, mcmoves)
+    setup_montecarlo(cell, csetup, systems, ff, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; rng, mcmoves)
 end
 
 """
-    MonteCarloSetup(mc::MonteCarloSetup; parallel::Bool=mc.step.parallel)
+    MonteCarloSetup(mc::MonteCarloSetup)
 
 Create a copy of `mc` that does not share its modifiable internal states (the positions and
 the Ewald state). For example, the copy and the original can be used to run Monte-Carlo
@@ -294,9 +294,9 @@ parallelized or not.
     `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
     modifying states outside of the API.
 """
-function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
+function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step)
     rng = deepcopy(mc.rng)
-    MonteCarloSetup(SimulationStep(o, :all; parallel),
+    MonteCarloSetup(SimulationStep(o, :all),
                     Ref(mc.tailcorrection[]), copy(mc.offsets),
                     copy(mc.indices), deepcopy(mc.speciesblocks), deepcopy(mc.atomblocks), copy(mc.bead),
                     copy(mc.mcmoves), rng)
