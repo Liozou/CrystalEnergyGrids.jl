@@ -57,26 +57,7 @@ In particular, the list of valid indices `j` for kind `i` is
 `length(posidx[i]) - length(freespecies[i])`.
 """
 struct SimulationStep{N,T}
-    ff::ForceField
-    charges::Vector{Te_au}
-    # charges[ix] is the charge of the atom of index ix in ff, i.e. the charge of the k-th
-    # atom in a system of kind i is charges[ffidx[i][k]].
     psystem::T
-    atoms::Vector{Tuple{Int,Int,Int}} # one index per atom
-    posidx::Vector{Vector{Vector{Int}}}
-    # the position of the k-th atom in the j-th system of kind i is positions[l] where
-    # atoms[l] == (i,j,k) and posidx[i][j][k] == l
-    freespecies::Vector{Vector{Int}}
-    # freespecies[i] is a list of indices j that indicate that posidx[i][j] are not to be
-    # taken into account. For example, if there used to be 3 species of kind i, and the 2nd
-    # was removed, then 2 is added to the list freespecies[i]. If a new species of kind i
-    # is added, the last element j of freespecies[i] is removed from the list and the
-    # positions of the new species are given by posidx[i][j]. If freespecies[i] is empty,
-    # take j = length(posidx[i]) + 1.
-    isrigid::BitVector # isrigid[i] applies to all systems of kind i
-    ffidx::Vector{Vector{Int}}
-    # ffidx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
-    # in the force field for the k-th atom in a system of kind i
 end
 
 @inline function Base.getproperty(s::SimulationStep, x::Symbol)
@@ -89,13 +70,6 @@ end
     else
         return getfield(s, x)
     end
-end
-
-function Base.show(io::IO, step::SimulationStep)
-    n = length(step.atoms)
-    m = length(step.freespecies)
-    print(io, "Simulation step with ", n , " atoms in ", m, " molecule kind")
-    m > 1 && print(io, 's')
 end
 
 
@@ -129,7 +103,7 @@ function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                                parallel,
                                output=0.0u"K")
 
-    SimulationStep{N,typeof(psystem)}(ff, charges, psystem, atoms, posidx, freespecies, isrigid, ffidx)
+    SimulationStep{N,typeof(psystem)}(psystem)
 end
 
 """
@@ -224,36 +198,7 @@ If `mode === :zero`, create a `SimulationStep` with an empty `ffidx` field.
 The `parallel` field is passed on to the created copy (except with `mode === :zero`)
 """
 function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.parallel) where {N,T}
-    if mode === :all
-        return deepcopy(step)
-        psystem = PeriodicSystem(; xpositions=copy(step.positions),
-                                   ypositions=SVector{3,TÅ}[],
-                                   unitcell=step.mat,
-                                   parallel,
-                                   cutoff=step.ff.cutoff, output=0.0u"K")
-        SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
-                       [[copy(js) for js in is] for is in step.posidx],
-                       [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
-    elseif mode === :output
-        return deepcopy(step)
-        psystem = PeriodicSystem(; xpositions=copy(step.positions),
-                                   ypositions=SVector{3,TÅ}[],
-                                   unitcell=step.mat,
-                                   parallel,
-                                   cutoff=step.ff.cutoff, output=0.0u"K")
-        SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
-                       step.posidx, step.freespecies, step.isrigid, step.ffidx)
-    elseif mode === :complete_output
-        return deepcopy(step)
-        SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
-                            [[copy(js) for js in is] for is in step.posidx],
-                            [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
-    elseif mode === :zero
-        SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
-                       step.posidx, step.freespecies, step.isrigid, Vector{Int}[])
-    else
-        error("Please use either :all, :output or :zero as value for argument mode")
-    end
+    mode === :zero ? step : deepcopy(step)
 end
 
 """
