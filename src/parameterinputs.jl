@@ -117,7 +117,7 @@ function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") wh
     lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(7) do (ik, newmc, newsimu)
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
             current_task().storage = ik
-            run_montecarlo_sub!(newmc, newsimu)
+            ignore_args(newmc, newsimu)
             positions[ik] = newsimu.record.minpos
             energies[ik] = newsimu.record.mine
         end

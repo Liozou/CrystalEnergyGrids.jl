@@ -224,7 +224,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     mkpath(simu.outdir)
 
     # idle initialisations
-    running_update = @spawn nothing
     local oldpos::Vector{SVector{3,TÅ}}
 
     # value initialisations
@@ -234,14 +233,12 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     # main loop
     for idx_cycle in 1:10
-        temperature = 300u"K"
 
         speak("Task ", thistask, " cycle ", idx_cycle)
 
         for idnummol in 1:nummol
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
-            ffidxi = mc.step.ffidx[idx[1]]
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
@@ -295,72 +292,7 @@ end
 
 
 
-function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
+function ignore_args(mc::MonteCarloSetup, simu::SimulationSetup)
     # energy initialization
-    energy = rand()
-    reports = Float64[]
-
-    thistask = current_task().storage
-    if !(thistask isa Int)
-        thistask = -1
-    end
-    thistask::Int
-
-    # record and outputs
-    mkpath(simu.outdir)
-
-    # idle initialisations
-    running_update = @spawn nothing
-    local oldpos::Vector{SVector{3,TÅ}}
-
-    # value initialisations
-    nummol = max(20, length(mc.indices))
-    old_idx = (0,0)
-
-    # main loop
-    for idx_cycle in 1:10
-        temperature = 300u"K"
-
-        speak("Task ", thistask, " cycle ", idx_cycle)
-
-        for idnummol in 1:nummol
-            # choose the species on which to attempt a move
-            idx = choose_random_species(mc)
-            ffidxi = mc.step.ffidx[idx[1]]
-
-            # currentposition is the position of that species
-            # currentposition is either a Vector or a @view, that's OK
-            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
-
-            # newpos is the position after the trial move
-            newpos = random_translation(mc.rng, currentposition, 1.3u"Å")
-
-            speak("Task ", thistask, " core running...")
-            speak("Task ", thistask, " core run.")
-
-            old_idx = idx
-            oldpos = newpos
-            speak("Task ", thistask, " accepting...")
-            mc.step.positions[mc.step.posidx[idx[1]][idx[2]]] .= oldpos
-            energy += rand()
-            speak("Task ", thistask, " accepted.")
-        end
-
-        speak("Task ", thistask, " end of cycle")
-
-        # end of cycle
-        ocomplete = SimulationStep(mc.step, :all)
-        speak("Task ", thistask, " recording...")
-        simu.record(ocomplete, energy, idx_cycle, mc, simu)
-        speak("Task ", thistask, " recorded.")
-    end
-    push!(reports, energy)
-    isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
-    # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
-    #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
-    # end
-    speak("Task ", thistask, " fetching.")
-    fetch(simu.record)
-    speak("!!! Task ", thistask, " finished"); flush(stdout)
-    reports
+    Float64[rand()]
 end
