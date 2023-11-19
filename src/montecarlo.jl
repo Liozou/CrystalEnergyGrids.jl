@@ -5,8 +5,6 @@ struct MonteCarloSetup{N,T,Trng}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     tailcorrection::Base.RefValue{TK}
-    coulomb::EnergyGrid
-    grids::Vector{EnergyGrid} # grids[ix] is the VdW grid for atom ix in ff.
     offsets::Vector{Int}
     # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
     indices::Set{Tuple{Int,Int}}
@@ -173,7 +171,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     end
 
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
+                    Ref(tcorrection), offsets, Set(indices_list),
                     speciesblocks, atomblocks, beads, newmcmoves, rng), indices
 end
 
@@ -299,7 +297,7 @@ parallelized or not.
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
     rng = deepcopy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
-                    Ref(mc.tailcorrection[]), deepcopy(mc.coulomb), deepcopy(mc.grids), copy(mc.offsets),
+                    Ref(mc.tailcorrection[]), copy(mc.offsets),
                     copy(mc.indices), deepcopy(mc.speciesblocks), deepcopy(mc.atomblocks), copy(mc.bead),
                     copy(mc.mcmoves), rng)
 end
