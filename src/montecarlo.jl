@@ -8,15 +8,7 @@ struct MonteCarloSetup{N,T,Trng}
     # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
     indices::Set{Tuple{Int,Int}}
     # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
-    mcmoves::Vector{MCMoves} # mcmoves[i] is the set of MC moves for kind i
     rng::Trng
-end
-
-function Base.show(io::IO, mc::MonteCarloSetup)
-    n = length(mc.indices)
-    m = length(mc.offsets)
-    print(io, "Monte-Carlo setup with ", n , " atoms in ", m, " molecule kind")
-    m > 1 && print(io, 's')
 end
 
 
@@ -38,23 +30,20 @@ IdSystem(s::AbstractSystem{3}) = IdSystem(atomic_symbol(s), s[:,:atomic_charge])
 Base.length(s::IdSystem) = length(s.atomic_charge)
 
 function setup_montecarlo(systems::Vector; rng=default_rng())
-    kindsdict = Dict{Tuple{Vector{Symbol},MCMoves},Int}()
+    kindsdict = Dict{Vector{Symbol},Int}()
     systemkinds = IdSystem[]
     U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
     poss = Vector{U}[]
     indices = Tuple{Int,Int}[]
     rev_indices = Vector{Int}[]
-    newmcmoves = MCMoves[]
     for (i, s) in enumerate(systems)
         system, n = s isa Tuple ? s : (s, 1)
         m = length(kindsdict)+1
-        mcmove = MCMoves(length(systems) == 1)
-        kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, mcmove), m)
+        kind = get!(kindsdict, atomic_symbol(system)::Vector{Symbol}, m)
         if kind === m
             push!(systemkinds, IdSystem(system)::IdSystem)
             push!(poss, U[])
             push!(rev_indices, Int[])
-            push!(newmcmoves, mcmove)
         end
         push!(indices, (kind, length(poss[kind])+1))
         append!(rev_indices[kind], i for _ in 1:n)
@@ -72,7 +61,7 @@ function setup_montecarlo(systems::Vector; rng=default_rng())
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    MonteCarloSetup(SimulationStep(poss), offsets, Set(indices_list), newmcmoves, rng), indices
+    MonteCarloSetup(SimulationStep(poss), offsets, Set(indices_list), rng), indices
 end
 
 
@@ -96,7 +85,7 @@ parallelized or not.
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step)
     rng = deepcopy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all), copy(mc.offsets),
-                    copy(mc.indices), copy(mc.mcmoves), rng)
+                    copy(mc.indices), rng)
 end
 
 

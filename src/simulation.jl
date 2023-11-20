@@ -131,8 +131,6 @@ function SimulationSetup(T, ncycles; kwargs...)
 end
 
 initialize_record!(::T, ::SimulationSetup{T}) where {T} = nothing
-needcomplete(::Any) = true
-needcomplete(::Returns) = false
 
 
 
@@ -148,60 +146,20 @@ See [`MonteCarloSetup`](@ref) for the definition of the system and
 [`SimulationSetup`](@ref) for the parameters of the simulation.
 """
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
-    # energy initialization
-    energy = rand()
-    reports = Float64[]
-
-    thistask = current_task().storage
-    if !(thistask isa Int)
-        thistask = -1
-    end
-    thistask::Int
-
     # record and outputs
     mkpath(simu.outdir)
 
-    # value initialisations
-    nummol = max(20, length(mc.indices))
-    old_idx = (0,0)
-
     # main loop
     for idx_cycle in 1:10
-
-        for idnummol in 1:nummol
-            # choose the species on which to attempt a move
-            idx = choose_random_species(mc)
-
-            # currentposition is the position of that species
-            # currentposition is either a Vector or a @view, that's OK
-            currentposition = mc.step.positions[[idx[2]]]
-
-            # newpos is the position after the trial move
-            newpos = random_translation(mc.rng, currentposition)
-
-            old_idx = idx
-            mc.step.positions[[idx[2]]] .= newpos
-            energy += rand()
-        end
-
         # end of cycle
-        report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
-        if !(simu.record isa Returns) || report_now
-            if report_now
-                push!(reports, energy)
-            end
-            if !(simu.record isa Returns)
-                ocomplete = SimulationStep(mc.step, :all)
-                simu.record(ocomplete, energy, idx_cycle, mc, simu)
-            end
+        if idx_cycle%simu.printevery == 0
+            ocomplete = SimulationStep(mc.step, :all)
+            simu.record(ocomplete, rand(mc.rng), idx_cycle, mc, simu)
             yield()
         end
     end
     fetch(simu.record)
-    reports
 end
-
-
 
 
 function ignore_args(mc::MonteCarloSetup, simu::SimulationSetup)
