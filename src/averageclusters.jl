@@ -234,8 +234,12 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
         counter = 0
         order = Symbol[]
         hasoccupancy = false
+        write_symmetries = false
+        symmetries_written = false
+        skiploop = false
         for l in eachline(input)
             if isempty(l)
+                skiploop = false
                 if inloop && inatomloop && loopstarted
                     for (p, (x, y, z)) in sites
                         counter += 1
@@ -258,6 +262,13 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
                         end
                         println(output)
                     end
+                elseif write_symmetries && !symmetries_written
+                    symmetries_written = true
+                    write_symmetries = false
+                    println(output)
+                    println(output, "_symmetry_space_group_name_H-M	'P 1'")
+                    println(output, "_symmetry_Int_Tables_number	1")
+                    println(output, "_symmetry_cell_setting	triclinic")
                 end
                 inloop = false
                 inatomloop = loopstarted = false
@@ -275,6 +286,7 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
                     end
                 end
                 if loopstarted
+                    skiploop && continue
                     inatomloop && !keepsource && continue # do not print framework atoms
                     counter += 1
                     if inatomloop && !hasoccupancy
@@ -295,10 +307,18 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
                         push!(order, :label)
                     elseif l == "_atom_site_type_symbol"
                         push!(order, :symbol)
+                    elseif l == "_symmetry_equiv_pos_as_xyz" || l == "_space_group_symop_operation_xyz"
+                        println(output, l)
+                        println(output, "x,y,z")
+                        skiploop = true
+                        continue
                     else
                         push!(order, :?)
                     end
                 end
+            elseif startswith(l, "_symmetry")
+                write_symmetries = true
+                continue
             end
             println(output, l)
         end
