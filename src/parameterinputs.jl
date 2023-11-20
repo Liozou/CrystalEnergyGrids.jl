@@ -78,16 +78,16 @@ end
 ## Record inputs
 abstract type RecordFunction <: Function end
 
-mutable struct RMinimumEnergy{N,T} <: RecordFunction
+mutable struct RMinimumEnergy <: RecordFunction
     mine::Float64
-    minpos::SimulationStep{N,T}
+    minpos::Vector{SVector{3,Float64}}
 
-    RMinimumEnergy{N,T}() where {N,T} = new{N,T}(Inf)
-    function RMinimumEnergy(mine::Float64, minpos::SimulationStep{N,T}) where {N,T}
-        new{N,T}(mine, minpos)
+    RMinimumEnergy()= new(Inf)
+    function RMinimumEnergy(mine::Float64, minpos::Vector{SVector{3,Float64}})
+        new(mine, minpos)
     end
 end
-function (record::RMinimumEnergy)(o::SimulationStep, e::Float64, k::Int,
+function (record::RMinimumEnergy)(o::Vector{SVector{3,Float64}}, e::Float64, k::Int,
                                   mc::MonteCarloSetup, simu::SimulationSetup)
     if Float64(e) < Float64(record.mine)
         record.mine = e
@@ -101,20 +101,18 @@ function (record::RMinimumEnergy)(o::SimulationStep, e::Float64, k::Int,
 end
 
 
-struct ShootingStarMinimizer{N,T} <: RecordFunction
+struct ShootingStarMinimizer <: RecordFunction
     every::Int
     length::Int
-    positions::Vector{SimulationStep{N,T}}
+    positions::Vector{Vector{SVector{3,Float64}}}
     energies::Vector{Float64}
     outdir::String
-    lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
+    lb::LoadBalancer{Tuple{Int,MonteCarloSetup,SimulationSetup{RMinimumEnergy}}}
 end
-function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") where {N}
-    T = TÅ
-    positions = Vector{SimulationStep{N,T}}(undef, 0)
+function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="")
+    positions = Vector{Vector{SVector{3,Float64}}}(undef, 0)
     energies = Vector{Float64}(undef, 0)
-    # lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
-    lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(7) do (ik, newmc, newsimu)
+    lb = LoadBalancer{Tuple{Int,MonteCarloSetup,SimulationSetup{RMinimumEnergy}}}(7) do (ik, newmc, newsimu)
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
             current_task().storage = ik
             ignore_args(newmc, newsimu)
@@ -124,13 +122,13 @@ function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") wh
     end
     ShootingStarMinimizer(every, length, positions, energies, outdir, lb)
 end
-function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
+function initialize_record!(star::ShootingStarMinimizer, simu::SimulationSetup{ShootingStarMinimizer})
     n = simu.ncycles ÷ star.every
     resize!(star.positions, n)
     resize!(star.energies, n)
 end
 
-function (star::ShootingStarMinimizer)(o::SimulationStep, e::Float64, k::Int, mc::MonteCarloSetup, _)
+function (star::ShootingStarMinimizer)(o::Vector{SVector{3,Float64}}, e::Float64, k::Int, mc::MonteCarloSetup, _)
     k ≤ 0 && return
     ik, r = divrem(k, star.every)
     r == 0 || return
@@ -146,30 +144,29 @@ end
 Base.fetch(x::ShootingStarMinimizer) = wait(x.lb)
 
 
-struct RainfallMinimizer{N,T} <: RecordFunction
+struct RainfallMinimizer <: RecordFunction
     every::Int
     length::Int
-    positions::Vector{SimulationStep{N,T}}
+    positions::Vector{Vector{SVector{3,Float64}}}
     energies::Vector{Float64}
     tasks::Vector{Task}
 end
 
-function RainfallMinimizer{N}(; length::Int=100, every::Int=1) where {N}
-    T = TÅ
-    positions = Vector{SimulationStep{N,T}}(undef, 0)
+function RainfallMinimizer(; length::Int=100, every::Int=1)
+    positions = Vector{Vector{SVector{3,Float64}}}(undef, 0)
     energies = Vector{Float64}(undef, 0)
     tasks = Vector{Task}(undef, 0)
-    RainfallMinimizer{N,T}(every, length, positions, energies, tasks)
+    RainfallMinimizer(every, length, positions, energies, tasks)
 end
 
-function initialize_record!(rain::T, simu::SimulationSetup{T}) where {T<:RainfallMinimizer}
+function initialize_record!(rain::RainfallMinimizer, simu::SimulationSetup{RainfallMinimizer})
     n = simu.ncycles ÷ rain.every
     resize!(rain.positions, n)
     resize!(rain.energies, n)
     resize!(rain.tasks, n)
 end
 
-function (rain::RainfallMinimizer)(o::SimulationStep, e::Float64, k::Int, mc::MonteCarloSetup, _)
+function (rain::RainfallMinimizer)(o::Vector{SVector{3,Float64}}, e::Float64, k::Int, mc::MonteCarloSetup, _)
     k ≤ 0 && return
     ik, r = divrem(k, rain.every)
     r == 0 || return
@@ -204,25 +201,4 @@ function Base.fetch(x::RainfallMinimizer)
     if retry
         foreach(wait, x.tasks)
     end
-end
-
-
-function reconstitute_trace(path::AbstractString, skip, keep)
-    numdirs = length(readdir(path)) - 1
-    energies = [deserialize(joinpath(path, string(i), "energies.serial")) for i in 1:numdirs if begin
-        x = ispath(joinpath(path, string(i), "energies.serial"))
-        x || @warn "Subfolder $i does not contain energies.serial"
-        x
-    end]
-    numdirs = length(energies)
-    trace = Vector{Vector{Float64}}(undef, numdirs)
-    for (i, energy) in enumerate(energies)
-        n = length(energy)
-        start = skip isa Integer ? skip : floor(Int, skip*n)
-        start += (start == 0)
-        stop = keep isa Integer ? start + keep - 1 : start + round(Int, keep*(n-start+1))
-        stop -= (stop == length(energy) + 1)
-        trace[i] = Float64.(@view energy[start:stop])
-    end
-    trace
 end
