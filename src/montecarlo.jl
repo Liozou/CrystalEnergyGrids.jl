@@ -2,12 +2,6 @@ export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_
 
 struct MonteCarloSetup{N,T,Trng}
     step::SimulationStep{N,T}
-    # step contains all the information that is not related to the framework nor to Ewald.
-    # It contains all the information necessary to compute the species-species VdW energy.
-    offsets::Vector{Int}
-    # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
-    indices::Set{Tuple{Int,Int}}
-    # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
     rng::Trng
 end
 
@@ -29,39 +23,8 @@ end
 IdSystem(s::AbstractSystem{3}) = IdSystem(atomic_symbol(s), s[:,:atomic_charge])
 Base.length(s::IdSystem) = length(s.atomic_charge)
 
-function setup_montecarlo(systems::Vector; rng=default_rng())
-    kindsdict = Dict{Vector{Symbol},Int}()
-    systemkinds = IdSystem[]
-    U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
-    poss = Vector{U}[]
-    indices = Tuple{Int,Int}[]
-    rev_indices = Vector{Int}[]
-    for (i, s) in enumerate(systems)
-        system, n = s isa Tuple ? s : (s, 1)
-        m = length(kindsdict)+1
-        kind = get!(kindsdict, atomic_symbol(system)::Vector{Symbol}, m)
-        if kind === m
-            push!(systemkinds, IdSystem(system)::IdSystem)
-            push!(poss, U[])
-            push!(rev_indices, Int[])
-        end
-        push!(indices, (kind, length(poss[kind])+1))
-        append!(rev_indices[kind], i for _ in 1:n)
-        append!(poss[kind], copy(position(system)::Vector{SVector{3,TÅ}}) for _ in 1:n)
-    end
-
-    n = length(poss)
-    offsets = Vector{Int}(undef, n)
-    offsets[1] = 0
-    indices_list = Tuple{Int,Int}[]
-    for i in 1:(n-1)
-        numi = length(poss[i])
-        offsets[i+1] = offsets[i] + numi
-        append!(indices_list, (i,j) for j in 1:length(poss[i]))
-    end
-    append!(indices_list, (n,j) for j in 1:length(poss[n]))
-
-    MonteCarloSetup(SimulationStep(poss), offsets, Set(indices_list), rng), indices
+function setup_montecarlo()
+    MonteCarloSetup(SimulationStep{3,TÅ}([rand(SVector{3,TÅ}) for _ in 1:80]), default_rng())
 end
 
 
@@ -84,9 +47,8 @@ parallelized or not.
 """
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step)
     rng = deepcopy(mc.rng)
-    MonteCarloSetup(SimulationStep(o, :all), copy(mc.offsets),
-                    copy(mc.indices), rng)
+    MonteCarloSetup(SimulationStep(o, :all), rng)
 end
 
 
-choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.indices)
+choose_random_species(mc::MonteCarloSetup) = rand(mc.rng)
