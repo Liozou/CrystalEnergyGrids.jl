@@ -39,39 +39,35 @@ end
 IdSystem(s::AbstractSystem{3}) = IdSystem(atomic_symbol(s), s[:,:atomic_charge])
 Base.length(s::IdSystem) = length(s.atomic_charge)
 
-function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
+function setup_montecarlo(cell::CellMatrix,
                           systems::Vector, ff::ForceField,
-                          grids::Vector{EnergyGrid},
-                          blocksetup::Vector{String},
-                          num_framework_atoms::Vector{Int},
-                          restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,TÅ}}}}};
+                          num_framework_atoms::Vector{Int};
                           rng=default_rng(), mcmoves::Vector)
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
-    @assert length(systems) == length(blocksetup) == length(mcmoves)
 
-    kindsdict = Dict{Tuple{Vector{Symbol},String,MCMoves},Int}()
+    kindsdict = Dict{Tuple{Vector{Symbol},MCMoves},Int}()
     systemkinds = IdSystem[]
     U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
-    poss = restartpositions isa Nothing ? Vector{U}[] : restartpositions
+    poss = Vector{U}[]
     indices = Tuple{Int,Int}[]
     rev_indices = Vector{Int}[]
     newmcmoves = MCMoves[]
-    for (i, (s, block)) in enumerate(zip(systems, blocksetup))
+    for (i, s) in enumerate(systems)
         system, n = s isa Tuple ? s : (s, 1)
         m = length(kindsdict)+1
         mcmove = isnothing(mcmoves[i]) ? MCMoves(length(systems) == 1) : mcmoves[i]
-        kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block, mcmove), m)
+        kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, mcmove), m)
         if kind === m
             push!(systemkinds, IdSystem(system)::IdSystem)
-            restartpositions isa Nothing && push!(poss, U[])
+            push!(poss, U[])
             push!(rev_indices, Int[])
             push!(newmcmoves, mcmove)
         end
         push!(indices, (kind, length(poss[kind])+1))
         append!(rev_indices[kind], i for _ in 1:n)
-        restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,TÅ}}) for _ in 1:n)
+        append!(poss[kind], copy(position(system)::Vector{SVector{3,TÅ}}) for _ in 1:n)
     end
 
     ffidx = [[ff.sdict[s.atomic_symbol[k]] for k in 1:length(s)] for s in systemkinds]
@@ -144,7 +140,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         d = norm(sum(cell.mat; dims=2))/4
         for j in 1:length(positioni)
             s = systems[rev_idx[j]]
-            n = restartpositions isa Nothing && s isa Tuple ? s[2]::Int : 1
+            n = s isa Tuple ? s[2]::Int : 1
             if n > 1
                 randomize_position!(positioni[j], rng, 1:length(ffidxi), bead, ffidxi, d)
             end
@@ -198,21 +194,15 @@ monoatomic species, or [49% translation, 49% rotation, 2% random reinsertion] el
 `rng` is the random number generator, defaulting to `Random.default_rng()`.
 """
 function setup_montecarlo(framework, forcefield_framework::String, systems;
-                          blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
-                          supercell=nothing, new=false, restart=nothing,
+                          supercell=nothing,
                           mcmoves=fill(nothing, length(systems)), rng=default_rng())
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
-    mat = stack3(bounding_box(syst_framework))
     if supercell isa Nothing
         supercell = find_supercell(syst_framework, 12.0u"Å")
     end
     supercell::NTuple{3,Int}
     cell = CellMatrix(SMatrix{3,3,TÅ,9}(stack(bounding_box(syst_framework).*supercell)))
-
-    csetup = GridCoordinatesSetup(syst_framework, gridstep)
-    length(blockfiles) == length(systems) || error("Please provide one blockfiles element per system")
-    blocksetup = [decide_parse_block(file, s isa Tuple ? s[1] : s, framework) for (file, s) in zip(blockfiles, systems)]
 
     needcoulomb = false
     encountered_atoms = Set{Symbol}()
@@ -229,28 +219,13 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
     sort!(atoms; by=last)
     # atoms is the list of unique atom types encountered in the molecule species
 
-    _, vdw_grid_paths = grid_locations(framework, forcefield_framework, first.(atoms), gridstep, supercell)
-
-    grids = if isempty(vdw_grid_paths) || isempty(framework)
-        # if framework is empty, signal it by having an empty list of grids
-        EnergyGrid[]
-    else
-        _grids = Vector{EnergyGrid}(undef, length(ff.sdict))
-        for (j, (atom, i)) in enumerate(atoms)
-            _grids[i] = retrieve_or_create_grid(vdw_grid_paths[j], syst_framework, ff, gridstep, atom, mat, new)
-        end
-        _grids
-    end
-
     num_framework_atoms = zeros(Int, length(ff.sdict))
     Π = prod(supercell)
     for at in syst_framework
         num_framework_atoms[ff.sdict[Symbol(get_atom_name(atomic_symbol(at)))]] += Π
     end
 
-    restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
-
-    setup_montecarlo(cell, csetup, systems, ff, grids, blocksetup, num_framework_atoms, restartpositions; rng, mcmoves)
+    setup_montecarlo(cell, systems, ff, num_framework_atoms; rng, mcmoves)
 end
 
 """
