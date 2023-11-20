@@ -115,7 +115,7 @@ Base.:(==)(m1::MCMoves, m2::MCMoves) = m1.cumulatives == m2.cumulatives
 Base.hash(m::MCMoves) = hash(m.cumulatives, hash(MCMoves))
 
 
-function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}}, dmax::TÅ)
-    r = SVector{3}(((2*rand(rng)-1)*dmax) for _ in 1:3)
+function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}})
+    r = SVector{3}(((2*rand(rng)-1)*u"Å") for _ in 1:3)
     [poss + r for poss in positions]
 end
