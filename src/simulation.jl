@@ -223,9 +223,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # record and outputs
     mkpath(simu.outdir)
 
-    # idle initialisations
-    local oldpos::Vector{SVector{3,TÅ}}
-
     # value initialisations
     nummol = max(20, length(mc.indices))
     old_idx = (0,0)
@@ -242,7 +239,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
-            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[[idx[2]]]
+            currentposition = mc.step.positions[[idx[2]]]
 
             # newpos is the position after the trial move
             attempt!(statistics.translation)
@@ -252,9 +249,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             speak("Task ", thistask, " core run.")
 
             old_idx = idx
-            oldpos = newpos
             speak("Task ", thistask, " accepting...")
-            mc.step.positions[[idx[2]]] .= oldpos
+            mc.step.positions[[idx[2]]] .= newpos
             energy += rand()
             speak("Task ", thistask, " accepted.")
         end

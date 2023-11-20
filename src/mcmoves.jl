@@ -119,17 +119,3 @@ function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}}, dmax
     r = SVector{3}(((2*rand(rng)-1)*dmax) for _ in 1:3)
     [poss + r for poss in positions]
 end
-function random_rotation(rng, positions::AbstractVector{SVector{3,TÅ}}, θmax, bead, _r=nothing)
-    θ = θmax*(2*rand(rng)-1)
-    s, c = sincos(θ)
-    r = _r isa Nothing ? rand(rng, 1:3) : _r
-    mat = if r == 1
-        SMatrix{3,3}(1, 0, 0, 0, c, s, 0, -s, c)
-    elseif r == 2
-        SMatrix{3,3}(c, 0, -s, 0, 1, 0, s, 0, c)
-    else
-        SMatrix{3,3}(c, s, 0, -s, c, 0, 0, 0, 1)
-    end
-    refpos = positions[bead]
-    [refpos + mat*(poss - refpos) for poss in positions]
-end
