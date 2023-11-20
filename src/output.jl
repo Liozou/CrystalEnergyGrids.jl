@@ -235,7 +235,8 @@ end
 
 
 function output_density_pdb(path, density, mat)
-    (a, b, c), (α, β, γ) = cell_parameters(mat)
+    _mat = unit(mat) === NoUnits ? mat : ustrip.(u"Å", mat)
+    (a, b, c), (α, β, γ) = cell_parameters(_mat)
     na, nb, nc = size(density)
     ϵ = min(ustrip(a)/na, ustrip(b)/nb, ustrip(c)/nc)/2
     counter = 0
@@ -246,7 +247,7 @@ function output_density_pdb(path, density, mat)
             ρ = density[i,j,k]
             ρ > 0 || continue
             num = floor(Int, ρ*(1000 + 1000randexp()))
-            px, py, pz = mat * SVector{3,Float64}(i/na, j/nb, k/nc)
+            px, py, pz = ustrip.(_mat * SVector{3,Float64}(i/na, j/nb, k/nc))
             for _ in 1:num
                 counter = mod(counter+1, 100000)
                 @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" counter :X 1 (px+ϵ*(2rand()-1)) (py+ϵ*(2rand()-1)) (pz+ϵ*(2rand()-1)) :Y

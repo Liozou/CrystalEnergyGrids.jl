@@ -446,13 +446,14 @@ equal to zero when first identifying basin centers.
 
 `maxbasins` is a limit on the maximal number of basins explored.
 """
-function coalescing_basins(grid::Array{<:Any,3}, maxdist, mat; smooth=norm(mat*(inv.(SVector{3,Int}(size(grid))))), atol=0.1, crop=atol*maximum(grid)/100, maxbasins=Inf)
+function coalescing_basins(grid::Array{<:Any,3}, maxdist, mat; smooth=nothing, atol=0.1, crop=nothing, maxbasins=Inf)
     a, b, c = dims = size(grid); ab = a*b
     ret = Tuple{Float64,SVector{3,Float64}}[] # total value and basin center
     smoothed = if smooth == 0
         grid
     else
-        imfilter(grid, Kernel.gaussian(NoUnits.((smooth.*dims)./norm.(eachcol(mat)))), "circular")
+        _smooth = smooth isa Nothing ? norm(mat*(inv.(SVector{3,Int}(size(grid))))) : smooth
+        imfilter(grid, Kernel.gaussian(NoUnits.((_smooth.*dims)./norm.(eachcol(mat)))), "circular")
     end
     sortedidx = sortperm(vec(smoothed), rev=true)
     buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
@@ -460,9 +461,10 @@ function coalescing_basins(grid::Array{<:Any,3}, maxdist, mat; smooth=norm(mat*(
     in_distance = Tuple{Int,SVector{3,Float64},typeof(safemin)}[]
     js = Int[]
     newcenter = MVector{3,Float64}(undef)
+    _crop = crop isa Nothing ? atol*maximum(grid)/100 : crop
     for newidx in sortedidx
         smval = smoothed[newidx]
-        smval ≤ crop && break
+        smval ≤ _crop && break
         val = grid[newidx]
         k, retk = fldmod1(newidx, ab)
         j, i = fldmod1(retk, a)

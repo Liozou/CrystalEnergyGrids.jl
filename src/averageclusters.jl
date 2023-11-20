@@ -1,5 +1,5 @@
-using ImageFiltering: mapwindow
-using StatsBase: median, AnalyticWeights
+# using ImageFiltering: mapwindow
+# using StatsBase: median, AnalyticWeights
 
 struct PDBModelIterator
     io::IOStream
@@ -35,7 +35,6 @@ function Base.iterate(stream::PDBModelIterator, _=nothing)
     end
 end
 
-
 """
     mat_from_output(path::AbstractString, ::Val{EXT}) where EXT
 
@@ -59,6 +58,12 @@ function mat_from_output(path::AbstractString, ::Val{EXT}) where EXT
         close(stream)
         mat
     end
+end
+
+function mat_from_output(path)
+    output, kind, valkind = find_output_file(path)
+    kind === :none && error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $path")
+    mat_from_output(output, valkind)
 end
 
 function find_output_file(path)
@@ -118,8 +123,8 @@ function _bin_trajectory(path, ::Val{EXT}; step, _bins) where EXT
         for x in (EXT === :stream ? step.positions : step[3])
             pos = EXT === :stream ? x : x[3]
             y = invmat*NoUnits.(pos./u"Å")
-            i, j, k = y .- floor.(y)
-            bins[ceil(Int, i*na)+(i==0), ceil(Int, j*nb)+(j==0), ceil(Int, k*nc)+(k==0)] += 1
+            u, v, w = y .- floor.(y)
+            bins[ceil(Int, u*na)+(u==0), ceil(Int, v*nb)+(v==0), ceil(Int, w*nc)+(w==0)] += 1
         end
     end
     bins, stepcounter
@@ -146,179 +151,58 @@ end
 
 
 """
-    average_clusters(bins::Array{Float64,3}; cluster=0, smooth=0, crop=0.0, collapse=0.0, atol=0.0, rtol=1.0, ntol=Inf)
+    average_clusters(bins::Array{Float64,3}, dist, mat; smooth=0, crop=sum(bins)/(1000length(bins)), atol=0.0, rtol=1.0, ntol=Inf)
 
 Takes a grid `bins` of atomic densities and group them into sites, each site corresponding
-to a local maximum in density.
+to a local density cluster. `dist` is the minimal separation distance between two sites,
+`mat` is the unit cell matrix.
 
-Any value of `bins` lower than `crop` is replaced by `0.0`.
-If two local maxima are closer than `cluster` (in terms of Manhattan distance on the grid),
-they are merged.
-If two resulting sites are closer than `collapse`, they are merged, and this in an
-iterative fashion.
+The grid is smoothed by a Gaussian of variance `smooth`. Use `smooth=0` to skip it. The
+default is to use the diagonal of a voxel as variance.
+Any value of `bins` lower than `crop` (after smoothing if so) is replaced by `0.0`. The
+default is computed depending on `atol`.
 
 There are different ways to remove extraneous sites:
 - Any site whose density is lower than `atol` is removed.
 - Keeping the sites by decreasing order of density, once the ratio of the kept density on
   the total density is below `rtol`, all remaining sites are removed. In other words,
-  `rtol=1.0` does not remove any site, `rtol=0.0` means only keep the most populated site.
+  `rtol=1` does not remove any site, `rtol=0` only keeps the single most populated site,
+  and any value in between may remove some sites, low-density first.
 - Keeping the sites by decreasing order of density, no more than `ntol` sites are kept.
-Sites whose total density is lower than `atol` are discared.
 
 Return a list of pairs `(p, center)` where `p` is the probability of having an atom on site
 at position `center`. The coordinates of `center` are in [0, 1).
 """
-function average_clusters(bins::Array{Float64,3}; cluster=0, smooth=0, crop=0.0, collapse=0.0,
-                                                  atol=0.0, rtol=1.0, ntol=Inf)
-    if crop > 0.0
-        for idx in eachindex(bins)
-            if bins[idx] ≤ crop
-                bins[idx] = 0
-            end
+function average_clusters(bins::Array{Float64,3}, dist, mat; smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
+    ret = coalescing_basins(bins, dist, mat; smooth, atol, crop, maxbasins=2*ntol)
+    sort!(ret; by=first, rev=true)
+    rtol == 1 && return ret
+    max_total = rtol * sum(bins)
+    total = 0.0
+    for (i, (p, _)) in enumerate(ret)
+        total += p
+        if total ≥ max_total || i+1 > ntol
+            resize!(ret, i)
+            break
         end
     end
-    if smooth > 0
-        # grid = imfilter(bins, Kernel.gaussian((smooth, smooth, smooth)), "circular")
-        weights = AnalyticWeights(vec([inv(1+sqrt((i-(smooth+1)/2)^2+(j-(smooth+1)/2)^2+(k-(smooth+1)/2)^2)) for i in 1:smooth, j in 1:smooth, k in 1:smooth]))
-        grid = mapwindow(bins, (smooth, smooth, smooth), "circular") do buf
-            median(vec(buf), weights)
-        end
-        grid .*= sum(bins)/sum(grid)
-        # skip = ≤(maximum(grid[I] for I in eachindex(bins) if iszero(bins[I])))
-    else
-        grid = bins
-    end
-    basinsets = if smooth > 0
-        local_basins(grid, -Inf; lt=(>), cluster, maxdist=0, skip=Returns(false))
-    else
-        local_basins(grid, -Inf; lt=(>), cluster, maxdist=0, skip=iszero)
-    end
-    _average_clusters(grid, basinsets, collapse, atol, rtol, ntol)
+    return ret
 end
 
-function _average_clusters(grid, basinsets, collapse, atol, rtol, ntol)
-    n = length(basinsets)
-    @assert !any(isempty, basinsets)
-    points, nodes = decompose_basins(grid, basinsets)
-    _average_clusters(grid, points, nodes, n, collapse, atol, rtol, ntol)
-end
-
-function _iterative_collapse!(centers, probabilities, (a,b,c), maxdist)
-    @show length(centers)
-    I = sortperm(probabilities, rev=true)
-    permute!(probabilities, I)
-    permute!(centers, I)
-
-    moved = true
-    maxdist2 = maxdist^2
-    mat = one(SMatrix{3,3,Float64,9})
-    buffer, ortho, safemin = prepare_periodic_distance_computations(mat)
-    ofs = MVector{3,Int}(undef)
-    for itrial in 1:20 # maximum 20 rounds
-        moved = false
-        positions = SVector{3,Float64}[]
-        todelete = Int[]
-        capped = something(findfirst(≤(0.99), probabilities), 1) - 1
-        println(capped, ' ', length(probabilities))
-        for (i, (p, center)) in enumerate(zip(probabilities, centers))
-            pos = center ./ (p*a, p*b, p*c)
-            for j in (capped+1):length(positions)
-                oldpos = positions[j]
-                buffer .= pos .- oldpos
-                if periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin) < maxdist2
-                    j in todelete && continue
-                    newproba = probabilities[j] + p
-                    newproba > 1.01 && continue # too high
-                    capped += newproba > 0.99
-                    probabilities[j] = newproba
-                    moved = true
-                    push!(todelete, i)
-                    newcenter = if iszero(ofs)
-                        centers[j] += center
-                    else
-                        centers[j] += (pos .+ ofs) .* (p*a, p*b, p*c)
-                    end
-                    positions[j] = newcenter ./ (newproba*a, newproba*b, newproba*c)
-                    k = j
-                    while k > 1
-                        k -= 1
-                        probabilities[k] ≥ newproba && break
-                        probabilities[k], probabilities[k+1] = newproba, probabilities[k]
-                        centers[k], centers[k+1] = centers[k+1], centers[k]
-                        positions[k], positions[k+1] = positions[k+1], positions[k]
-                    end
-                    for l in length(todelete):-1:1
-                        x = todelete[l]
-                        x < k && break
-                        if x < j
-                            todelete[l] = x + 1
-                        end
-                    end
-                    break
-                end
-            end
-            if !(moved && last(todelete == i))
-                push!(positions, pos)
-            end
-        end
-        isempty(todelete) && break
-        deleteat!(probabilities, todelete)
-    end
-    nothing
-end
-
-function _resize_criterion!(centers, probabilities, atol, max_cumul_proba, ntol)
-    retained = 0
-    cumul_proba = 0.0
-    while retained < length(probabilities)
-        retained += 1
-        retained ≥ ntol && break
-        p = probabilities[retained]
-        p < atol && break
-        cumul_proba += p
-        cumul_proba ≥ max_cumul_proba && break
-    end
-    resize!(centers, retained)
-    resize!(probabilities, retained)
-    nothing
-end
-
-function _average_clusters(grid, points, nodes, n, collapse, atol, rtol, ntol)
-    a, b, c = size(nodes)
-    probabilities = zeros(n)
-    centers = [zero(SVector{3,Float64}) for _ in 1:n]
-    for (i,j,k) in points
-        u, v, w = mod1(i, a), mod1(j, b), mod1(k, c)
-        belongs = nodes[u,v,w]
-        @assert !isempty(belongs)
-        density = grid[u,v,w]/length(belongs)
-        for belong in belongs
-            probabilities[belong] += density
-            centers[belong] += density*SVector{3,Float64}(i,j,k) # not u,v,w, keep the offset!
-        end
-    end
-    max_cumul_proba = rtol*sum(probabilities)
-    _iterative_collapse!(centers, probabilities, size(nodes), collapse/9)
-    _resize_criterion!(centers, probabilities, atol/3, max_cumul_proba, 3*ntol)
-    _iterative_collapse!(centers, probabilities, size(nodes), collapse/3)
-    _resize_criterion!(centers, probabilities, atol/2, max_cumul_proba, 2*ntol)
-    _iterative_collapse!(centers, probabilities, size(nodes), collapse)
-    _resize_criterion!(centers, probabilities, atol, max_cumul_proba, ntol)
-    [(p, center./(p*a,p*b,p*c)) for (p, center) in zip(probabilities, centers)]
-end
 
 """
-    average_clusters(dir; smooth=3, step=0.15u"Å", threshold=0.01)
+    average_clusters(dir, dist; step=0.15u"Å", smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
 
 Given the path to a folder `dir` containing the outputs of a simulation, group atomic
 densities into sites.
 
-See [`bin_trajectory`](@ref) for the meaning of `step` and
-[`average_clusters`](@ref) for the return type and the meaning of `smooth` and
-`threshold`.
+See [`bin_trajectory`](@ref) for the meaning of `step`.
+See [`average_clusters`](@ref) for the return type and the meaning of the other arguments.
 """
-function average_clusters(dir; smooth=3, step=0.15u"Å", threshold=0.01)
-    average_clusters(bin_trajectory(dir; step)[1]; smooth, threshold)
+function average_clusters(dir, dist; step=0.15u"Å", smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
+    mat = mat_from_output(dir)
+    bins, counter = bin_trajectory(dir; step)
+    average_clusters(bins./counter, dist, mat; smooth, crop, atol, rtol, ntol)
 end
 
 
