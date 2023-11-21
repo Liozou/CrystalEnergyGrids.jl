@@ -42,14 +42,13 @@ function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
     busy::Atomic{Int} = Atomic{Int}(0)
     event::Event = Event(true)
     channel::Channel{T} = Channel{T}(Inf)
-    tasks = [(@spawn while true
+    tasks = [errormonitor(@spawn while true
         x = take!($channel)
         atomic_add!($busy, 1)
         $f(x)
         atomic_sub!($busy, 1)
         notify($event)
-    end) for i in 1:n]
-    foreach(errormonitor, tasks)
+    end) for _ in 1:n]
     LoadBalancer{T}(channel, tasks, busy, event)
 end
 Base.put!(lb::LoadBalancer, x) = put!(lb.channel, x)
@@ -57,12 +56,4 @@ function Base.wait(lb::LoadBalancer)
     while !isempty(lb.channel) || lb.busy[] > 0
         wait(lb.event)
     end
-end
-function Base.close(lb::LoadBalancer)
-    if lb.busy[] != 0
-        @error "Forcibly closing the LoadBalancer may yield errors from the still-working tasks"
-    end
-    close(lb.channel)
-    lb.busy[] = -max(0, lb.busy[]) # make lb.busy zero or negative to signal the close
-    notify(lb.event)
 end
