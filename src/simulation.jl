@@ -18,7 +18,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     for idx_cycle in 1:10
         pos = copy(mc.positions)
-        simu.record(pos, rand(mc.rng), idx_cycle, mc, simu)
+        simu.record(pos, idx_cycle, mc, simu)
         yield()
     end
     fetch(simu.record)

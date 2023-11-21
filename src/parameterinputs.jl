@@ -16,7 +16,7 @@ function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="")
     ShootingStarMinimizer(every, length, outdir, lb)
 end
 
-function (star::ShootingStarMinimizer)(o::Vector{SVector{3,Float64}}, e::Float64, k::Int, mc::MonteCarloSetup, _)
+function (star::ShootingStarMinimizer)(o::Vector{SVector{3,Float64}}, k::Int, mc::MonteCarloSetup, _)
     k ≤ 0 && return
     k % star.every == 0 || return
     put!(star.lb, nothing)
