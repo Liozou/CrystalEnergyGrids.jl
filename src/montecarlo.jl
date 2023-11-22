@@ -66,10 +66,21 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     rev_indices = Vector{Int}[]
     speciesblocks = BlockFile[]
     newmcmoves = MCMoves[]
-    for (i, (s, block)) in enumerate(zip(systems, blocksetup))
+    idxsystem = 0
+    charge_flag = 0 # signal that the last system should be expanded based on charges
+    while idxsystem < length(systems)
+        idxsystem += 1
+        s = systems[idxsystem]
+        @label expand_one_system
+        block = blocksetup[idxsystem]
         system, n = s isa Tuple ? s : (s, 1)
+        if n == -1
+            charge_flag == 0 || error("At most one species can have their number specified as -1")
+            charge_flag = idxsystem
+            continue
+        end
         m = length(kindsdict)+1
-        mcmove = isnothing(mcmoves[i]) ? MCMoves(length(systems) == 1) : mcmoves[i]
+        mcmove = isnothing(mcmoves[idxsystem]) ? MCMoves(length(systems) == 1) : mcmoves[idxsystem]
         kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block, mcmove), m)
         if kind === m
             push!(systemkinds, IdSystem(system)::IdSystem)
@@ -83,7 +94,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
             push!(newmcmoves, mcmove)
         end
         push!(indices, (kind, length(poss[kind])+1))
-        append!(rev_indices[kind], i for _ in 1:n)
+        append!(rev_indices[kind], idxsystem for _ in 1:n)
         restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,TÅ}}) for _ in 1:n)
     end
 
@@ -94,6 +105,18 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         for (k, ix) in enumerate(ids)
             charges[ix] = kindi.atomic_charge[k]
         end
+    end
+
+    if charge_flag != 0
+        idxsystem = charge_flag
+        charge_flag = 0
+        syst, _ = systems[idxsystem]
+        tot_charge = eframework.net_charges_framework + sum(sum(ustrip(u"e_au", charges[ix]) for ix in ffidx[i]; init=0.0)*length(poss[i]) for i in 1:length(poss); init=0.0)
+        this_charge = sum(ustrip(u"e_au", syst[i,:atomic_charge])::Float64 for i in 1:length(syst); init=0.0)
+        iszero(this_charge) && error("Cannot use a number equal to -1 on a neutral species")
+        s = (syst, round(Int, -tot_charge/this_charge))
+        s[2] ≥ 0 || error(lazy"Cannot compensate the total charge of $tot_charge with a species of the charge $this_charge")
+        @goto expand_one_system
     end
 
     num_atoms = copy(num_framework_atoms)
@@ -192,6 +215,9 @@ given force field.
 A system can be either an `AbstractSystem`, or a pair `(s, n)` where `s` is an
 `AbstractSystem` and `n` is an integer. In that case, `n` systems identical to `s` will be
 added and their position and orientations randomized.
+Using `n = -1` is allowed for up to one species: in that case, the value of `n` will be
+chosen so that the resulting system is electrically neutral. Using `n = -1` is thus
+forbidden on neutral species.
 
 `blockfiles[i]` can be set to `false` to allow the molecule `systems[i]` to go everywhere in
 the framework.
