@@ -234,6 +234,9 @@ See [`MonteCarloSetup`](@ref) for the definition of the system and
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # energy initialization
     energy = baseline_energy(mc)
+    if isinf(Float64(energy)) || isnan(Float64(energy))
+        @warn "Initial energy is not finite, this probably indicates a problem with the initial configuration."
+    end
     reports = typeof(energy)[]
 
     # record and outputs

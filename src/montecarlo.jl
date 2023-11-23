@@ -67,18 +67,13 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     speciesblocks = BlockFile[]
     newmcmoves = MCMoves[]
     idxsystem = 0
-    charge_flag = 0 # signal that the last system should be expanded based on charges
+    # charge_flat is a signal that the system should be expanded based on charges
+    charge_flag::Union{Nothing,NTuple{4,Int}} = nothing
     while idxsystem < length(systems)
         idxsystem += 1
         s = systems[idxsystem]
-        @label expand_one_system
         block = blocksetup[idxsystem]
         system, n = s isa Tuple ? s : (s, 1)
-        if n == -1
-            charge_flag == 0 || error("At most one species can have their number specified as -1")
-            charge_flag = idxsystem
-            continue
-        end
         m = length(kindsdict)+1
         mcmove = isnothing(mcmoves[idxsystem]) ? MCMoves(length(systems) == 1) : mcmoves[idxsystem]
         kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block, mcmove), m)
@@ -96,6 +91,10 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         push!(indices, (kind, length(poss[kind])+1))
         append!(rev_indices[kind], idxsystem for _ in 1:n)
         restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,TÅ}}) for _ in 1:n)
+        if n == -1
+            charge_flag isa Nothing || error("At most one species can have their number specified as -1")
+            charge_flag = (idxsystem, kind, length(rev_indices[kind]), length(poss[kind]))
+        end
     end
 
     ffidx = [[ff.sdict[s.atomic_symbol[k]] for k in 1:length(s)] for s in systemkinds]
@@ -107,16 +106,17 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         end
     end
 
-    if charge_flag != 0
-        idxsystem = charge_flag
-        charge_flag = 0
-        syst, _ = systems[idxsystem]
+    if charge_flag isa NTuple{4,Int}
+        idxsystem′, kind′, i_revidxk′, i_possk′ = charge_flag
+        system′, _ = systems[idxsystem]
         tot_charge = eframework.net_charges_framework + sum(sum(ustrip(u"e_au", charges[ix]) for ix in ffidx[i]; init=0.0)*length(poss[i]) for i in 1:length(poss); init=0.0)
-        this_charge = sum(ustrip(u"e_au", syst[i,:atomic_charge])::Float64 for i in 1:length(syst); init=0.0)
+        this_charge = sum(ustrip(u"e_au", system′[i,:atomic_charge])::Float64 for i in 1:length(system′); init=0.0)
         iszero(this_charge) && error("Cannot use a number equal to -1 on a neutral species")
-        s = (syst, round(Int, -tot_charge/this_charge))
-        s[2] ≥ 0 || error(lazy"Cannot compensate the total charge of $tot_charge with a species of the charge $this_charge")
-        @goto expand_one_system
+        n′ = round(Int, -tot_charge/this_charge)
+        n′ ≥ 0 || error(lazy"Cannot compensate the total charge of $tot_charge with a species of the charge $this_charge")
+        systems[idxsystem] = (system′, n′)
+        splice!(rev_indices[kind′], (i_revidxk′+1):i_revidxk′, idxsystem′ for _ in 1:n′)
+        restartpositions isa Nothing && splice!(poss[kind′], (i_possk′+1):i_possk′, copy(position(system′)::Vector{SVector{3,TÅ}}) for _ in 1:n′)
     end
 
     num_atoms = copy(num_framework_atoms)

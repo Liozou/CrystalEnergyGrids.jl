@@ -235,7 +235,7 @@ end
 
 
 function output_density_pdb(path, density, mat)
-    _mat = unit(mat) === NoUnits ? mat : ustrip.(u"Å", mat)
+    _mat = unit(eltype(mat)) === NoUnits ? mat : ustrip.(u"Å", mat)
     (a, b, c), (α, β, γ) = cell_parameters(_mat)
     na, nb, nc = size(density)
     ϵ = min(ustrip(a)/na, ustrip(b)/nb, ustrip(c)/nc)/2
