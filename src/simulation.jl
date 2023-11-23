@@ -235,7 +235,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # energy initialization
     energy = baseline_energy(mc)
     if isinf(Float64(energy)) || isnan(Float64(energy))
-        @warn "Initial energy is not finite, this probably indicates a problem with the initial configuration."
+        @error "Initial energy is not finite, this probably indicates a problem with the initial configuration."
     end
     reports = typeof(energy)[]
 
@@ -243,11 +243,12 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     mkpath(simu.outdir)
     startstep = SimulationStep(mc.step, needcomplete(simu.record) ? :all : :output)
     output, output_task = output_handler(simu.outdir, simu.outtype, startstep)
-    if mc.step.parallel
+    parallel = mc.step.parallel
+    if parallel
         record_task = @spawn $simu.record(startstep, $energy, -simu.ninit, $mc, $simu)
     else
         simu.record(startstep, energy, -simu.ninit, mc, simu) === :stop && return [energy]
-        record_task = @spawn nothing # for type stability
+        record_task = Task(Returns(nothing)) # for type stability
     end
 
     if simu.ninit == 0
@@ -300,7 +301,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             # if the previous move was accepted, wait for mc to be completely up to date
             # before computing
-            accepted && wait(running_update)
+            accepted && parallel && wait(running_update)
 
             i, j = idx
             ij = mc.offsets[i]+j
@@ -311,7 +312,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 # else
                 #     before = fetch(before_task) # simply keep its previous value
                 end
-                @spawnif mc.step.parallel begin
+                @spawnif parallel begin
                     singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
                     fer = @spawn framework_interactions($mc, $i, $newpos)
                     singlevdw = single_contribution_vdw(mc.step, idx, newpos)
@@ -320,7 +321,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             else
                 molpos = mc.step.posidx[i][j]
                 positions = @view mc.step.positions[molpos]
-                @spawnif mc.step.parallel begin
+                @spawnif parallel begin
                     singlevdw_before_task = @spawn single_contribution_vdw($mc.step, $(i,j), $positions)
                     singlereciprocal_after = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
                     singlereciprocal_before = @spawn single_contribution_ewald($mc.ewald, $ij, nothing)
@@ -337,7 +338,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             accepted = compute_accept_move(before, after, temperature, mc.rng)
             oldpos = newpos
             if accepted
-                if mc.step.parallel
+                if parallel
                     # do not use newpos since it can be changed in the next iteration before the Task is run
                     running_update = @spawn update_mc!($mc, $idx, $oldpos)
                 else
@@ -346,7 +347,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 diff = after - before
                 accept!(statistics, move)
                 if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
-                    wait(running_update)
+                    parallel && wait(running_update)
                     energy = baseline_energy(mc) # to avoid underflows
                 else
                     energy += diff
@@ -357,7 +358,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         # end of cycle
         report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
         if !(simu.record isa Returns) || report_now
-            accepted && wait(running_update)
+            accepted && parallel && wait(running_update)
             o = SimulationStep(mc.step, :output)
             if report_now
                 put!(output, o)
@@ -365,7 +366,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             end
             if !(simu.record isa Returns)
                 ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
-                if mc.step.parallel
+                if parallel
                     # ret_record cannot be inferred, but that's fine
                     ret_record = fetch(record_task)
                     ret_record === :stop && break
@@ -386,8 +387,10 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             statistics.θmax = (counter_cycle-1)/counter_cycle*statistics.θmax + rotation_ratio/counter_cycle*120u"°"
         end
     end
-    wait(record_task)
-    accepted && wait(running_update)
+    if parallel
+        wait(record_task)
+        accepted && wait(running_update)
+    end
 
     @label end_cleanup
     if simu.printevery == 0 && simu.ncycles > 0
@@ -398,16 +401,13 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     if !isempty(simu.outdir) && :energies in simu.outtype
         serialize(joinpath(simu.outdir, "energies.serial"), reports)
     end
-    if simu.ninit == 0 && simu.ncycles == 0 # single-point computation
-        wait(output_task[])
-    else
-        newbaseline = @spawn baseline_energy(mc)
-        wait(output_task[])
-        lastenergy = fetch(newbaseline)::BaselineEnergyReport
+    if !(simu.ninit == 0 && simu.ncycles == 0) # not a single-point computation
+        lastenergy = baseline_energy(mc)
         if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
             @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
         end
     end
+    parallel && wait(output_task[])
     fetch(simu.record)
     reports
 end
