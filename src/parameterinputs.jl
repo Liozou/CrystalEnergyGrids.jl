@@ -137,7 +137,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     printevery = Int(!isempty(star.outdir))*10
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
     newsimu = SimulationSetup(300u"K", star.length; printevery, outdir, ninit=80, record=recordminimum)
-    put!(star.lb, (ik, newmc, newsimu))
+    put!(star.lb, Some((ik, newmc, newsimu)))
     nothing
 end
 
