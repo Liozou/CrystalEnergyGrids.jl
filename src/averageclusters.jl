@@ -85,7 +85,7 @@ function find_output_file(path)
 end
 
 """
-    bin_trajectory(path; step=0.15u"Å", bins=nothing)
+    bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing)
 
 Given the `path` to a directory containing the outputs of a simulation, or directly to the
 output file, return a pair `(bins, total)` such that `bins` is a grid of specified `step`
@@ -94,17 +94,20 @@ is the number of frames of the output.
 
 As a consequence, `bins ./ total` is a map of the average atomic density.
 
+The first `skip` frames are discarded. Up to `count` frames are kept.
+
 A preallocated `bins` array can be given if it has the correct size. It will be filled by
 the appropriate values and returned instead of a new array.
 """
-function bin_trajectory(path; step=0.15u"Å", bins=nothing)
+function bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing)
     output, kind, valkind = find_output_file(path)
     kind === :none && error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $path.")
-    _bin_trajectory(output, valkind; step, _bins=bins)
+    _bin_trajectory(output, valkind; step, skip, count, _bins=bins)
 end
 
-function _bin_trajectory(path, ::Val{EXT}; step, _bins) where EXT
+function _bin_trajectory(path, ::Val{EXT}; step, skip, count, _bins) where EXT
     @assert EXT === :pdb || EXT === :stream
+    @assert skip ≥ 0 && count ≥ 0
     steps = (EXT === :pdb ? PDBModelIterator : StreamSimulationStep)(path)
     mat = mat_from_output(path, Val(EXT))
     invmat = inv(NoUnits.(mat./u"Å"))
@@ -120,17 +123,22 @@ function _bin_trajectory(path, ::Val{EXT}; step, _bins) where EXT
     stepcounter = 0
     for step in steps
         stepcounter += 1
+        stepcounter ≤ skip && continue
         for x in (EXT === :stream ? step.positions : step[3])
             pos = EXT === :stream ? x : x[3]
             y = invmat*NoUnits.(pos./u"Å")
             u, v, w = y .- floor.(y)
             bins[ceil(Int, u*na)+(u==0), ceil(Int, v*nb)+(v==0), ceil(Int, w*nc)+(w==0)] += 1
         end
+        if (stepcounter - skip) ≥ count
+            EXT === :stream && close(steps)
+            break
+        end
     end
-    bins, stepcounter
+    bins, (stepcounter > skip)*(stepcounter - skip)
 end
 
-function bin_trajectories(path; step=0.15u"Å", except=())
+function bin_trajectories(path; step=0.15u"Å", skip=0, count=typemax(Int), except=())
     dirs = filter(x -> isdir(joinpath(path, x)) && x ∉ except, readdir(path; join=false))
     isempty(dirs) && error(lazy"Directory $path does not contain any valid folder")
     output, kind, valkind = find_output_file(joinpath(path, first(dirs)))
@@ -141,7 +149,7 @@ function bin_trajectories(path; step=0.15u"Å", except=())
     totalbins = zeros(Int, na, nb, nc)
     totalcounter = 0
     for dir in dirs
-        _, counter = bin_trajectory(joinpath(path, dir); step, bins)
+        _, counter = bin_trajectory(joinpath(path, dir); step, skip, count, bins)
         totalbins .+= bins
         totalcounter += counter
         yield()
