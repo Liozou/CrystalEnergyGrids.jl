@@ -587,11 +587,10 @@ Channel-like abstraction to balance function calls across a fixed number of task
 See [`LoadBalancer{T}(f, n::Integer)`](@ref) to create an instance.
 """
 struct LoadBalancer{T}
-    channel::Channel{Union{Nothing,Some{T}}}
+    channel::Channel{T}
     tasks::Vector{Task}
     busy::Atomic{Int}
     event::Event
-    f::Any # no specialization on the function type
 end
 
 using Serialization
@@ -600,10 +599,7 @@ using Serialization
     LoadBalancer{T}(f, n::Integer=nthreads()-1)
 
 Given a function `f`, create `n` tasks that wait on an input `x::T` to execute `f(x, i)`
-where `i` is between `0` and `n` and uniquely identifies each task. `i == 0` corresponds to
-an `n+1`-th thread which is temporarily create
-
-
+where `i` is between 1 and `n` and uniquely identifies each task.
 With `lb = LoadBalancer(f, n)`, use `put!(lb, x)` to send `x` to one of the tasks: this
 call is not blocking and will always return immediately, but the `f(x, i)` call will not
 occur until one of the `n` tasks is free.
@@ -628,48 +624,26 @@ wait(lb)
 function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
     busy::Atomic{Int} = Atomic{Int}(0)
     event::Event = Event(true)
-    channel::Channel{Union{Nothing,Some{T}}} = Channel{Union{Nothing,Some{T}}}(Inf)
-    tasks = [errormonitor(@spawn balanced_load($f, $channel, $busy, $event, $i)) for i in 1:n]
-    LoadBalancer{T}(channel, tasks, busy, event, f)
-end
-function balanced_load(f, channel, busy, event, i)
-    while true
-        x = take!(channel)
-        x isa Nothing && break
-        atomic_add!(busy, 1)
-        f(something(x), i)
-        atomic_sub!(busy, 1)
-        notify(event)
-    end
+    channel::Channel{T} = Channel{T}(Inf)
+    tasks = [(@spawn while true
+        x = take!($channel)
+        atomic_add!($busy, 1)
+        $f(x, $i)
+        atomic_sub!($busy, 1)
+        notify($event)
+    end) for i in 1:n]
+    foreach(errormonitor, tasks)
+    LoadBalancer{T}(channel, tasks, busy, event)
 end
 Base.put!(lb::LoadBalancer, x) = put!(lb.channel, x)
 function Base.wait(lb::LoadBalancer)
-    isempty(lb.channel) && lb.busy[] ≤ 0 && return
-    # while waiting, add an extra task to do the work
-    newtask = errormonitor(@spawn balanced_load(lb.f, lb.channel, lb.busy, lb.event, 0))
     while !isempty(lb.channel) || lb.busy[] > 0
         wait(lb.event)
     end
-    put!(lb.channel, nothing) # kill the extra task
-    while true
-        yield()
-        i = something(findfirst(istaskdone, lb.tasks), 0)
-        if i == 0
-            istaskdone(newtask) && break
-        else
-            lb.tasks[i] = newtask # FIXME: the value i passed to balanced_load may be wrong
-            break
-        end
-    end
-    nothing
 end
 function Base.close(lb::LoadBalancer)
-    nbusy = lb.busy[]
-    if nbusy != 0
+    if lb.busy[] != 0
         @error "Forcibly closing the LoadBalancer may yield errors from the still-working tasks"
-    end
-    for _ in 1:length(lb.tasks)
-        put!(lb.channel, nothing)
     end
     close(lb.channel)
     lb.busy[] = -max(0, lb.busy[]) # make lb.busy zero or negative to signal the close
