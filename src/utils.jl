@@ -596,13 +596,15 @@ end
 using Serialization
 
 """
-    LoadBalancer{T}(f, n::Integer=nthreads()-1)
+    LoadBalancer{T}(f, n::Integer=nthreads())
 
 Given a function `f`, create `n` tasks that wait on an input `x::T` to execute `f(x, i)`
 where `i` is between 1 and `n` and uniquely identifies each task.
+
 With `lb = LoadBalancer(f, n)`, use `put!(lb, x)` to send `x` to one of the tasks: this
 call is not blocking and will always return immediately, but the `f(x, i)` call will not
 occur until one of the `n` tasks is free.
+
 Use `wait(lb)` to wait until all inputs have been processed.
 
 ## Example
@@ -621,7 +623,7 @@ do_something_else()
 wait(lb)
 ```
 """
-function LoadBalancer{T}(f, n::Integer=nthreads()-1) where T
+function LoadBalancer{T}(f, n::Integer=nthreads()) where T
     busy::Atomic{Int} = Atomic{Int}(0)
     event::Event = Event(true)
     channel::Channel{T} = Channel{T}(Inf)

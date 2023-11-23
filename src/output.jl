@@ -234,23 +234,43 @@ function output_basins_pdb(path, points, nodes, mat)
 end
 
 
-function output_density_pdb(path, density, mat)
+function output_density(path, density, mat; mode=:vtf, factor=1000)
+    mode === :vtf || mode === :pdb || throw(ArgumentError(lazy"Only mode :vtf and :pdb are supported, not $vtf"))
     _mat = unit(eltype(mat)) === NoUnits ? mat : ustrip.(u"Å", mat)
     (a, b, c), (α, β, γ) = cell_parameters(_mat)
     na, nb, nc = size(density)
     ϵ = min(ustrip(a)/na, ustrip(b)/nb, ustrip(c)/nc)/2
     counter = 0
-    open(path, "w") do io
-        @printf io "MODEL     %4d\n" 0
-        @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" ustrip(a) ustrip(b) ustrip(c) α β γ
+    _path = endswith(path, string('.', mode)) ? path : string(path, '.', mode)
+    nums = [min(30, floor(Int, factor*density[i,j,k]*(1+randexp()))) for k in 1:nc, j in 1:nb, i in 1:na]
+    tot = sum(nums)
+    @show tot
+    open(_path, "w") do io
+        if mode === :vtf
+            @printf io "atom default radius 0 name X\n"
+            @printf io "atom 1:%d resid 1 radius 0 name X\n" tot
+            @printf io "unitcell %9g%9g%9g%7g%7g%7g\n" ustrip(a) ustrip(b) ustrip(c) α β γ
+            println(io, "timestep")
+        elseif mode === :pdb
+            @printf io "MODEL     %4d\n" 0
+            @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" ustrip(a) ustrip(b) ustrip(c) α β γ
+        end
+        idx = 0
         for k in 1:nc, j in 1:nb, i in 1:na
-            ρ = density[i,j,k]
-            ρ > 0 || continue
-            num = floor(Int, ρ*(1000 + 1000randexp()))
+            idx += 1
+            num = nums[idx]
+            num == 0 && continue
             px, py, pz = ustrip.(_mat * SVector{3,Float64}(i/na, j/nb, k/nc))
             for _ in 1:num
                 counter = mod(counter+1, 100000)
-                @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" counter :X 1 (px+ϵ*(2rand()-1)) (py+ϵ*(2rand()-1)) (pz+ϵ*(2rand()-1)) :Y
+                x = px+ϵ*(2rand()-1)
+                y = py+ϵ*(2rand()-1)
+                z = pz+ϵ*(2rand()-1)
+                if mode === :vtf
+                    println(io, x, ' ', y, ' ', z)
+                elseif mode === :pdb
+                    @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" counter :X 1 x y z :Y
+                end
             end
         end
     end
