@@ -89,12 +89,7 @@ mutable struct RMinimumEnergy{N,T} <: RecordFunction
 end
 function (record::RMinimumEnergy)(o::SimulationStep, e::Float64, k::Int,
                                   mc::MonteCarloSetup, simu::SimulationSetup)
-    if Float64(e) < Float64(record.mine)
-        record.mine = e
-        record.minpos = o
-    end
     if k == simu.ncycles && !isempty(simu.outdir)
-        output_pdb(joinpath(simu.outdir, "min_energy.pdb"), mc, record.minpos)
         output_restart(joinpath(simu.outdir, "min_energy.restart"), record.minpos)
     end
     nothing
@@ -118,8 +113,6 @@ function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") wh
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
             current_task().storage = ik
             run_montecarlo_sub!(newmc, newsimu)
-            positions[ik] = newsimu.record.minpos
-            energies[ik] = newsimu.record.mine
         end
     end
     ShootingStarMinimizer(every, length, positions, energies, outdir, lb)
