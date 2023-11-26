@@ -52,10 +52,6 @@ function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnam
         length(poss) < k && resize!(poss, k)
         poss[k] = pos
     end
-    for posi in positions
-        hasassigned = [j for j in 1:length(posi) if isassigned(posi, j)]
-        keepat!(posi, hasassigned)
-    end
     open(path, "w") do io
         println(io, """Cell info:
 ========================================================================
@@ -65,21 +61,12 @@ number-of-unit-cells: 1 1 1""")
                 @printf io "%19.12f%19.12f%19.12f\n" NoUnits(o.mat[1,i]/u"Å") NoUnits(o.mat[2,i]/u"Å") NoUnits(o.mat[3,i]/u"Å")
             end
         end
-        for (i, name) in enumerate(molnames)
-            posi = positions[i]
-            num = length(posi)
-            ffidxi = o.ffidx[i]
-            m = length(ffidxi)
-            println(io, "------------------------------------------------------------------------")
-            for (j, poss) in enumerate(posi), (k, opos) in enumerate(poss)
-                abc = invmat * opos
-                pos = NoUnits.(o.mat*(abc .- floor.(abc))./u"Å")
-                @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" (j-1) (k-1) pos[1] pos[2] pos[3]
-            end
-            for j in 0:num-1, (k, ix) in enumerate(ffidxi)
-                @printf io "Adsorbate-atom-charge:   %d %d%19.12f\n" j (k-1) NoUnits(o.charges[ix]/u"e_au")
-            end
-            println(io)
+        posi = positions[end]
+        println(io, "------------------------------------------------------------------------")
+        for (j, poss) in enumerate(posi), (k, opos) in enumerate(poss)
+            abc = invmat * opos
+            pos = NoUnits.(o.mat*(abc .- floor.(abc))./u"Å")
+            @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" (j-1) (k-1) pos[1] pos[2] pos[3]
         end
         println(io, '\n')
         nothing
