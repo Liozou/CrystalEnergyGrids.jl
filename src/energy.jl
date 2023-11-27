@@ -66,9 +66,6 @@ struct SimulationStep{N,T}
     posidx::Vector{Vector{Vector{Int}}}
     # the position of the k-th atom in the j-th system of kind i is positions[l] where
     # atoms[l] == (i,j,k) and posidx[i][j][k] == l
-    isrigid::BitVector # isrigid[i] applies to all systems of kind i
-    # ffidx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
-    # in the force field for the k-th atom in a system of kind i
 end
 
 @inline function Base.getproperty(s::SimulationStep, x::Symbol)
@@ -92,7 +89,7 @@ end
 
 function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                         inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
-                        isrigid::BitVector, cell::CellMatrix;
+                        cell::CellMatrix;
                         parallel::Bool=true) where N
 
     numatoms = sum(x -> sum(length, x; init=0), inputpos; init=0)
@@ -119,7 +116,7 @@ function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                                parallel,
                                output=0.0u"K")
 
-    SimulationStep{N,typeof(psystem)}(ff, charges, psystem, atoms, posidx, isrigid)
+    SimulationStep{N,typeof(psystem)}(ff, charges, psystem, atoms, posidx)
 end
 
 """
@@ -151,12 +148,11 @@ without having to specify the system kinds.
 """
 function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
                         inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
-                        cell::CellMatrix,
-                        isrigid::BitVector=trues(length(systemkinds));
+                        cell::CellMatrix;
                         parallel::Bool=true) where N
-    @assert length(systemkinds) == length(inputpos) == length(isrigid)
+    @assert length(systemkinds) == length(inputpos)
     charges = [[uconvert(u"e_au", s[k,:atomic_charge])::Te_au for k in 1:length(s)] for s in systemkinds]
-    SimulationStep(ff, charges, inputpos, isrigid, cell; parallel)
+    SimulationStep(ff, charges, inputpos, cell; parallel)
 end
 
 """
@@ -174,31 +170,23 @@ considered as having the same system kind (e.g. several molecules of water).
 
 If unspecified, `cell` is set to an open (i.e. aperiodic) box.
 """
-function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatrix(),
-                   isrigid::BitVector=trues(length(systems)); parallel::Bool=true) where T<:AbstractSystem
-    length(isrigid) > length(systems) && error("Less systems provided than `isrigid` specifications")
-    if length(isrigid) < length(systems)
-        @info "All systems beyond the $(length(isrigid)) first ones are implicitly considered rigid."
-        append!(isrigid, true for _ in length(systems)-length(isrigid))
-    end
+function make_step(ff::ForceField, systems::Vector{T}, cell::CellMatrix=CellMatrix(); parallel::Bool=true) where T<:AbstractSystem
     kindsdict = Dict{Tuple{Vector{Symbol},Bool},Int}()
     systemkinds = T[]
     U = Vector{SVector{n_dimensions(systems[1]),TÅ}} # positions of the atoms of a system
     poss = Vector{U}[]
-    newisrigid = BitVector()
     indices = Tuple{Int,Int}[]
-    for (system, thisrigid) in zip(systems, isrigid)
+    for system in systems
         n = length(kindsdict)+1
-        kind = get!(kindsdict, (atomic_symbol(system), thisrigid), n)
+        kind = get!(kindsdict, atomic_symbol(system), n)
         if kind === n
             push!(systemkinds, system)
             push!(poss, U[])
-            push!(newisrigid, thisrigid)
         end
         push!(poss[kind], position(system))
         push!(indices, (kind, length(poss[kind])))
     end
-    SimulationStep(ff, systemkinds, poss, cell, newisrigid; parallel), indices
+    SimulationStep(ff, systemkinds, poss, cell; parallel), indices
 end
 
 """
@@ -221,7 +209,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    parallel,
                                    cutoff=step.ff.cutoff, output=0.0u"K")
         SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
-                       [[copy(js) for js in is] for is in step.posidx], step.isrigid)
+                       [[copy(js) for js in is] for is in step.posidx])
     elseif mode === :output
         return deepcopy(step)
         psystem = PeriodicSystem(; xpositions=copy(step.positions),
@@ -230,15 +218,14 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    parallel,
                                    cutoff=step.ff.cutoff, output=0.0u"K")
         SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
-                       step.posidx, step.isrigid)
+                       step.posidx)
     elseif mode === :complete_output
         return deepcopy(step)
         SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
-                            [[copy(js) for js in is] for is in step.posidx],
-                            step.isrigid)
+                            [[copy(js) for js in is] for is in step.posidx])
     elseif mode === :zero
         SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
-                       step.posidx, step.isrigid)
+                       step.posidx)
     else
         error("Please use either :all, :output or :zero as value for argument mode")
     end
@@ -277,7 +264,7 @@ function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
                                parallel=step.parallel,
                                cutoff=step.ff.cutoff, output=0.0u"K")
 
-    x = SimulationStep{N,T}(step.ff, step.charges, psystem, step.atoms, step.posidx, step.isrigid)
+    x = SimulationStep{N,T}(step.ff, step.charges, psystem, step.atoms, step.posidx)
     update_position!(x, (i,j), newpos)
     x
 end

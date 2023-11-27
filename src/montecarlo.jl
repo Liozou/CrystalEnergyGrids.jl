@@ -34,7 +34,7 @@ function setup_montecarlo(systems)
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(systems), cell; parallel),
+    MonteCarloSetup(SimulationStep(ForceField(), charges, poss, cell; parallel),
                     Set(indices_list), rng), indices
 end
 
@@ -63,9 +63,8 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
-    molpos = mc.step.posidx[i][j]
     for (k, newpos) in enumerate(newpositions)
-        mc.step.positions[molpos[k]] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
+        mc.step.positions[j] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
             newpos
         else
             NoUnits(newpos/u"Å")
