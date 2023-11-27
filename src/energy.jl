@@ -74,7 +74,6 @@ struct SimulationStep{N,T}
     # positions of the new species are given by posidx[i][j]. If freespecies[i] is empty,
     # take j = length(posidx[i]) + 1.
     isrigid::BitVector # isrigid[i] applies to all systems of kind i
-    ffidx::Vector{Vector{Int}}
     # ffidx[i][k] is ff.sdict[atomic_symbol(systemkinds[i], k)], i.e. the numeric index
     # in the force field for the k-th atom in a system of kind i
 end
@@ -101,7 +100,7 @@ end
 
 function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                         inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
-                        isrigid::BitVector, ffidx::Vector{Vector{Int}}, cell::CellMatrix;
+                        isrigid::BitVector, cell::CellMatrix;
                         parallel::Bool=true) where N
 
     numatoms = sum(x -> sum(length, x; init=0), inputpos; init=0)
@@ -129,7 +128,7 @@ function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                                parallel,
                                output=0.0u"K")
 
-    SimulationStep{N,typeof(psystem)}(ff, charges, psystem, atoms, posidx, freespecies, isrigid, ffidx)
+    SimulationStep{N,typeof(psystem)}(ff, charges, psystem, atoms, posidx, freespecies, isrigid)
 end
 
 """
@@ -165,9 +164,8 @@ function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:Abstract
                         isrigid::BitVector=trues(length(systemkinds));
                         parallel::Bool=true) where N
     @assert length(systemkinds) == length(inputpos) == length(isrigid)
-    ffidx = [[1] for s in systemkinds]
     charges = [[uconvert(u"e_au", s[k,:atomic_charge])::Te_au for k in 1:length(s)] for s in systemkinds]
-    SimulationStep(ff, charges, inputpos, isrigid, ffidx, cell; parallel)
+    SimulationStep(ff, charges, inputpos, isrigid, cell; parallel)
 end
 
 """
@@ -233,7 +231,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    cutoff=step.ff.cutoff, output=0.0u"K")
         SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
                        [[copy(js) for js in is] for is in step.posidx],
-                       [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
+                       [copy(x) for x in step.freespecies], step.isrigid)
     elseif mode === :output
         return deepcopy(step)
         psystem = PeriodicSystem(; xpositions=copy(step.positions),
@@ -242,15 +240,15 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    parallel,
                                    cutoff=step.ff.cutoff, output=0.0u"K")
         SimulationStep{N,T}(step.ff, step.charges, psystem, copy(step.atoms),
-                       step.posidx, step.freespecies, step.isrigid, step.ffidx)
+                       step.posidx, step.freespecies, step.isrigid)
     elseif mode === :complete_output
         return deepcopy(step)
         SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
                             [[copy(js) for js in is] for is in step.posidx],
-                            [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
+                            [copy(x) for x in step.freespecies], step.isrigid)
     elseif mode === :zero
         SimulationStep{N,T}(step.ff, step.charges, step.psystem, step.atoms,
-                       step.posidx, step.freespecies, step.isrigid, Vector{Int}[])
+                       step.posidx, step.freespecies, step.isrigid)
     else
         error("Please use either :all, :output or :zero as value for argument mode")
     end
@@ -289,7 +287,7 @@ function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
                                parallel=step.parallel,
                                cutoff=step.ff.cutoff, output=0.0u"K")
 
-    x = SimulationStep{N,T}(step.ff, step.charges, psystem, step.atoms, step.posidx, step.freespecies, step.isrigid, step.ffidx)
+    x = SimulationStep{N,T}(step.ff, step.charges, psystem, step.atoms, step.posidx, step.freespecies, step.isrigid)
     update_position!(x, (i,j), newpos)
     x
 end

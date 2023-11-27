@@ -40,7 +40,7 @@ end
 
 
 function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnames)
-    positions = [Vector{SVector{3,TÅ}}[] for _ in o.ffidx]
+    positions = [Vector{SVector{3,TÅ}}[] for _ in o.positions]
     invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
     for (l, pos) in enumerate(o.positions)
         i, j, k = o.atoms[l]
@@ -79,7 +79,7 @@ See also [`output_pdb`](@ref).
 """
 function output_restart(path, step::SimulationStep)
     lengths, angles = cell_parameters(step.mat)
-    molnames = ["Na" for ffidxi in step.ffidx]
+    molnames = ["Na" for _ in step.positions]
     output_restart(path, step, lengths, angles, molnames)
 end
 output_restart(path, mc::MonteCarloSetup) = output_restart(path, SimulationStep(mc))
@@ -88,7 +88,9 @@ function pdb_output_handler(path, mat::SMatrix{3,3,TÅ,9})
     taskref = Ref{Task}()
     if isempty(path)
         Channel{SimulationStep}(Inf; taskref) do channel
-            while !isempty(take!(channel).ffidx) end # skip until isempty(o.ffidx)
+            while true
+                take!(channel)
+            end
         end
     else
         lengths, angles = cell_parameters(mat)
@@ -98,7 +100,6 @@ function pdb_output_handler(path, mat::SMatrix{3,3,TÅ,9})
             while true
                 i += 1
                 o = take!(channel)
-                isempty(o.ffidx) && break
                 output_pdb(path, o, lengths, angles, i, atomcounter)
             end
             nothing

@@ -25,7 +25,6 @@ function setup_montecarlo(systems)
     poss = Vector{U}[U[[rand(SVector{3,TÅ})]] for _ in 1:systems]
     indices = Tuple{Int,Int}[(1, 1)]
 
-    ffidx = [[1] for _ in 1:systems]
     charges = [NaN*u"e_au"]
 
     n = length(poss)
@@ -35,7 +34,7 @@ function setup_montecarlo(systems)
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
+    MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(systems), cell; parallel),
                     Set(indices_list), rng), indices
 end
 
