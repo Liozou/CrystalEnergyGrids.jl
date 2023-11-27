@@ -16,7 +16,6 @@ struct MonteCarloSetup{N,T,Trng}
     atomblocks::Vector{BlockFile}
     # atomblock[ix][pos] is set if pos is blocked for all atoms of index ix in ff.
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
-    mcmoves::Vector{MCMoves} # mcmoves[i] is the set of MC moves for kind i
     rng::Trng
 end
 
@@ -28,19 +27,12 @@ function Base.show(io::IO, mc::MonteCarloSetup)
 end
 
 
-struct IdSystem # pseudo-AbstractSystem with only atomic symbols and charges
-    atomic_symbol::Vector{Symbol}
-    atomic_charge::Vector{Te_au}
-end
-Base.length(s::IdSystem) = length(s.atomic_charge)
-
 function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, systems,
                           num_framework_atoms::Vector{Int};
-                          parallel::Bool=true, rng=default_rng(), mcmoves::Vector)
+                          parallel::Bool=true, rng=default_rng())
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
-    @assert systems == length(mcmoves)
 
     coulomb = EnergyGrid()
     grids = EnergyGrid[]
@@ -49,7 +41,6 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, system
     poss = Vector{U}[U[[rand(SVector{3,TÅ})]] for _ in 1:systems]
     indices = Tuple{Int,Int}[(1, 1)]
     speciesblocks = BlockFile[BlockFile(csetup)]
-    newmcmoves = MCMoves[MCMoves(true)]
 
     ffidx = [[1] for _ in 1:systems]
     charges = [NaN*u"e_au"]
@@ -89,7 +80,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, system
 
     MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
-                    speciesblocks, atomblocks, beads, newmcmoves, rng), indices
+                    speciesblocks, atomblocks, beads, rng), indices
 end
 
 """
@@ -133,18 +124,15 @@ monoatomic species, or [49% translation, 49% rotation, 2% random reinsertion] el
 `rng` is the random number generator, defaulting to `Random.default_rng()`.
 """
 function setup_montecarlo(framework, forcefield_framework::String, systems;
-                          parallel=false,
-                          mcmoves=fill(nothing, systems), rng=default_rng())
+                          parallel=false, rng=default_rng())
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
-    supercell = find_supercell(syst_framework, 12.0u"Å")
-    cell = CellMatrix(SMatrix{3,3,TÅ,9}(stack(bounding_box(syst_framework).*supercell)))
+    cell = CellMatrix(SMatrix{3,3,TÅ,9}(stack(bounding_box(syst_framework))))
 
     csetup = GridCoordinatesSetup(syst_framework, 0.15u"Å")
 
-    Π = prod(supercell)
-    num_framework_atoms = [Π*length(syst_framework)]
+    num_framework_atoms = [length(syst_framework)]
 
-    setup_montecarlo(cell, csetup, systems, num_framework_atoms; parallel, rng, mcmoves)
+    setup_montecarlo(cell, csetup, systems, num_framework_atoms; parallel, rng)
 end
 
 """
@@ -168,8 +156,7 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     rng = deepcopy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     Ref(mc.tailcorrection[]), deepcopy(mc.coulomb), deepcopy(mc.grids), copy(mc.offsets),
-                    copy(mc.indices), deepcopy(mc.speciesblocks), deepcopy(mc.atomblocks), copy(mc.bead),
-                    copy(mc.mcmoves), rng)
+                    copy(mc.indices), deepcopy(mc.speciesblocks), deepcopy(mc.atomblocks), copy(mc.bead), rng)
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
@@ -186,11 +173,7 @@ end
 
 choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.indices)
 
-
-function randomize_position!(positions, rng, indices, bead, d)
-    pos = @view positions[indices]
-    posr = random_rotation(rng, random_rotation(rng, random_rotation(rng, pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
-    post = random_translation(rng, posr, d)
-    positions[indices] .= post
-    post
+function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}}, dmax::TÅ)
+    r = SVector{3}(((2*rand(rng)-1)*dmax) for _ in 1:3)
+    [poss + r for poss in positions]
 end
