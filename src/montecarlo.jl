@@ -11,10 +11,6 @@ struct MonteCarloSetup{N,T,Trng}
     # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
     indices::Set{Tuple{Int,Int}}
     # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
-    speciesblocks::Vector{BlockFile}
-    # speciesblocks[i][pos] is set if pos is blocked for any atom of a species of kind i.
-    atomblocks::Vector{BlockFile}
-    # atomblock[ix][pos] is set if pos is blocked for all atoms of index ix in ff.
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
     rng::Trng
 end
@@ -40,7 +36,6 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, system
     U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
     poss = Vector{U}[U[[rand(SVector{3,TÅ})]] for _ in 1:systems]
     indices = Tuple{Int,Int}[(1, 1)]
-    speciesblocks = BlockFile[BlockFile(csetup)]
 
     ffidx = [[1] for _ in 1:systems]
     charges = [NaN*u"e_au"]
@@ -75,12 +70,9 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, system
 
     beads = fill(1, n)
 
-    atomblocks = BlockFile[]
-
 
     MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
-                    speciesblocks, atomblocks, beads, rng), indices
+                    Ref(tcorrection), coulomb, grids, offsets, Set(indices_list), beads, rng), indices
 end
 
 """
@@ -156,7 +148,7 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     rng = deepcopy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     Ref(mc.tailcorrection[]), deepcopy(mc.coulomb), deepcopy(mc.grids), copy(mc.offsets),
-                    copy(mc.indices), deepcopy(mc.speciesblocks), deepcopy(mc.atomblocks), copy(mc.bead), rng)
+                    copy(mc.indices), copy(mc.bead), rng)
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)

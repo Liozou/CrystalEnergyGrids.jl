@@ -64,29 +64,3 @@ function abc_to_xyz(cset::GridCoordinatesSetup, i, j, k)
                                 j*cset.size[2]/cset.dims[2] + cset.shift[2],
                                 k*cset.size[3]/cset.dims[3] + cset.shift[3]))
 end
-
-"""
-    BlockFile
-
-Structure representing the content of a .block file projected on a grid.
-"""
-struct BlockFile
-    csetup::GridCoordinatesSetup
-    block::BitArray{3}
-    empty::Bool
-end
-BlockFile(csetup) = BlockFile(csetup, BitArray{3}(undef, 0, 0, 0), true)
-function BlockFile(csetup::GridCoordinatesSetup, block::BitArray{3})
-    if any(block)
-        BlockFile(csetup, block, false)
-    else
-        BlockFile(csetup)
-    end
-end
-Base.isempty(x::BlockFile) = x.empty
-function Base.getindex(x::BlockFile, pos::SVector{3,TÅ})
-    x.empty && return false
-    a, b, c = round.(Int, offsetpoint(pos, x.csetup))
-    x.block[a,b,c]
-end
-Base.getindex(x::BlockFile, i, j, k) = x[SVector{3}(i, j, k)]
