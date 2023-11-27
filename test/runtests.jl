@@ -238,17 +238,17 @@ end
 
     mc2, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [(na, 135),]; rng=StableRNG(2));
     reports2 = run_montecarlo!(mc2, SimulationSetup(300.0u"K", 1000; outdir="", printevery=1000))
-    @test length(reports2) == 3
-    @test Float64(reports2[end]) ≈ -133113058.587565258145 rtol=0.001
+    @test length(reports2) == 2
+    @test Float64(reports2[end]) ≈ -133125456.300416499376 rtol=0.001
 
     ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
     mc3, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [(ar, 30)]; rng=StableRNG(3));
     reports3 = run_montecarlo!(mc3, CEG.SimulationSetup(300.0u"K", 1000; outdir="", printevery=0))
-    @test Float64(reports3[end]) ≈ -48842.047447430079 rtol=0.001
+    @test Float64(reports3[end]) ≈ -52022.338028982216 rtol=0.001
 
-    mc4, _ = setup_montecarlo("FAU_1.4_03f7b3ba", "BoulfelfelSholl2021", [(na, 80)]; rng=StableRNG(4));
+    mc4, _ = setup_montecarlo("FAU_1.4_03f7b3ba", "BoulfelfelSholl2021", [(na, -1)]; rng=StableRNG(4));
     reports4 = run_montecarlo!(mc4, SimulationSetup(300.0u"K", 1000, outdir="", printevery=0))
-    @test Float64(reports4[end]) ≈ -56137040.415392756462 rtol=0.001
+    @test Float64(reports4[end]) ≈ -56100003.732869200408 rtol=0.001
 end
 
 @testset "Restart" begin

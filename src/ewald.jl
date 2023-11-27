@@ -534,7 +534,6 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
 
     rest_single = 0.0
     single_single = 0.0
-    n = length(ewald.ctx.allcharges)
     @inbounds for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
         rest = ewald.ctx.eframework.StoreRigidChargeFramework[idxkvec]
         rest += ewald.sums[idxkvec,1] - ewald.sums[idxkvec,ij+1]

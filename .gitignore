@@ -4,3 +4,4 @@ Manifest.toml*
 test/savegrids
 test/raspa/grids/
 *.code-workspace
+**/report.txt
