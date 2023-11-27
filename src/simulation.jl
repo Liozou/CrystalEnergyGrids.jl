@@ -241,7 +241,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         for idnummol in 1:nummol
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
-            ffidxi = mc.step.ffidx[idx[1]]
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
@@ -326,7 +325,6 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
         for idnummol in 1:nummol
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
-            ffidxi = mc.step.ffidx[idx[1]]
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK

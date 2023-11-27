@@ -28,67 +28,31 @@ function Base.show(io::IO, mc::MonteCarloSetup)
 end
 
 
-struct EwaldSystem # pseudo-AbstractSystem with only positions and charges
-    position::Vector{SVector{3,TÅ}}
-    atomic_charge::Vector{Te_au}
-end
-AtomsBase.position(x::EwaldSystem) = x.position
-AtomsBase.position(x::EwaldSystem, i::Int) = x.position[i]
-Base.getindex(x::EwaldSystem, ::Colon, s::Symbol) = getproperty(x, s)
-Base.getindex(x::EwaldSystem, i::Int, s::Symbol) = getproperty(x, s)[i]
-Base.length(x::EwaldSystem) = length(x.position)
-
 struct IdSystem # pseudo-AbstractSystem with only atomic symbols and charges
     atomic_symbol::Vector{Symbol}
     atomic_charge::Vector{Te_au}
 end
-IdSystem(s::AbstractSystem{3}) = IdSystem(atomic_symbol(s), s[:,:atomic_charge])
 Base.length(s::IdSystem) = length(s.atomic_charge)
 
-function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
-                          systems::Vector, ff::ForceField,
-                          coulomb::EnergyGrid, grids::Vector{EnergyGrid},
-                          num_framework_atoms::Vector{Int},
-                          restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,TÅ}}}}};
+function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, systems,
+                          num_framework_atoms::Vector{Int};
                           parallel::Bool=true, rng=default_rng(), mcmoves::Vector)
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
-    @assert length(systems) == length(mcmoves)
+    @assert systems == length(mcmoves)
 
-    kindsdict = Dict{Tuple{Vector{Symbol},MCMoves},Int}()
-    systemkinds = IdSystem[]
+    coulomb = EnergyGrid()
+    grids = EnergyGrid[]
+
     U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
-    poss = restartpositions isa Nothing ? Vector{U}[] : restartpositions
-    indices = Tuple{Int,Int}[]
-    rev_indices = Vector{Int}[]
-    speciesblocks = BlockFile[]
-    newmcmoves = MCMoves[]
-    for (i, s) in enumerate(systems)
-        system, n = s isa Tuple ? s : (s, 1)
-        m = length(kindsdict)+1
-        mcmove = isnothing(mcmoves[i]) ? MCMoves(length(systems) == 1) : mcmoves[i]
-        kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, mcmove), m)
-        if kind === m
-            push!(systemkinds, IdSystem(system)::IdSystem)
-            restartpositions isa Nothing && push!(poss, U[])
-            push!(rev_indices, Int[])
-            push!(speciesblocks, BlockFile(csetup))
-            push!(newmcmoves, mcmove)
-        end
-        push!(indices, (kind, length(poss[kind])+1))
-        append!(rev_indices[kind], i for _ in 1:n)
-        restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,TÅ}}) for _ in 1:n)
-    end
+    poss = Vector{U}[U[[rand(SVector{3,TÅ})]] for _ in 1:systems]
+    indices = Tuple{Int,Int}[(1, 1)]
+    speciesblocks = BlockFile[BlockFile(csetup)]
+    newmcmoves = MCMoves[MCMoves(true)]
 
-    ffidx = [fill(1, length(s)) for s in systemkinds]
+    ffidx = [[1] for _ in 1:systems]
     charges = [NaN*u"e_au"]
-    for (i, ids) in enumerate(ffidx)
-        kindi = systemkinds[i]
-        for (k, ix) in enumerate(ids)
-            charges[ix] = kindi.atomic_charge[k]
-        end
-    end
 
     num_atoms = copy(num_framework_atoms)
     for (i, indices) in enumerate(ffidx)
@@ -118,55 +82,12 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    buffer = MVector{3,TÅ}(undef)
-    buffer2 = MVector{3,Float64}(undef)
-    beads = Vector{Int}(undef, n)
-    for i in 1:n
-        if isempty(poss[i])
-            beads[i] = 0
-            continue
-        end
-        possi = poss[i][1]
-        refpos = possi[1]
-        meanpos = refpos + mean(pos - refpos for pos in possi)
-        mind2 = Inf*u"Å^2"
-        thisbead = 0
-        for (k, pos) in enumerate(possi)
-            buffer .= pos .- meanpos
-            d2 = unsafe_periodic_distance2!(buffer, buffer2, cell)
-            if d2 < mind2
-                mind2 = d2
-                thisbead = k
-            end
-        end
-        beads[i] = thisbead
-    end
+    beads = fill(1, n)
 
-    atomblocks = Vector{BlockFile}(undef, length(grids))
-    @inbounds for ix in 1:length(grids)
-        if isassigned(grids, ix)
-            atomblocks[ix] = BlockFile(grids[ix])
-        end
-    end
+    atomblocks = BlockFile[]
 
-    ewaldsystems = EwaldSystem[]
-    for (i, positioni) in enumerate(poss)
-        ffidxi = ffidx[i]
-        charge = [charges[k] for k in ffidxi]
-        rev_idx = rev_indices[i]
-        bead = beads[i]
-        d = norm(sum(cell.mat; dims=2))/4
-        for j in 1:length(positioni)
-            s = systems[rev_idx[j]]
-            n = restartpositions isa Nothing && s isa Tuple ? s[2]::Int : 1
-            if n > 1
-                randomize_position!(positioni[j], rng, 1:length(ffidxi), bead, d)
-            end
-            push!(ewaldsystems, EwaldSystem(positioni[j], charge))
-        end
-    end
 
-    MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
+    MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
                     speciesblocks, atomblocks, beads, newmcmoves, rng), indices
 end
@@ -212,42 +133,18 @@ monoatomic species, or [49% translation, 49% rotation, 2% random reinsertion] el
 `rng` is the random number generator, defaulting to `Random.default_rng()`.
 """
 function setup_montecarlo(framework, forcefield_framework::String, systems;
-                          blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
-                          supercell=nothing, new=false, restart=nothing, parallel=true,
-                          mcmoves=fill(nothing, length(systems)), rng=default_rng())
+                          parallel=false,
+                          mcmoves=fill(nothing, systems), rng=default_rng())
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
-    ff = parse_forcefield_RASPA(forcefield_framework)
-    if supercell isa Nothing
-        supercell = find_supercell(syst_framework, 12.0u"Å")
-    end
-    supercell::NTuple{3,Int}
+    supercell = find_supercell(syst_framework, 12.0u"Å")
     cell = CellMatrix(SMatrix{3,3,TÅ,9}(stack(bounding_box(syst_framework).*supercell)))
 
-    csetup = GridCoordinatesSetup(syst_framework, gridstep)
-    length(blockfiles) == length(systems) || error("Please provide one blockfiles element per system")
+    csetup = GridCoordinatesSetup(syst_framework, 0.15u"Å")
 
-    needcoulomb = false
-    encountered_atoms = Set{Symbol}()
-    for s in systems
-        system = s isa Tuple ? s[1] : s
-        if !needcoulomb
-            needcoulomb = any(!iszero(system[i,:atomic_charge])::Bool for i in 1:length(system))
-        end
-        for k in 1:length(system)
-            push!(encountered_atoms, atomic_symbol(system, k))
-        end
-    end
-
-
-    num_framework_atoms = [0]
     Π = prod(supercell)
-    for at in syst_framework
-        num_framework_atoms[1] += Π
-    end
+    num_framework_atoms = [Π*length(syst_framework)]
 
-    restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
-
-    setup_montecarlo(cell, csetup, systems, ff, EnergyGrid(), EnergyGrid[], num_framework_atoms, restartpositions; parallel, rng, mcmoves)
+    setup_montecarlo(cell, csetup, systems, num_framework_atoms; parallel, rng, mcmoves)
 end
 
 """
