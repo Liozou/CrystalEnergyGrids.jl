@@ -4,7 +4,6 @@ struct MonteCarloSetup{N,T,Trng}
     step::SimulationStep{N,T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
-    tailcorrection::Base.RefValue{TK}
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[ix] is the VdW grid for atom ix in ff.
     offsets::Vector{Int}
@@ -47,16 +46,6 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, system
             num_atoms[id] += mult
         end
     end
-    tcorrection = 0.0u"K"
-    for (i, ni) in enumerate(num_atoms)
-        ni == 0 && continue
-        for (j, nj) in enumerate(num_atoms)
-            nj == 0 && continue
-            tcorrection += ni*nj*3.1u"K"
-        end
-    end
-    tcorrection *= 2π/det(ustrip.(u"Å", cell.mat))
-
     n = length(poss)
     offsets = Vector{Int}(undef, n)
     offsets[1] = 0
@@ -72,7 +61,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, system
 
 
     MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    Ref(tcorrection), coulomb, grids, offsets, Set(indices_list), beads, rng), indices
+                    coulomb, grids, offsets, Set(indices_list), beads, rng), indices
 end
 
 """
@@ -147,7 +136,7 @@ parallelized or not.
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
     rng = deepcopy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
-                    Ref(mc.tailcorrection[]), deepcopy(mc.coulomb), deepcopy(mc.grids), copy(mc.offsets),
+                    deepcopy(mc.coulomb), deepcopy(mc.grids), copy(mc.offsets),
                     copy(mc.indices), copy(mc.bead), rng)
 end
 
