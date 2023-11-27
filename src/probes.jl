@@ -90,28 +90,3 @@ function compute_derivatives_vdw(s::ProbeSystem, pos::SVector{3,TÅ})
     end
     (value, SVector{3,Float64}(∂1), SVector{3,Float64}(∂2), ∂3)
 end
-
-function compute_derivatives_ewald(s::ProbeSystem, ewald, pos::SVector{3,TÅ})
-    buffer, ortho, safemin = prepare_periodic_distance_computations(s.mat)
-    safemin2 = safemin^2
-    buffer2 = MVector{3,Float64}(undef)
-    cutoff2 = NoUnits(s.forcefield.cutoff^2/u"Å^2")
-    value = 0.0
-    ∂1 = zero(MVector{3,Float64})
-    ∂2 = zero(MVector{3,Float64})
-    ∂3 = 0.0
-    smallest_d2 = Inf
-    for i in 1:length(s.positions)
-        buffer .= NoUnits.(pos./u"Å") .- s.positions[i]
-        d2 = periodic_distance2_fromcartesian!(buffer, s.mat, s.invmat, ortho, safemin2, buffer2)
-        d2 ≥ cutoff2 && continue
-        smallest_d2 = min(smallest_d2, d2)
-        v, p1, p2, p3 = derivatives_ewald(ewald, s.charges[i], d2)
-        value += v
-        ∂1 .+= p1 .* buffer
-        d13 = buffer[1]*buffer[3]
-        ∂2 .+= p2 .* SVector{3,Float64}((buffer[1]*buffer[2], d13, buffer[2]*buffer[3]))
-        ∂3 += p3 * d13 * buffer[2]
-    end
-    ((smallest_d2 < 1.0 ? Inf : value), SVector{3,Float64}(∂1), SVector{3,Float64}(∂2), ∂3)
-end

@@ -53,22 +53,17 @@ function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnam
         poss[k] = pos
     end
     open(path, "w") do io
-        println(io, """Cell info:
-========================================================================
-number-of-unit-cells: 1 1 1""")
         for s in ("unit-cell-vector-", "cell-vector-")
             for (i, x) in enumerate(('a', 'b', 'c'))
                 @printf io "%19.12f%19.12f%19.12f\n" NoUnits(o.mat[1,i]/u"Å") NoUnits(o.mat[2,i]/u"Å") NoUnits(o.mat[3,i]/u"Å")
             end
         end
         posi = positions[end]
-        println(io, "------------------------------------------------------------------------")
         for (j, poss) in enumerate(posi), (k, opos) in enumerate(poss)
             abc = invmat * opos
             pos = NoUnits.(o.mat*(abc .- floor.(abc))./u"Å")
             @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" (j-1) (k-1) pos[1] pos[2] pos[3]
         end
-        println(io, '\n')
         nothing
     end
 end
