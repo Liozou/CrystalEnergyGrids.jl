@@ -11,10 +11,9 @@ function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i, atomcou
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
         for (l, opos) in enumerate(o.positions)
             i, j, k = o.atoms[l]
-            ix = o.ffidx[i][k]
             abc = invmat * opos
             pos = o.mat*(abc .- floor.(abc))/u"Å"
-            symb = String(o.ff.symbols[ix])
+            symb = "Na"
             molid, atomid = atomcounter[i, j, k]
             @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" atomid symb molid pos[1] pos[2] pos[3] symb
         end
@@ -80,7 +79,7 @@ See also [`output_pdb`](@ref).
 """
 function output_restart(path, step::SimulationStep)
     lengths, angles = cell_parameters(step.mat)
-    molnames = [identify_molecule([step.ff.symbols[ix] for ix in ffidxi]) for ffidxi in step.ffidx]
+    molnames = ["Na" for ffidxi in step.ffidx]
     output_restart(path, step, lengths, angles, molnames)
 end
 output_restart(path, mc::MonteCarloSetup) = output_restart(path, SimulationStep(mc))

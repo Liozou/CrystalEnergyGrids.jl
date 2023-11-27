@@ -81,8 +81,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         restartpositions isa Nothing && append!(poss[kind], copy(position(system)::Vector{SVector{3,TÅ}}) for _ in 1:n)
     end
 
-    ffidx = [[ff.sdict[s.atomic_symbol[k]] for k in 1:length(s)] for s in systemkinds]
-    charges = fill(NaN*u"e_au", length(ff.sdict))
+    ffidx = [fill(1, length(s)) for s in systemkinds]
+    charges = [NaN*u"e_au"]
     for (i, ids) in enumerate(ffidx)
         kindi = systemkinds[i]
         for (k, ix) in enumerate(ids)
@@ -102,7 +102,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         ni == 0 && continue
         for (j, nj) in enumerate(num_atoms)
             nj == 0 && continue
-            tcorrection += ni*nj*tailcorrection(ff[i,j], ff.cutoff)
+            tcorrection += ni*nj*3.1u"K"
         end
     end
     tcorrection *= 2π/det(ustrip.(u"Å", cell.mat))
@@ -217,7 +217,6 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
                           mcmoves=fill(nothing, length(systems)), rng=default_rng())
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework)
-    mat = stack3(bounding_box(syst_framework))
     if supercell isa Nothing
         supercell = find_supercell(syst_framework, 12.0u"Å")
     end
@@ -238,23 +237,17 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
             push!(encountered_atoms, atomic_symbol(system, k))
         end
     end
-    atoms = [(atom, ff.sdict[atom]) for atom in encountered_atoms]
-    sort!(atoms; by=last)
-    # atoms is the list of unique atom types encountered in the molecule species
 
-    coulomb = EnergyGrid()
 
-    grids = EnergyGrid[]
-
-    num_framework_atoms = zeros(Int, length(ff.sdict))
+    num_framework_atoms = [0]
     Π = prod(supercell)
     for at in syst_framework
-        num_framework_atoms[ff.sdict[Symbol(get_atom_name(atomic_symbol(at)))]] += Π
+        num_framework_atoms[1] += Π
     end
 
     restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
 
-    setup_montecarlo(cell, csetup, systems, ff, coulomb, grids, num_framework_atoms, restartpositions; parallel, rng, mcmoves)
+    setup_montecarlo(cell, csetup, systems, ff, EnergyGrid(), EnergyGrid[], num_framework_atoms, restartpositions; parallel, rng, mcmoves)
 end
 
 """

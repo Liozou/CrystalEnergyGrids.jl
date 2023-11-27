@@ -165,7 +165,7 @@ function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:Abstract
                         isrigid::BitVector=trues(length(systemkinds));
                         parallel::Bool=true) where N
     @assert length(systemkinds) == length(inputpos) == length(isrigid)
-    ffidx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
+    ffidx = [[1] for s in systemkinds]
     charges = [[uconvert(u"e_au", s[k,:atomic_charge])::Te_au for k in 1:length(s)] for s in systemkinds]
     SimulationStep(ff, charges, inputpos, isrigid, ffidx, cell; parallel)
 end
@@ -292,36 +292,6 @@ function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
     x = SimulationStep{N,T}(step.ff, step.charges, psystem, step.atoms, step.posidx, step.freespecies, step.isrigid, step.ffidx)
     update_position!(x, (i,j), newpos)
     x
-end
-
-function compute_vdw(step::SimulationStep)
-    energy = 0.0u"K"
-    cutoff2 = step.ff.cutoff^2
-    buffer = MVector{3,TÅ}(undef)
-    buffer2 = MVector{3,Float64}(undef)
-    cell = CellMatrix(step.mat)
-    for (l1, pos1) in enumerate(step.positions)
-        i1, j1, k1 = step.atoms[l1]
-        ix1 = step.ffidx[i1][k1]
-        for l2 in (l1+1):length(step.positions)
-            i2, j2, k2 = step.atoms[l2]
-            i1 == i2 && j1 == j2 && continue # no intra energy considered here
-            pos2 = step.positions[l2]
-            buffer .= pos2 .- pos1
-            d2 = unsafe_periodic_distance2!(buffer, buffer2, cell)
-            if d2 < cutoff2
-                energy += step.ff[ix1, step.ffidx[i2][k2]](d2)
-            end
-        end
-    end
-    for (i, rigid) in enumerate(step.isrigid)
-        rigid && continue
-        posidxi = step.posidx[i]
-        for molpos in posidxi
-            energy += energy_intra(step, i, @view step.positions[molpos])
-        end
-    end
-    energy
 end
 
 
