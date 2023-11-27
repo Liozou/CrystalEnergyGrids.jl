@@ -4,8 +4,6 @@ struct MonteCarloSetup{N,T,Trng}
     step::SimulationStep{N,T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
-    offsets::Vector{Int}
-    # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
     indices::Set{Tuple{Int,Int}}
     # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
     rng::Trng
@@ -13,7 +11,6 @@ end
 
 function Base.show(io::IO, mc::MonteCarloSetup)
     n = length(mc.indices)
-    m = length(mc.offsets)
     print(io, "Monte-Carlo setup with ", n , " atoms in ", m, " molecule kind")
     m > 1 && print(io, 's')
 end
@@ -32,18 +29,14 @@ function setup_montecarlo(systems)
     charges = [NaN*u"e_au"]
 
     n = length(poss)
-    offsets = Vector{Int}(undef, n)
-    offsets[1] = 0
     indices_list = Tuple{Int,Int}[]
     for i in 1:(n-1)
-        numi = length(poss[i])
-        offsets[i+1] = offsets[i] + numi
         append!(indices_list, (i,j) for j in 1:length(poss[i]))
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
     MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    offsets, Set(indices_list), rng), indices
+                    Set(indices_list), rng), indices
 end
 
 
@@ -66,7 +59,7 @@ parallelized or not.
 """
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
     rng = deepcopy(mc.rng)
-    MonteCarloSetup(SimulationStep(o, :all; parallel), copy(mc.offsets),
+    MonteCarloSetup(SimulationStep(o, :all; parallel),
                     copy(mc.indices), rng)
 end
 
