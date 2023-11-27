@@ -35,8 +35,7 @@ function local_minima(grid::Array{<:Any,3}, tolerance=1e-2; lt=(<))
     a1, a2, a3 = size(grid)
     localmins = CartesianIndex{3}[]
     # for i3 in 1:a3
-    # N = nthreads()
-    N = 1 # FIXME: remove
+    N = nthreads()
     localmins_t = [CartesianIndex{3}[] for _ in 1:N]
     lb = LoadBalancer{Int}(N) do i3, taskid
         for i2 in 1:a2, i1 in 1:a1

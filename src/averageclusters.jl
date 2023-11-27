@@ -96,8 +96,9 @@ As a consequence, `bins ./ total` is a map of the average atomic density.
 
 The first `skip` frames are discarded. Up to `count` frames are kept.
 
-A preallocated `bins` array can be given if it has the correct size. It will be filled by
-the appropriate values and returned instead of a new array.
+A preallocated `bins` array can be given if it has the correct size. The bins corresponding
+to `path` will be added on the values existing in the preallocated array. Calling
+`bin_trajectory` without a preallocated `bins` or with one filled with zeros is equivalent.
 """
 function bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing)
     output, kind, valkind = find_output_file(path)
@@ -117,7 +118,6 @@ function _bin_trajectory(path, ::Val{EXT}; step, skip, count, _bins) where EXT
     else
         na, nb, nc = size(_bins)
         bins = _bins
-        bins .= 0
     end
 
     stepcounter = 0
@@ -146,15 +146,12 @@ function bin_trajectories(path; step=0.15u"Å", skip=0, count=typemax(Int), exc
     mat = mat_from_output(output, valkind)
     na, nb, nc = floor.(Int, NoUnits.(cell_lengths(mat) ./ step))
     bins = zeros(Int, na, nb, nc)
-    totalbins = zeros(Int, na, nb, nc)
-    totalcounter = 0
+    counter = 0
     for dir in dirs
-        _, counter = bin_trajectory(joinpath(path, dir); step, skip, count, bins)
-        totalbins .+= bins
-        totalcounter += counter
+        counter += last(bin_trajectory(joinpath(path, dir); step, skip, count, bins))
         yield()
     end
-    totalbins, totalcounter
+    bins, counter
 end
 
 

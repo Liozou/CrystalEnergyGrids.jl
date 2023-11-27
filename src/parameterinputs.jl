@@ -136,7 +136,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     recordminimum = RMinimumEnergy(e, o)
     printevery = Int(!isempty(star.outdir))*10
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
-    newsimu = SimulationSetup(300u"K", star.length; printevery, outdir, ninit=80, record=recordminimum)
+    newsimu = SimulationSetup(300u"K", star.length; printevery, outdir, ninit=5000, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end
