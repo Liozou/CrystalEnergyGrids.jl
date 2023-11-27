@@ -4,7 +4,6 @@ struct MonteCarloSetup{N,T,Trng}
     step::SimulationStep{N,T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
-    coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[ix] is the VdW grid for atom ix in ff.
     offsets::Vector{Int}
     # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
@@ -29,7 +28,6 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, system
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
 
-    coulomb = EnergyGrid()
     grids = EnergyGrid[]
 
     U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
@@ -61,7 +59,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup, system
 
 
     MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    coulomb, grids, offsets, Set(indices_list), beads, rng), indices
+                    grids, offsets, Set(indices_list), beads, rng), indices
 end
 
 """
@@ -136,7 +134,7 @@ parallelized or not.
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
     rng = deepcopy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
-                    deepcopy(mc.coulomb), deepcopy(mc.grids), copy(mc.offsets),
+                    deepcopy(mc.grids), copy(mc.offsets),
                     copy(mc.indices), copy(mc.bead), rng)
 end
 
