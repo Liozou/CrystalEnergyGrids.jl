@@ -139,24 +139,6 @@ const GLOBAL_LOCK = ReentrantLock()
 # speak(args...) = begin lock(GLOBAL_LOCK); println(args...); flush(stdout); unlock(GLOBAL_LOCK) end
 speak(args...) = nothing
 
-# ALLPOS = Set()
-# ALLSIMU = Set()
-# function recursive_mightalias(x::T, y::T) where {T}
-#     T <: Array && return Base.mightalias(x, y)
-#     names = fieldnames(T)
-#     isempty(names) && return ismutabletype(T) && objectid(x) == objectid(y)
-#     for a in names
-#         a in (:ff, :isrigid, :charges, :allcharges, :ffidx, :grids, :grid, :offsets, :speciesblocks, :atomblocks, :bead) && continue
-#         if !isdefined(x, a) || !isdefined(y, a)
-#             println("In type ", T, ", field ", a, " not assigned")
-#         elseif recursive_mightalias(getfield(x, a), getfield(y, a))
-#             @show T,a
-#             return true
-#         end
-#     end
-#     return false
-# end
-
 
 """
     run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
@@ -203,7 +185,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     # main loop
     for idx_cycle in 1:10
-        temperature = 300u"K"
 
         speak("Task ", thistask, " cycle ", idx_cycle)
 
@@ -286,7 +267,6 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     # main loop
     for idx_cycle in 1:10
-        temperature = 300u"K"
 
         speak("Task ", thistask, " cycle ", idx_cycle)
 

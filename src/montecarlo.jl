@@ -8,7 +8,6 @@ struct MonteCarloSetup{N,T,Trng}
     # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
     indices::Set{Tuple{Int,Int}}
     # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
-    bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
     rng::Trng
 end
 
@@ -43,11 +42,8 @@ function setup_montecarlo(systems)
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    beads = fill(1, n)
-
-
     MonteCarloSetup(SimulationStep(ForceField(), charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    offsets, Set(indices_list), beads, rng), indices
+                    offsets, Set(indices_list), rng), indices
 end
 
 
@@ -71,7 +67,7 @@ parallelized or not.
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
     rng = deepcopy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel), copy(mc.offsets),
-                    copy(mc.indices), copy(mc.bead), rng)
+                    copy(mc.indices), rng)
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
