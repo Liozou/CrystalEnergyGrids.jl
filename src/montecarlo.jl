@@ -53,8 +53,7 @@ parallelized or not.
 """
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
     rng = deepcopy(mc.rng)
-    MonteCarloSetup(SimulationStep(o, :all; parallel),
-                    copy(mc.indices), rng)
+    MonteCarloSetup(deepcopy(o), copy(mc.indices), rng)
 end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)

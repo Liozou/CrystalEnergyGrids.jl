@@ -220,7 +220,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 speak("Task ", thistask, " reported.")
             end
             if !(simu.record isa Returns)
-                ocomplete = SimulationStep(mc.step, :all)
+                ocomplete = deepcopy(mc.step)
                 speak("Task ", thistask, " recording...")
                 simu.record(ocomplete, energy, idx_cycle, mc, simu)
                 speak("Task ", thistask, " recorded.")
@@ -262,7 +262,7 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
         speak("Task ", thistask, " end of cycle")
 
         # end of cycle
-        ocomplete = SimulationStep(mc.step, :all)
+        ocomplete = deepcopy(mc.step)
         speak("Task ", thistask, " recording...")
         simu.record(ocomplete, energy, idx_cycle, mc, simu)
         speak("Task ", thistask, " recorded.")

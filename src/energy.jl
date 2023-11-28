@@ -157,15 +157,7 @@ If `mode === :zero`, create a `SimulationStep` with an empty `ffidx` field.
 The `parallel` field is passed on to the created copy (except with `mode === :zero`)
 """
 function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.parallel) where {N,T}
-    if mode === :all
-        return deepcopy(step)
-        psystem = PeriodicSystem(; xpositions=copy(step.positions),
-                                   ypositions=SVector{3,TÅ}[],
-                                   unitcell=step.mat,
-                                   parallel,
-                                   cutoff=12.0u"Å", output=0.0u"K")
-        SimulationStep{N,T}(psystem, copy(step.atoms))
-    elseif mode === :output
+    if mode === :output
         return deepcopy(step)
         psystem = PeriodicSystem(; xpositions=copy(step.positions),
                                    ypositions=SVector{3,TÅ}[],
