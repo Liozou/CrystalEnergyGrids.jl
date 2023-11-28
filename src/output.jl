@@ -10,10 +10,11 @@ function output_pdb(path, o::SimulationStep, (a, b, c), (α, β, γ), i, atomcou
         @printf io "MODEL %4d\n" i
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
         for (l, opos) in enumerate(o.positions)
+            i, j, k = o.atoms[l]
             abc = invmat * opos
             pos = o.mat*(abc .- floor.(abc))/u"Å"
             symb = "Na"
-            molid, atomid = atomcounter[1, l, 1]
+            molid, atomid = atomcounter[i, j, k]
             @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" atomid symb molid pos[1] pos[2] pos[3] symb
         end
         @printf io "ENDMDL\n"
@@ -42,12 +43,13 @@ function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnam
     positions = [Vector{SVector{3,TÅ}}[] for _ in o.positions]
     invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
     for (l, pos) in enumerate(o.positions)
-        posi = positions[1]
-        length(posi) < l && resize!(posi, l)
-        isassigned(posi, l) || (posi[l] = SVector{3,TÅ}[])
-        poss = posi[l]
-        length(poss) < 1 && resize!(poss, 1)
-        poss[1] = pos
+        i, j, k = o.atoms[l]
+        posi = positions[i]
+        length(posi) < j && resize!(posi, j)
+        isassigned(posi, j) || (posi[j] = SVector{3,TÅ}[])
+        poss = posi[j]
+        length(poss) < k && resize!(poss, k)
+        poss[k] = pos
     end
     open(path, "w") do io
         for s in ("unit-cell-vector-", "cell-vector-")
@@ -103,4 +105,38 @@ function pdb_output_handler(path, mat::SMatrix{3,3,TÅ,9})
             nothing
         end
     end, taskref
+end
+
+function output_cube(path, grid::Array{Float64,4}, framework, T=300)
+    output_cube(path, meanBoltzmann(grid, T), framework)
+end
+
+function output_cube(path, grid::Array{Float64,3}, framework)
+    cif = ispath(framework) ? framework : joinpath(RASPADIR[], "structures", "cif", framework*".cif")
+    system = load_system(AtomsIO.ChemfilesParser(), cif)
+    box = AtomsBase.bounding_box(system)./u"bohr"
+    atoms = [(a, NoUnits.(p./u"bohr")) for (a, p) in zip(AtomsBase.atomic_number(system), AtomsBase.position(system))]
+    open(path, "w") do io
+        println(io, "CPMD CUBE FILE")
+        println(io, "exported by CrystalEnergyGrids.jl")
+        @printf io "%5d %12.6g %12.6g %12.6g\n" length(atoms) 0.0 0.0 0.0
+        for (i, l) in enumerate(box)
+            a = size(grid,i)
+            @printf io "%5d %12.6g %12.6g %12.6g\n" size(grid, i) NoUnits(l[1])/a NoUnits(l[2])/a NoUnits(l[3])/a
+        end
+        for (a, pos) in atoms
+            @printf io "%5d 0.0 %12.6g %12.6g %12.6g\n" a pos[1] pos[2] pos[3]
+        end
+        counter = 0
+        for i1 in axes(grid, 1), i2 in axes(grid, 2), i3 in axes(grid, 3)
+            counter += 1
+            @printf io "%12.6g" exp(-grid[i1,i2,i3]/300)
+            if counter%6==0
+                println(io)
+            else
+                print(io, ' ')
+            end
+        end
+        println(io)
+    end
 end
