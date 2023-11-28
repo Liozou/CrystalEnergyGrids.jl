@@ -111,64 +111,6 @@ function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
     SimulationStep{N,typeof(psystem)}(psystem, atoms)
 end
 
-"""
-    SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:AbstractSystem,
-                   inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
-                   cell::CellMatrix,
-                   isrigid::BitVector=trues(length(systemkinds));
-                   parallel::Bool=true) where N
-
-Create a `SimulationStep` from a force field `ff`, a list of system kinds, the cell matrix
-and the positions of all atoms for all systems.
-
-`systemkinds[i]` is a system that represents all systems of kind `i`. This means that all
-its properties are shared with other systems of kind `i`, except the positions of its atoms.
-
-`inputpos[i][j]` is the list of positions of all atoms in the `j`-th system of kind `i`.
-The `k`-th element of such a list should correspond to the same atom as the `k`-th one of
-`systemkinds[i]`.
-
-`isrigid[i]` specifies whether system `i` is considered rigid, i.e. whether interactions
-between atoms within the structure should be considerd (flexible) or not (rigid). If
-unspecified, all systems are considered rigid (so only inter-system interactions are taken
-into account).
-
-`parallel` should be unset to do all computations on the step on a single thread.
-
-See also [`make_step`](@ref) for an alternative way of constructing a `SimulationStep`
-without having to specify the system kinds.
-"""
-function SimulationStep(systemkinds::Vector{T} where T<:AbstractSystem,
-                        inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
-                        cell::CellMatrix;
-                        parallel::Bool=true) where N
-    SimulationStep(inputpos, cell; parallel)
-end
-
-"""
-    SimulationStep(step::SimulationStep, mode=:all; parallel=step.parallel)
-
-Copy of the input on which the positions and number of species can be modified without
-affecting the original `step`.
-
-If `mode === :output`, only the `positions` and `atoms` fields are copied.
-If `mode === :zero`, create a `SimulationStep` with an empty `ffidx` field.
-
-The `parallel` field is passed on to the created copy (except with `mode === :zero`)
-"""
-function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.parallel) where {N,T}
-    if mode === :output
-        return deepcopy(step)
-        psystem = PeriodicSystem(; xpositions=copy(step.positions),
-                                   ypositions=SVector{3,TÅ}[],
-                                   unitcell=step.mat,
-                                   parallel,
-                                   cutoff=12.0u"Å", output=0.0u"K")
-        SimulationStep{N,T}(psystem, copy(step.atoms))
-    else
-        error("Please use either :all, :output or :zero as value for argument mode")
-    end
-end
 
 """
     update_position!(step::SimulationStep, idx, newpos)
@@ -179,7 +121,7 @@ Return `newpos`.
 See also [`update_position!(step::SimulationStep, idx, op, arg)`](@ref) and [`update_position`](@ref).
 """
 function update_position!(step::SimulationStep, (i,j), newpos)
-    for (k, pos) in enumerate(newpos)
+    for pos in newpos
         step.positions[i] = pos
     end
 end
