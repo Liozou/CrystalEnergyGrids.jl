@@ -282,7 +282,6 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
             old_idx = idx
             oldpos = newpos
             speak("Task ", thistask, " accepting...")
-            mc.step.positions[idx[1]:idx[1]] .= oldpos
             energy += rand()
             speak("Task ", thistask, " accepted.")
         end
