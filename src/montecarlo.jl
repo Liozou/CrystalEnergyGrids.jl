@@ -9,10 +9,8 @@ struct MonteCarloSetup{N,T,Trng}
     rng::Trng
 end
 
-function Base.show(io::IO, mc::MonteCarloSetup)
-    n = length(mc.indices)
-    print(io, "Monte-Carlo setup with ", n , " atoms in ", m, " molecule kind")
-    m > 1 && print(io, 's')
+function Base.show(io::IO, ::MonteCarloSetup)
+    print(io, "Monte-Carlo setup")
 end
 
 
@@ -23,7 +21,6 @@ function setup_montecarlo(systems)
 
     U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
     poss = Vector{U}[U[[rand(SVector{3,TÅ})]] for _ in 1:systems]
-    indices = Tuple{Int,Int}[(1, 1)]
 
     charges = [NaN*u"e_au"]
 
@@ -35,7 +32,7 @@ function setup_montecarlo(systems)
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
     MonteCarloSetup(SimulationStep(ForceField(), charges, poss, cell; parallel),
-                    Set(indices_list), rng), indices
+                    Set(indices_list), rng)
 end
 
 
