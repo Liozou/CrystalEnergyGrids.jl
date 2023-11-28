@@ -194,7 +194,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
-            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
+            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[idx[1]:idx[1]]
 
             # newpos is the position after the trial move
             newpos = random_translation(mc.rng, currentposition, 1.2u"Å")
@@ -205,7 +205,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             old_idx = idx
             oldpos = newpos
             speak("Task ", thistask, " accepting...")
-            mc.step.positions[mc.step.posidx[idx[1]][idx[2]]] .= oldpos
+            mc.step.positions[idx[1]:idx[1]] .= oldpos
             energy += rand()
             speak("Task ", thistask, " accepted.")
         end
@@ -276,7 +276,7 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK
-            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
+            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[idx[1]:idx[1]]
 
             # newpos is the position after the trial move
             newpos = random_translation(mc.rng, currentposition, 1.3u"Å")
@@ -287,7 +287,7 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
             old_idx = idx
             oldpos = newpos
             speak("Task ", thistask, " accepting...")
-            mc.step.positions[mc.step.posidx[idx[1]][idx[2]]] .= oldpos
+            mc.step.positions[idx[1]:idx[1]] .= oldpos
             energy += rand()
             speak("Task ", thistask, " accepted.")
         end

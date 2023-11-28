@@ -61,7 +61,6 @@ struct SimulationStep{N,T}
     # atom in a system of kind i is charges[ffidx[i][k]].
     psystem::T
     atoms::Vector{Tuple{Int,Int,Int}} # one index per atom
-    posidx::Vector{Vector{Vector{Int}}}
     # the position of the k-th atom in the j-th system of kind i is positions[l] where
     # atoms[l] == (i,j,k) and posidx[i][j][k] == l
 end
@@ -92,13 +91,9 @@ function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
     numatoms = sum(x -> sum(length, x; init=0), inputpos; init=0)
     positions = Vector{SVector{N,TÅ}}(undef, numatoms)
     atoms = Vector{Tuple{Int,Int,Int}}(undef, numatoms)
-    posidx = Vector{Vector{Vector{Int}}}(undef, length(inputpos))
     l = 0
     for (i, posi) in enumerate(inputpos)
-        posidxi = Vector{Vector{Int}}(undef, length(posi))
-        posidx[i] = posidxi
         for (j, poss) in enumerate(posi)
-            posidxi[j] = collect(l+1:l+length(poss))
             for (k, pos) in enumerate(poss)
                 l += 1
                 atoms[l] = (i,j,k)
@@ -113,7 +108,7 @@ function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
                                parallel,
                                output=0.0u"K")
 
-    SimulationStep{N,typeof(psystem)}(psystem, atoms, posidx)
+    SimulationStep{N,typeof(psystem)}(psystem, atoms)
 end
 
 """
@@ -169,8 +164,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    unitcell=step.mat,
                                    parallel,
                                    cutoff=12.0u"Å", output=0.0u"K")
-        SimulationStep{N,T}(psystem, copy(step.atoms),
-                       [[copy(js) for js in is] for is in step.posidx])
+        SimulationStep{N,T}(psystem, copy(step.atoms))
     elseif mode === :output
         return deepcopy(step)
         psystem = PeriodicSystem(; xpositions=copy(step.positions),
@@ -178,8 +172,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    unitcell=step.mat,
                                    parallel,
                                    cutoff=12.0u"Å", output=0.0u"K")
-        SimulationStep{N,T}(psystem, copy(step.atoms),
-                       step.posidx)
+        SimulationStep{N,T}(psystem, copy(step.atoms))
     else
         error("Please use either :all, :output or :zero as value for argument mode")
     end
@@ -194,10 +187,8 @@ Return `newpos`.
 See also [`update_position!(step::SimulationStep, idx, op, arg)`](@ref) and [`update_position`](@ref).
 """
 function update_position!(step::SimulationStep, (i,j), newpos)
-    molpos = step.posidx[i][j]
     for (k, pos) in enumerate(newpos)
-        l = molpos[k]
-        step.positions[l] = pos
+        step.positions[i] = pos
     end
 end
 
@@ -218,7 +209,7 @@ function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
                                parallel=step.parallel,
                                cutoff=12.0u"Å", output=0.0u"K")
 
-    x = SimulationStep{N,T}(psystem, step.atoms, step.posidx)
+    x = SimulationStep{N,T}(psystem, step.atoms)
     update_position!(x, (i,j), newpos)
     x
 end
