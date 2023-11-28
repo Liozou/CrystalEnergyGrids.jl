@@ -242,7 +242,6 @@ end
 function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
     # energy initialization
     energy = rand()
-    reports = Float64[]
 
     thistask = current_task().storage
     if !(thistask isa Int)
@@ -253,38 +252,12 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
     # record and outputs
     mkpath(simu.outdir)
 
-    # idle initialisations
-    local oldpos::Vector{SVector{3,TÅ}}
-
-    # value initialisations
-    nummol = max(20, length(mc.indices))
-    old_idx = (0,0)
-
     # main loop
     for idx_cycle in 1:10
 
         speak("Task ", thistask, " cycle ", idx_cycle)
 
-        for idnummol in 1:nummol
-            # choose the species on which to attempt a move
-            idx = choose_random_species(mc)
-
-            # currentposition is the position of that species
-            # currentposition is either a Vector or a @view, that's OK
-            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[idx[1]:idx[1]]
-
-            # newpos is the position after the trial move
-            newpos = random_translation(mc.rng, currentposition, 1.3u"Å")
-
-            speak("Task ", thistask, " core running...")
-            speak("Task ", thistask, " core run.")
-
-            old_idx = idx
-            oldpos = newpos
-            speak("Task ", thistask, " accepting...")
-            energy += rand()
-            speak("Task ", thistask, " accepted.")
-        end
+        yield()
 
         speak("Task ", thistask, " end of cycle")
 
