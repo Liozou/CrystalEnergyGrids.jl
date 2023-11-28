@@ -176,7 +176,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     mkpath(simu.outdir)
 
     # idle initialisations
-    running_update = @spawn nothing
     local oldpos::Vector{SVector{3,TÅ}}
 
     # value initialisations
@@ -229,15 +228,12 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             yield()
         end
     end
-    push!(reports, energy)
-    isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
     # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
     #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
     # end
     speak("Task ", thistask, " fetching.")
     fetch(simu.record)
-    speak("!!! Task ", thistask, " finished"); flush(stdout)
-    reports
+    speak("!!! Task ", thistask, " finished")
 end
 
 
@@ -258,7 +254,6 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
     mkpath(simu.outdir)
 
     # idle initialisations
-    running_update = @spawn nothing
     local oldpos::Vector{SVector{3,TÅ}}
 
     # value initialisations
@@ -300,13 +295,9 @@ function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
         simu.record(ocomplete, energy, idx_cycle, mc, simu)
         speak("Task ", thistask, " recorded.")
     end
-    push!(reports, energy)
-    isempty(simu.outdir) || serialize(joinpath(simu.outdir, "energies.serial"), reports)
     # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
     #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
     # end
     speak("Task ", thistask, " fetching.")
-    fetch(simu.record)
-    speak("!!! Task ", thistask, " finished"); flush(stdout)
-    reports
+    speak("!!! Task ", thistask, " finished")
 end
