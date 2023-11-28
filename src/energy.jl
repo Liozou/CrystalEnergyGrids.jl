@@ -57,7 +57,6 @@ In particular, the list of valid indices `j` for kind `i` is
 `length(posidx[i]) - length(freespecies[i])`.
 """
 struct SimulationStep{N,T}
-    charges::Vector{Te_au}
     # charges[ix] is the charge of the atom of index ix in ff, i.e. the charge of the k-th
     # atom in a system of kind i is charges[ffidx[i][k]].
     psystem::T
@@ -86,8 +85,7 @@ function Base.show(io::IO, step::SimulationStep)
 end
 
 
-function SimulationStep(charges::Vector{Te_au},
-                        inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
+function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
                         cell::CellMatrix;
                         parallel::Bool=true) where N
 
@@ -115,7 +113,7 @@ function SimulationStep(charges::Vector{Te_au},
                                parallel,
                                output=0.0u"K")
 
-    SimulationStep{N,typeof(psystem)}(charges, psystem, atoms, posidx)
+    SimulationStep{N,typeof(psystem)}(psystem, atoms, posidx)
 end
 
 """
@@ -149,9 +147,7 @@ function SimulationStep(systemkinds::Vector{T} where T<:AbstractSystem,
                         inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
                         cell::CellMatrix;
                         parallel::Bool=true) where N
-    @assert length(systemkinds) == length(inputpos)
-    charges = [[uconvert(u"e_au", s[k,:atomic_charge])::Te_au for k in 1:length(s)] for s in systemkinds]
-    SimulationStep(charges, inputpos, cell; parallel)
+    SimulationStep(inputpos, cell; parallel)
 end
 
 """
@@ -207,7 +203,7 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    unitcell=step.mat,
                                    parallel,
                                    cutoff=12.0u"Å", output=0.0u"K")
-        SimulationStep{N,T}(step.charges, psystem, copy(step.atoms),
+        SimulationStep{N,T}(psystem, copy(step.atoms),
                        [[copy(js) for js in is] for is in step.posidx])
     elseif mode === :output
         return deepcopy(step)
@@ -216,14 +212,14 @@ function SimulationStep(step::SimulationStep{N,T}, mode=:all; parallel=step.para
                                    unitcell=step.mat,
                                    parallel,
                                    cutoff=12.0u"Å", output=0.0u"K")
-        SimulationStep{N,T}(step.charges, psystem, copy(step.atoms),
+        SimulationStep{N,T}(psystem, copy(step.atoms),
                        step.posidx)
     elseif mode === :complete_output
         return deepcopy(step)
-        SimulationStep{N,T}(step.charges, step.psystem, step.atoms,
+        SimulationStep{N,T}(step.psystem, step.atoms,
                             [[copy(js) for js in is] for is in step.posidx])
     elseif mode === :zero
-        SimulationStep{N,T}(step.charges, step.psystem, step.atoms,
+        SimulationStep{N,T}(step.psystem, step.atoms,
                        step.posidx)
     else
         error("Please use either :all, :output or :zero as value for argument mode")
@@ -263,7 +259,7 @@ function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
                                parallel=step.parallel,
                                cutoff=12.0u"Å", output=0.0u"K")
 
-    x = SimulationStep{N,T}(step.charges, psystem, step.atoms, step.posidx)
+    x = SimulationStep{N,T}(psystem, step.atoms, step.posidx)
     update_position!(x, (i,j), newpos)
     x
 end

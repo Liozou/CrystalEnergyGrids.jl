@@ -22,8 +22,6 @@ function setup_montecarlo(systems)
     U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
     poss = Vector{U}[U[[rand(SVector{3,TÅ})]] for _ in 1:systems]
 
-    charges = [NaN*u"e_au"]
-
     n = length(poss)
     indices_list = Tuple{Int,Int}[]
     for i in 1:(n-1)
@@ -31,7 +29,7 @@ function setup_montecarlo(systems)
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    MonteCarloSetup(SimulationStep(charges, poss, cell; parallel),
+    MonteCarloSetup(SimulationStep(poss, cell; parallel),
                     Set(indices_list), rng)
 end
 
