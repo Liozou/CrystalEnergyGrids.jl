@@ -31,7 +31,7 @@ function setup_montecarlo(systems)
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    MonteCarloSetup(SimulationStep(ForceField(), charges, poss, cell; parallel),
+    MonteCarloSetup(SimulationStep(charges, poss, cell; parallel),
                     Set(indices_list), rng)
 end
 

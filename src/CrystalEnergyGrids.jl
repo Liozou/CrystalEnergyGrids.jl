@@ -13,7 +13,6 @@ using AtomsBase
 include("constants.jl")
 include("utils.jl")
 include("ChangePositionSystems.jl")
-include("forcefields.jl")
 include("energy.jl")
 include("raspa.jl")
 include("grids.jl")
