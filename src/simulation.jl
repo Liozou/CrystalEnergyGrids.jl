@@ -128,41 +128,20 @@ See [`MonteCarloSetup`](@ref) for the definition of the system and
 [`SimulationSetup`](@ref) for the parameters of the simulation.
 """
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
-    # energy initialization
-    energy = rand()
-    reports = Float64[]
-    # record and outputs
-
-    # idle initialisations
-    local oldpos::Vector{SVector{3,Float64}}
-
-    # value initialisations
-    nummol = max(20, length(mc.indices))
-    old_idx = (0,0)
-
-    # main loop
     for idx_cycle in 1:10
 
-        for idnummol in 1:nummol
+        for idnummol in 1:mc.indices
             # choose the species on which to attempt a move
-            idx = rand(mc.rng, mc.indices)
+            idx = rand(mc.rng, 1:mc.indices)
 
-            # currentposition is the position of that species
-            # currentposition is either a Vector or a @view, that's OK
-            currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[idx[1]:idx[1]]
+            currentposition = mc.step.positions[idx:idx]
 
-            # newpos is the position after the trial move
-            newpos = random_translation(mc.rng, currentposition, 1.2)
-
-            old_idx = idx
-            oldpos = newpos
-            mc.step.positions[idx[1]:idx[1]] .= oldpos
-            energy += rand()
+            mc.step.positions[idx:idx] .= random_translation(mc.rng, currentposition, 1.2)
         end
         # end of cycle
-        push!(reports, energy)
         put!(simu.record.lb, deepcopy(mc.step))
         yield()
     end
     fetch(simu.record)
+    nothing
 end

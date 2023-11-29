@@ -4,7 +4,7 @@ struct MonteCarloSetup{N,T,Trng}
     step::SimulationStep{N,T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
-    indices::Set{Tuple{Int,Int}}
+    indices::Int
     # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
     rng::Trng
 end
@@ -22,38 +22,10 @@ function setup_montecarlo(systems)
     poss = Vector{U}[U[[rand(SVector{3,Float64})]] for _ in 1:systems]
 
     n = length(poss)
-    indices_list = Tuple{Int,Int}[]
-    for i in 1:(n-1)
-        append!(indices_list, (i,j) for j in 1:length(poss[i]))
-    end
-    append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    MonteCarloSetup(SimulationStep(poss, cell),
-                    Set(indices_list), rng)
+    MonteCarloSetup(SimulationStep(poss, cell), n, rng)
 end
 
-
-"""
-    MonteCarloSetup(mc::MonteCarloSetup; parallel::Bool=mc.step.parallel)
-
-Create a copy of `mc` that does not share its modifiable internal states (the positions and
-the Ewald state). For example, the copy and the original can be used to run Monte-Carlo
-simulations in parallel, and the state of one will not influence that of the other.
-
-`parallel` specifies whether the computations on the resulting `MonteCarloSetup` should be
-parallelized or not.
-
-!!! warn
-    Internal states that are semantically immutable are shared, although some of them are
-    technically mutable, like the value of the atom charges for instance. Modifying such a
-    state on the original or the copy can thus also modify that of the other: use
-    `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
-    modifying states outside of the API.
-"""
-function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step)
-    rng = deepcopy(mc.rng)
-    MonteCarloSetup(deepcopy(o), copy(mc.indices), rng)
-end
 
 function random_translation(rng, positions::AbstractVector{SVector{3,Float64}}, dmax::Float64)
     r = SVector{3}(((2*rand(rng)-1)*dmax) for _ in 1:3)
