@@ -25,31 +25,22 @@ end
 struct ShootingStarMinimizer{N,T} <: RecordFunction
     every::Int
     length::Int
-    positions::Vector{SimulationStep{N,T}}
-    energies::Vector{Float64}
     lb::LoadBalancer{Tuple{MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
 end
 function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1) where {N}
     T = typeof_psystem(Val(N))
-    positions = Vector{SimulationStep{N,T}}(undef, 0)
-    energies = Vector{Float64}(undef, 0)
     # lb = LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(nthreads()) do (ik, newmc, newsimu)
     lb = LoadBalancer{Tuple{MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}(7) do (newmc, newsimu)
-        let newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
+        let newmc=newmc, newsimu=newsimu
             run_montecarlo_sub!(newmc, newsimu)
         end
     end
-    ShootingStarMinimizer(every, length, positions, energies, lb)
-end
-function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
-    n = simu.ncycles ÷ star.every
-    resize!(star.positions, n)
-    resize!(star.energies, n)
+    ShootingStarMinimizer(every, length, lb)
 end
 
 function (star::ShootingStarMinimizer)(o::SimulationStep, e::Float64, k::Int, mc::MonteCarloSetup, _)
     k ≤ 0 && return
-    ik, r = divrem(k, star.every)
+    _, r = divrem(k, star.every)
     r == 0 || return
     newmc = MonteCarloSetup(mc, o)
     recordminimum = RMinimumEnergy(e, o)
