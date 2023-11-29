@@ -1,19 +1,16 @@
 using Printf
 
+@noinline opaque_job(@nospecialize(x)) = Base.inferencebarrier(x)+1
+@noinline function opaque_busywait()
+    for i in 1:100
+        opaque_job(i)
+    end
+end
 
 
 function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnames)
-    positions = [Vector{SVector{3,Float64}}[] for _ in o.positions]
+    positions = [[[rand(SVector{3,Float64})]] for _ in 1:o.len]
     invmat = inv(o.mat)
-    for (l, pos) in enumerate(o.positions)
-        i, j, k = o.atoms[l]
-        posi = positions[i]
-        length(posi) < j && resize!(posi, j)
-        isassigned(posi, j) || (posi[j] = SVector{3,Float64}[])
-        poss = posi[j]
-        length(poss) < k && resize!(poss, k)
-        poss[k] = pos
-    end
     open(path, "w") do io
         for s in ("unit-cell-vector-", "cell-vector-")
             for (i, x) in enumerate(('a', 'b', 'c'))
@@ -23,8 +20,8 @@ function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnam
         posi = positions[end]
         for (j, poss) in enumerate(posi), (k, opos) in enumerate(poss)
             abc = invmat * opos
-            pos = o.mat*(abc .- floor.(abc))
-            @printf io "Adsorbate-atom-position: %d %d%19.12f%19.12f%19.12f\n" (j-1) (k-1) pos[1] pos[2] pos[3]
+            pos = o.mat*abc
+            @printf io "Adsorbate-atom-position: %19.12f%19.12f%19.12f\n" pos[1] pos[2] pos[3]
         end
         nothing
     end

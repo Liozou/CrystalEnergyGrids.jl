@@ -60,6 +60,7 @@ struct SimulationStep{N,T}
     # charges[ix] is the charge of the atom of index ix in ff, i.e. the charge of the k-th
     # atom in a system of kind i is charges[ffidx[i][k]].
     psystem::T
+    len::Int
     atoms::Vector{Tuple{Int,Int,Int}} # one index per atom
     # the position of the k-th atom in the j-th system of kind i is positions[l] where
     # atoms[l] == (i,j,k) and posidx[i][j][k] == l
@@ -108,7 +109,7 @@ function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,Float64}}}},
                                parallel,
                                output=0.0)
 
-    SimulationStep{N,typeof(psystem)}(psystem, atoms)
+    SimulationStep{N,typeof(psystem)}(psystem, length(positions), atoms)
 end
 
 
