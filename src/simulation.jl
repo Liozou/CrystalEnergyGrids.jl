@@ -104,14 +104,12 @@ temperatures, no trajectory stored but a record the average weighted distance to
 `SimulationSetup((j,n)->log1p(j/n)*300u"K"/log(2), 1000, "", 2, AverageDistanceTemperatureRecord([0.5, 0.9, 1.3]u"Å"))`
 """
 struct SimulationSetup{Trecord}
-    temperatures::Vector{Float64}
     ncycles::Int
     printevery::Int
     record::Trecord
 
-    function SimulationSetup(; T, ncycles::Int, printevery::Int=1000, record=Returns(nothing))
-        temperatures = fill(T, ncycles)
-        ret = new{typeof(record)}(temperatures, ncycles, printevery, record)
+    function SimulationSetup(; ncycles::Int, printevery::Int=1000, record=Returns(nothing))
+        ret = new{typeof(record)}(ncycles, printevery, record)
         initialize_record!(record, ret)
         ret
     end
