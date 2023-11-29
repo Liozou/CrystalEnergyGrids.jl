@@ -105,11 +105,10 @@ temperatures, no trajectory stored but a record the average weighted distance to
 """
 struct SimulationSetup{Trecord}
     ncycles::Int
-    printevery::Int
     record::Trecord
 
-    function SimulationSetup(; ncycles::Int, printevery::Int=1000, record=Returns(nothing))
-        ret = new{typeof(record)}(ncycles, printevery, record)
+    function SimulationSetup(; ncycles::Int, record=Returns(nothing))
+        ret = new{typeof(record)}(ncycles, record)
         initialize_record!(record, ret)
         ret
     end
@@ -161,17 +160,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             energy += rand()
         end
         # end of cycle
-        report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
-        if !(simu.record isa Returns) || report_now
-            if report_now
-                push!(reports, energy)
-            end
-            if !(simu.record isa Returns)
-                ocomplete = deepcopy(mc.step)
-                simu.record(ocomplete, energy, idx_cycle, mc, simu)
-            end
-            yield()
-        end
+        push!(reports, energy)
+        put!(simu.record.lb, deepcopy(mc.step))
+        yield()
     end
     fetch(simu.record)
 end
