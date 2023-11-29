@@ -129,15 +129,6 @@ See [`MonteCarloSetup`](@ref) for the definition of the system and
 """
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     for idx_cycle in 1:10
-
-        for idnummol in 1:mc.indices
-            # choose the species on which to attempt a move
-            idx = rand(mc.rng, 1:mc.indices)
-
-            currentposition = mc.step.positions[idx:idx]
-
-            mc.step.positions[idx:idx] .= random_translation(mc.rng, currentposition, 1.2)
-        end
         # end of cycle
         put!(simu.record.lb, deepcopy(mc.step))
         yield()

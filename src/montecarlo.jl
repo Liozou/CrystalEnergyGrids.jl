@@ -19,15 +19,10 @@ function setup_montecarlo(systems)
     rng = default_rng()
 
     U = Vector{SVector{3,Float64}} # positions of the atoms of a system
-    poss = Vector{U}[U[[rand(SVector{3,Float64})]] for _ in 1:systems]
+    poss = Vector{U}[U[[zero(SVector{3,Float64})]] for _ in 1:systems]
 
     n = length(poss)
 
     MonteCarloSetup(SimulationStep(poss, cell), n, rng)
 end
 
-
-function random_translation(rng, positions::AbstractVector{SVector{3,Float64}}, dmax::Float64)
-    r = SVector{3}(((2*rand(rng)-1)*dmax) for _ in 1:3)
-    [poss + r for poss in positions]
-end
