@@ -84,12 +84,12 @@ function Base.show(io::IO, step::SimulationStep)
 end
 
 
-function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
-                        cell::CellMatrix;
+function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,Float64}}}},
+                        mat::AbstractMatrix{Float64};
                         parallel::Bool=true) where N
 
     numatoms = sum(x -> sum(length, x; init=0), inputpos; init=0)
-    positions = Vector{SVector{N,TÅ}}(undef, numatoms)
+    positions = Vector{SVector{N,Float64}}(undef, numatoms)
     atoms = Vector{Tuple{Int,Int,Int}}(undef, numatoms)
     l = 0
     for (i, posi) in enumerate(inputpos)
@@ -102,11 +102,11 @@ function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,TÅ}}}},
         end
     end
     psystem = PeriodicSystem(; xpositions=positions,
-                               ypositions=SVector{3,TÅ}[],
-                               unitcell=cell.mat,
-                               cutoff=12.0u"Å",
+                               ypositions=SVector{3,Float64}[],
+                               unitcell=mat,
+                               cutoff=12.0,
                                parallel,
-                               output=0.0u"K")
+                               output=0.0)
 
     SimulationStep{N,typeof(psystem)}(psystem, atoms)
 end
@@ -124,26 +124,4 @@ function update_position!(step::SimulationStep, (i,j), newpos)
     for pos in newpos
         step.positions[i] = pos
     end
-end
-
-"""
-    update_position(step::SimulationStep, idx, newpos)
-
-Return a new `SimulationStep` where the system of index `idx` has a new position `newpos`.
-
-`idx` can be the index returned by [`make_step`](@ref) or a tuple `(i,j)` which designates
-the `j`-th system of kind `i` in `step`.
-
-See also [`update_position!`](@ref) to modify `step` in-place.
-"""
-function update_position(step::SimulationStep{N,T}, (i,j), newpos) where {N,T}
-    psystem = PeriodicSystem(; xpositions=copy(step.positions),
-                               ypositions=SVector{3,TÅ}[],
-                               unitcell=step.mat,
-                               parallel=step.parallel,
-                               cutoff=12.0u"Å", output=0.0u"K")
-
-    x = SimulationStep{N,T}(psystem, step.atoms)
-    update_position!(x, (i,j), newpos)
-    x
 end

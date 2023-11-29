@@ -6,9 +6,6 @@ using Pkg: TOML
 using Random: rand, default_rng, TaskLocalRNG
 
 using StaticArrays
-using AtomsBase
-
-using Unitful, UnitfulAtomic
 
 # other exports in files
 

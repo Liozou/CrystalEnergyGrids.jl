@@ -15,12 +15,12 @@ end
 
 
 function setup_montecarlo(systems)
-    cell = CellMatrix(SMatrix{3,3,Float64,9}(25, 0, 0, 0, 25, 0, 0, 0, 25).*u"Å")
+    cell = SMatrix{3,3,Float64,9}(25, 0, 0, 0, 25, 0, 0, 0, 25)
     parallel = true
     rng = default_rng()
 
-    U = Vector{SVector{3,TÅ}} # positions of the atoms of a system
-    poss = Vector{U}[U[[rand(SVector{3,TÅ})]] for _ in 1:systems]
+    U = Vector{SVector{3,Float64}} # positions of the atoms of a system
+    poss = Vector{U}[U[[rand(SVector{3,Float64})]] for _ in 1:systems]
 
     n = length(poss)
     indices_list = Tuple{Int,Int}[]
@@ -58,18 +58,14 @@ end
 
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
     for (k, newpos) in enumerate(newpositions)
-        mc.step.positions[j] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
-            newpos
-        else
-            NoUnits(newpos/u"Å")
-        end
+        mc.step.positions[j] = newpos
     end
 end
 
 
 choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.indices)
 
-function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}}, dmax::TÅ)
+function random_translation(rng, positions::AbstractVector{SVector{3,Float64}}, dmax::Float64)
     r = SVector{3}(((2*rand(rng)-1)*dmax) for _ in 1:3)
     [poss + r for poss in positions]
 end

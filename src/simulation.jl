@@ -104,7 +104,7 @@ temperatures, no trajectory stored but a record the average weighted distance to
 `SimulationSetup((j,n)->log1p(j/n)*300u"K"/log(2), 1000, "", 2, AverageDistanceTemperatureRecord([0.5, 0.9, 1.3]u"Å"))`
 """
 Base.@kwdef struct SimulationSetup{Trecord}
-    temperatures::Vector{TK}
+    temperatures::Vector{Float64}
     ncycles::Int
     ninit::Int=0
     outdir::String=""
@@ -117,7 +117,7 @@ Base.@kwdef struct SimulationSetup{Trecord}
         temperatures = if T isa Number
             fill(T, n + (n == 0))
         elseif T isa Vector
-            convert(Vector{TK}, T)
+            convert(Vector{Float64}, T)
         else
             n ≤ 1 ? [T(1,2)] : T.(1:n, n)
         end
@@ -176,7 +176,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     mkpath(simu.outdir)
 
     # idle initialisations
-    local oldpos::Vector{SVector{3,TÅ}}
+    local oldpos::Vector{SVector{3,Float64}}
 
     # value initialisations
     nummol = max(20, length(mc.indices))
@@ -196,7 +196,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             currentposition = (old_idx==idx) ? oldpos : @view mc.step.positions[idx[1]:idx[1]]
 
             # newpos is the position after the trial move
-            newpos = random_translation(mc.rng, currentposition, 1.2u"Å")
+            newpos = random_translation(mc.rng, currentposition, 1.2)
 
             speak("Task ", thistask, " core running...")
             speak("Task ", thistask, " core run.")
