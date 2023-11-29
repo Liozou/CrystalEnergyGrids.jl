@@ -57,7 +57,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::Float64, k::Int, mc
     recordminimum = RMinimumEnergy(e, o)
     printevery = Int(!isempty(star.outdir))
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
-    newsimu = SimulationSetup(300, star.length; printevery, outdir, ninit=0, record=recordminimum)
+    newsimu = SimulationSetup(; T=300, ncycles=star.length, printevery, outdir, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end
@@ -94,7 +94,7 @@ function (rain::RainfallMinimizer)(o::SimulationStep, e::Float64, k::Int, mc::Mo
     r == 0 || return
     newmc = MonteCarloSetup(mc, o)
     recordminimum = RMinimumEnergy(e, o)
-    newsimu = SimulationSetup(300, rain.length; printevery=0, record=recordminimum)
+    newsimu = SimulationSetup(; T=300, ncycles=rain.length, printevery=0, record=recordminimum)
     task = let newmc=newmc, newsimu=newsimu, rain=rain, ik=ik
         Task(() -> begin
             run_montecarlo!(newmc, newsimu)

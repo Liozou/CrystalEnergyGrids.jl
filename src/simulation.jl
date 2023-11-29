@@ -103,41 +103,23 @@ temperatures, no trajectory stored but a record the average weighted distance to
 `(0.5, 0.9, 1.3)` (in Å) and energies stored every 2 cycles, use
 `SimulationSetup((j,n)->log1p(j/n)*300u"K"/log(2), 1000, "", 2, AverageDistanceTemperatureRecord([0.5, 0.9, 1.3]u"Å"))`
 """
-Base.@kwdef struct SimulationSetup{Trecord}
+struct SimulationSetup{Trecord}
     temperatures::Vector{Float64}
     ncycles::Int
-    ninit::Int=0
-    outdir::String=""
-    printevery::Int=1000
-    record::Trecord=Returns(nothing)
+    outdir::String
+    printevery::Int
+    record::Trecord
 
-    function SimulationSetup(T, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=1000, record=Returns(nothing))
-        @assert ncycles ≥ 0 && ninit ≥ 0
-        n = ncycles + ninit
-        temperatures = if T isa Number
-            fill(T, n + (n == 0))
-        elseif T isa Vector
-            convert(Vector{Float64}, T)
-        else
-            n ≤ 1 ? [T(1,2)] : T.(1:n, n)
-        end
-        ret = new{typeof(record)}(temperatures, ncycles, ninit, outdir, printevery, record)
+    function SimulationSetup(; T, ncycles::Int, outdir::String="", printevery::Int=1000, record=Returns(nothing))
+        temperatures = fill(T, ncycles)
+        ret = new{typeof(record)}(temperatures, ncycles, outdir, printevery, record)
         initialize_record!(record, ret)
         ret
     end
 end
-function SimulationSetup(T, ncycles; kwargs...)
-    SimulationSetup(; temperatures=T, ncycles, kwargs...)
-end
 
 initialize_record!(::T, ::SimulationSetup{T}) where {T} = nothing
-needcomplete(::Any) = true
-needcomplete(::Returns) = false
 
-
-const GLOBAL_LOCK = ReentrantLock()
-# speak(args...) = begin lock(GLOBAL_LOCK); println(args...); flush(stdout); unlock(GLOBAL_LOCK) end
-speak(args...) = nothing
 
 
 """
@@ -153,25 +135,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # energy initialization
     energy = rand()
     reports = Float64[]
-
-    thistask = current_task().storage
-    if !(thistask isa Int)
-        thistask = -1
-    end
-    thistask::Int
-
-    # global GLOBAL_LOCK
-    # global ALLPOS
-    # @lock GLOBAL_LOCK begin
-    #     println("Checking alias for ", pointer(mc.step.positions), "...")
-    #     mc in ALLPOS && error("DUPLICATE POSITIONS")
-    #     for othermc in ALLPOS
-    #         recursive_mightalias(mc, othermc)
-    #     end
-    #     push!(ALLPOS, mc)
-    #     println("Check done")
-    # end
-
     # record and outputs
     mkpath(simu.outdir)
 
@@ -185,8 +148,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     # main loop
     for idx_cycle in 1:10
 
-        speak("Task ", thistask, " cycle ", idx_cycle)
-
         for idnummol in 1:nummol
             # choose the species on which to attempt a move
             idx = rand(mc.rng, mc.indices)
@@ -198,78 +159,37 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             # newpos is the position after the trial move
             newpos = random_translation(mc.rng, currentposition, 1.2)
 
-            speak("Task ", thistask, " core running...")
-            speak("Task ", thistask, " core run.")
-
             old_idx = idx
             oldpos = newpos
-            speak("Task ", thistask, " accepting...")
             mc.step.positions[idx[1]:idx[1]] .= oldpos
             energy += rand()
-            speak("Task ", thistask, " accepted.")
         end
-
-        speak("Task ", thistask, " end of cycle")
-
         # end of cycle
         report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
         if !(simu.record isa Returns) || report_now
             if report_now
-                speak("Task ", thistask, " reporting...")
                 push!(reports, energy)
-                speak("Task ", thistask, " reported.")
             end
             if !(simu.record isa Returns)
                 ocomplete = deepcopy(mc.step)
-                speak("Task ", thistask, " recording...")
                 simu.record(ocomplete, energy, idx_cycle, mc, simu)
-                speak("Task ", thistask, " recorded.")
             end
             yield()
         end
     end
-    # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
-    #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
-    # end
-    speak("Task ", thistask, " fetching.")
     fetch(simu.record)
-    speak("!!! Task ", thistask, " finished")
 end
 
 
 
 
 function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
-    # energy initialization
     energy = rand()
-
-    thistask = current_task().storage
-    if !(thistask isa Int)
-        thistask = -1
-    end
-    thistask::Int
-
-    # record and outputs
     mkpath(simu.outdir)
-
-    # main loop
     for idx_cycle in 1:10
-
-        speak("Task ", thistask, " cycle ", idx_cycle)
-
         yield()
-
-        speak("Task ", thistask, " end of cycle")
-
-        # end of cycle
         ocomplete = deepcopy(mc.step)
-        speak("Task ", thistask, " recording...")
         simu.record(ocomplete, energy, idx_cycle, mc, simu)
-        speak("Task ", thistask, " recorded.")
     end
-    # if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
-    #     @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
-    # end
-    speak("Task ", thistask, " fetching.")
-    speak("!!! Task ", thistask, " finished")
+    nothing
 end
