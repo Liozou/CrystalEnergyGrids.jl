@@ -20,7 +20,7 @@ Base.@assume_effects :foldable function typeof_psystem(::Val{N}) where N
         ypositions=SVector{N,typeof(1.0)}[],
         unitcell=SMatrix{3,3,Float64,9}(LinearAlgebra.I)*30.0,
         cutoff=12.0,
-        parallel=true,
+        parallel=false,
         output=0.0
     ))
 end

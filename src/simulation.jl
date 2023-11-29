@@ -189,7 +189,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
         for idnummol in 1:nummol
             # choose the species on which to attempt a move
-            idx = choose_random_species(mc)
+            idx = rand(mc.rng, mc.indices)
 
             # currentposition is the position of that species
             # currentposition is either a Vector or a @view, that's OK

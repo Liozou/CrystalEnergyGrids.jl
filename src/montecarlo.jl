@@ -16,7 +16,6 @@ end
 
 function setup_montecarlo(systems)
     cell = SMatrix{3,3,Float64,9}(25, 0, 0, 0, 25, 0, 0, 0, 25)
-    parallel = true
     rng = default_rng()
 
     U = Vector{SVector{3,Float64}} # positions of the atoms of a system
@@ -29,7 +28,7 @@ function setup_montecarlo(systems)
     end
     append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
-    MonteCarloSetup(SimulationStep(poss, cell; parallel),
+    MonteCarloSetup(SimulationStep(poss, cell),
                     Set(indices_list), rng)
 end
 
@@ -51,19 +50,10 @@ parallelized or not.
     `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
     modifying states outside of the API.
 """
-function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel)
+function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step)
     rng = deepcopy(mc.rng)
     MonteCarloSetup(deepcopy(o), copy(mc.indices), rng)
 end
-
-function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
-    for (k, newpos) in enumerate(newpositions)
-        mc.step.positions[j] = newpos
-    end
-end
-
-
-choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.indices)
 
 function random_translation(rng, positions::AbstractVector{SVector{3,Float64}}, dmax::Float64)
     r = SVector{3}(((2*rand(rng)-1)*dmax) for _ in 1:3)

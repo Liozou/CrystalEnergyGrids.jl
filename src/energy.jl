@@ -71,8 +71,6 @@ end
         return getfield(s, :psystem).xpositions
     elseif x === :mat
         return getfield(s, :psystem).unitcell
-    elseif x === :parallel
-        return getfield(s, :psystem).parallel
     else
         return getfield(s, x)
     end
@@ -86,8 +84,7 @@ end
 
 
 function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,Float64}}}},
-                        mat::AbstractMatrix{Float64};
-                        parallel::Bool=true) where N
+                        mat::AbstractMatrix{Float64};) where N
 
     numatoms = sum(x -> sum(length, x; init=0), inputpos; init=0)
     positions = Vector{SVector{N,Float64}}(undef, numatoms)
@@ -106,7 +103,7 @@ function SimulationStep(inputpos::Vector{Vector{Vector{SVector{N,Float64}}}},
                                ypositions=SVector{3,Float64}[],
                                unitcell=mat,
                                cutoff=12.0,
-                               parallel,
+                               parallel=false,
                                output=0.0)
 
     SimulationStep{N,typeof(psystem)}(psystem, length(positions), atoms)
