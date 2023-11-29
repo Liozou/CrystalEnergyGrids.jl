@@ -15,8 +15,8 @@ mutable struct RMinimumEnergy{N,T} <: RecordFunction
 end
 function (record::RMinimumEnergy)(o::SimulationStep, e::Float64, k::Int,
                                   mc::MonteCarloSetup, simu::SimulationSetup)
-    if k == simu.ncycles && !isempty(simu.outdir)
-        output_restart(joinpath(simu.outdir, "min_energy.restart"), record.minpos)
+    if k == simu.ncycles
+        output_restart(record.minpos)
     end
     nothing
 end
@@ -27,10 +27,9 @@ struct ShootingStarMinimizer{N,T} <: RecordFunction
     length::Int
     positions::Vector{SimulationStep{N,T}}
     energies::Vector{Float64}
-    outdir::String
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{N,T},SimulationSetup{RMinimumEnergy{N,T}}}}
 end
-function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") where {N}
+function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1) where {N}
     T = typeof_psystem(Val(N))
     positions = Vector{SimulationStep{N,T}}(undef, 0)
     energies = Vector{Float64}(undef, 0)
@@ -41,7 +40,7 @@ function ShootingStarMinimizer{N}(; length::Int=100, every::Int=1, outdir="") wh
             run_montecarlo_sub!(newmc, newsimu)
         end
     end
-    ShootingStarMinimizer(every, length, positions, energies, outdir, lb)
+    ShootingStarMinimizer(every, length, positions, energies, lb)
 end
 function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
     n = simu.ncycles ÷ star.every
@@ -55,9 +54,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::Float64, k::Int, mc
     r == 0 || return
     newmc = MonteCarloSetup(mc, o)
     recordminimum = RMinimumEnergy(e, o)
-    printevery = Int(!isempty(star.outdir))
-    outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
-    newsimu = SimulationSetup(; T=300, ncycles=star.length, printevery, outdir, record=recordminimum)
+    newsimu = SimulationSetup(; T=300, ncycles=star.length, printevery=0, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end

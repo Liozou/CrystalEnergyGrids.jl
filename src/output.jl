@@ -8,10 +8,10 @@ using Printf
 end
 
 
-function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnames)
+function output_restart(o::SimulationStep, (a, b, c), (α, β, γ), molnames)
     positions = [[[rand(SVector{3,Float64})]] for _ in 1:o.len]
     invmat = inv(o.mat)
-    open(path, "w") do io
+    mktemp() do _, io
         for s in ("unit-cell-vector-", "cell-vector-")
             for (i, x) in enumerate(('a', 'b', 'c'))
                 @printf io "%19.12f%19.12f%19.12f\n" o.mat[1,i] o.mat[2,i] o.mat[3,i]
@@ -23,8 +23,8 @@ function output_restart(path, o::SimulationStep, (a, b, c), (α, β, γ), molnam
             pos = o.mat*abc
             @printf io "Adsorbate-atom-position: %19.12f%19.12f%19.12f\n" pos[1] pos[2] pos[3]
         end
-        nothing
     end
+    nothing
 end
 
 """
@@ -37,9 +37,9 @@ If not provided, the output `step` corresponds to the current status of `mc`.
 
 See also [`output_pdb`](@ref).
 """
-function output_restart(path, step::SimulationStep)
+function output_restart(step::SimulationStep)
     lengths, angles = cell_parameters(step.mat)
     molnames = ["Na" for _ in step.positions]
-    output_restart(path, step, lengths, angles, molnames)
+    output_restart(step, lengths, angles, molnames)
 end
-output_restart(path, mc::MonteCarloSetup) = output_restart(path, deepcopy(mc.step))
+output_restart(mc::MonteCarloSetup) = output_restart(deepcopy(mc.step))

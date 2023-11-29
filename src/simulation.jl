@@ -106,13 +106,12 @@ temperatures, no trajectory stored but a record the average weighted distance to
 struct SimulationSetup{Trecord}
     temperatures::Vector{Float64}
     ncycles::Int
-    outdir::String
     printevery::Int
     record::Trecord
 
-    function SimulationSetup(; T, ncycles::Int, outdir::String="", printevery::Int=1000, record=Returns(nothing))
+    function SimulationSetup(; T, ncycles::Int, printevery::Int=1000, record=Returns(nothing))
         temperatures = fill(T, ncycles)
-        ret = new{typeof(record)}(temperatures, ncycles, outdir, printevery, record)
+        ret = new{typeof(record)}(temperatures, ncycles, printevery, record)
         initialize_record!(record, ret)
         ret
     end
@@ -136,7 +135,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     energy = rand()
     reports = Float64[]
     # record and outputs
-    mkpath(simu.outdir)
 
     # idle initialisations
     local oldpos::Vector{SVector{3,Float64}}
@@ -185,7 +183,6 @@ end
 
 function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
     energy = rand()
-    mkpath(simu.outdir)
     for idx_cycle in 1:10
         yield()
         ocomplete = deepcopy(mc.step)
