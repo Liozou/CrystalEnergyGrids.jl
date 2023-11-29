@@ -175,16 +175,3 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     end
     fetch(simu.record)
 end
-
-
-
-
-function run_montecarlo_sub!(mc::MonteCarloSetup, simu::SimulationSetup)
-    energy = rand()
-    for idx_cycle in 1:10
-        yield()
-        ocomplete = deepcopy(mc.step)
-        simu.record(ocomplete, energy, idx_cycle, mc, simu)
-    end
-    nothing
-end
