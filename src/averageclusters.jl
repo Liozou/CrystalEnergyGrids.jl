@@ -85,7 +85,7 @@ function find_output_file(path)
 end
 
 """
-    bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing)
+    bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing, symmetries=[])
 
 Given the `path` to a directory containing the outputs of a simulation, or directly to the
 output file, return a pair `(bins, total)` such that `bins` is a grid of specified `step`
@@ -100,13 +100,13 @@ A preallocated `bins` array can be given if it has the correct size. The bins co
 to `path` will be added on the values existing in the preallocated array. Calling
 `bin_trajectory` without a preallocated `bins` or with one filled with zeros is equivalent.
 """
-function bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing)
+function bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing, symmetries=[])
     output, kind, valkind = find_output_file(path)
     kind === :none && error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $path.")
-    _bin_trajectory(output, valkind; step, skip, count, _bins=bins)
+    _bin_trajectory(output, valkind; step, skip, count, _bins=bins, symmetries)
 end
 
-function _bin_trajectory(path, ::Val{EXT}; step, skip, count, _bins) where EXT
+function _bin_trajectory(path, ::Val{EXT}; step, skip, count, _bins, symmetries) where EXT
     @assert EXT === :pdb || EXT === :stream
     @assert skip ≥ 0 && count ≥ 0
     steps = (EXT === :pdb ? PDBModelIterator : StreamSimulationStep)(path)
@@ -126,19 +126,24 @@ function _bin_trajectory(path, ::Val{EXT}; step, skip, count, _bins) where EXT
         stepcounter ≤ skip && continue
         for x in (EXT === :stream ? step.positions : step[3])
             pos = EXT === :stream ? x : x[3]
-            y = invmat*NoUnits.(pos./u"Å")
+            y = invmat*ustrip.(u"Å", pos)
             u, v, w = y .- floor.(y)
             bins[ceil(Int, u*na)+(u==0), ceil(Int, v*nb)+(v==0), ceil(Int, w*nc)+(w==0)] += 1
+            for eq in symmetries
+                eqy = eq(y)
+                equ, eqv, eqw = eqy .- floor.(eqy)
+                bins[ceil(Int, equ*na)+(equ==0), ceil(Int, eqv*nb)+(eqv==0), ceil(Int, eqw*nc)+(eqw==0)] += 1
+            end
         end
         if (stepcounter - skip) ≥ count
             EXT === :stream && close(steps)
             break
         end
     end
-    bins, (stepcounter > skip)*(stepcounter - skip)
+    bins, (stepcounter > skip)*(1 + length(symmetries))*(stepcounter - skip)
 end
 
-function bin_trajectories(path; step=0.15u"Å", skip=0, count=typemax(Int), except=())
+function bin_trajectories(path; step=0.15u"Å", skip=0, count=typemax(Int), except=(), symmetries=[])
     dirs = filter(x -> isdir(joinpath(path, x)) && x ∉ except, readdir(path; join=false))
     isempty(dirs) && error(lazy"Directory $path does not contain any valid folder")
     output, kind, valkind = find_output_file(joinpath(path, first(dirs)))
@@ -148,7 +153,7 @@ function bin_trajectories(path; step=0.15u"Å", skip=0, count=typemax(Int), exc
     bins = zeros(Int, na, nb, nc)
     counter = 0
     for dir in dirs
-        counter += last(bin_trajectory(joinpath(path, dir); step, skip, count, bins))
+        counter += last(bin_trajectory(joinpath(path, dir); step, skip, count, bins, symmetries))
         yield()
     end
     bins, counter
@@ -180,7 +185,7 @@ at position `center`. The coordinates of `center` are in [0, 1).
 """
 function average_clusters(bins::Array{Float64,3}, dist, mat; smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
     ret = coalescing_basins(bins, dist, mat; smooth, atol, crop, maxbasins=2*ntol)
-    sort!(ret; by=first, rev=true)
+    sort!(ret; rev=true)
     rtol == 1 && return ret
     max_total = rtol * sum(bins)
     total = 0.0
@@ -196,17 +201,17 @@ end
 
 
 """
-    average_clusters(dir, dist; step=0.15u"Å", smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
+    average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
 
 Given the path to a folder `dir` containing the outputs of a simulation, group atomic
 densities into sites.
 
-See [`bin_trajectory`](@ref) for the meaning of `step`.
+See [`bin_trajectory`](@ref) for the meaning of `step` and `symmetries`.
 See [`average_clusters`](@ref) for the return type and the meaning of the other arguments.
 """
-function average_clusters(dir, dist; step=0.15u"Å", smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
+function average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
+    bins, counter = bin_trajectory(dir; step, symmetries)
     mat = mat_from_output(dir)
-    bins, counter = bin_trajectory(dir; step)
     average_clusters(bins./counter, dist, mat; smooth, crop, atol, rtol, ntol)
 end
 
