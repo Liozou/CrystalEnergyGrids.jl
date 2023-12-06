@@ -275,3 +275,60 @@ function output_density(path, density, mat; mode=:vtf, factor=1000)
         end
     end
 end
+
+function output_cif(path, step::SimulationStep)
+    name = basename(path)
+    if splitext(path)[2] != ".cif"
+        path = path*".cif"
+    end
+    mkpath(dirname(path))
+
+    names = Vector{Symbol}(undef, length(step.ff.symbols))
+    for (s, idx) in step.ff.sdict
+        names[idx] = s
+    end
+    invmat = inv(NoUnits.(step.mat./u"Å"))
+
+    open(path, "w") do io
+        println(io, "data_", name)
+        println(io)
+        lengths, angles = cell_parameters(step.mat)
+        for (symb, val) in zip((:a, :b, :c), lengths)
+            @printf io "_cell_length_%s   %.8g\n" symb NoUnits(val/u"Å")
+        end
+        for (symb, val) in zip((:alpha, :beta, :gamma), angles)
+            @printf io "_cell_angle_%s   %.8g\n" symb val
+        end
+        println(io, """
+        _symmetry_space_group_name_H-M	'P 1'
+        _symmetry_Int_Tables_number	1
+        _symmetry_cell_setting	triclinic
+        
+        loop_
+        _symmetry_equiv_pos_as_xyz
+        x,y,z
+
+        loop_
+        _atom_site_label
+        _atom_site_type_symbol
+        _atom_site_fract_x
+        _atom_site_fract_y
+        _atom_site_fract_z
+        """)
+        counter = 0
+        for (i, posidxi) in enumerate(step.posidx)
+            ffidxi = step.ffidx[i]
+            for (j, posidxij) in enumerate(posidxi), (k, l) in enumerate(posidxij)
+                counter += 1 
+                step.atoms[l] == (i,j,k) || continue
+                ix = ffidxi[k]
+                name = names[ix]
+                pos = invmat*NoUnits.(step.positions[l] ./ u"Å")
+                pos -= floor.(pos)
+                symb = step.ff.symbols[ix]
+                @printf io "%s_%i\t%s\t%12g\t%12g\t%12g\n" name counter symb pos[1] pos[2] pos[3]
+            end
+        end
+    end
+    nothing
+end
