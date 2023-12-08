@@ -90,6 +90,10 @@ end
         return getfield(s, x)
     end
 end
+function Base.propertynames(::SimulationStep{T}, private::Bool=false) where T
+    private && return fieldnames(SimulationStep{T})
+    (:ff, :charges, :mat, :positions, :parallel, :atoms, :posidx, :freespecies, :ffidx)
+end
 
 
 function SimulationStep(ff::ForceField, charges::Vector{Te_au},
