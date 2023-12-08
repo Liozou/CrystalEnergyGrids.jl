@@ -265,12 +265,29 @@ function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
 end
 
 
-function print_report(outdir, time_begin, time_end, statistics)
-    open(joinpath(outdir, "report.txt"), "a") do io
+function print_report(simulation::SimulationSetup, time_begin, time_end, statistics)
+    open(joinpath(simulation.outdir, "report.txt"), "a") do io
         if position(io) > 0
             println(io, "\n\n\n### NEW REPORT STARTING HERE ###\n")
         end
         println(io, "Simulation ran for ", time_end-time_begin, " s")
+        print(io, "Number of cycles: ", simulation.ncycles)
+        if simulation.ninit > 0
+            println(io, " (+ ", simulation.ninit, " initialization cycles)")
+        else
+            println(io)
+        end
+        if allequal(simulation.temperatures)
+            println(io, "Temperature: ", simulation.temperatures[1])
+        else
+            print(io, "Temperatures: ", simulation.temperatures[1], " (initial) – ")
+            if simulation.ninit > 0
+                print(io, simulation.temperatures[1+simulation.ninit], " (start of production) – ")
+            end
+            print(io, simulation.temperatures[end], " (final)")
+        end
+        println(io)
+
         println(io, "Accepted moves: ", statistics.total.accepted, '/', statistics.total.trials, " (attempted) = ", statistics.total(), " among which:")
         for (i, symb) in enumerate(mcmovenames)
             stat = getfield(statistics, 3+i)::MoveKind
@@ -419,6 +436,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
         if !(simu.record isa Returns) || report_now
             accepted && parallel && wait(running_update)
+            if idx_cycle == 0 # start production with a precise energy
+                energy = baseline_energy(mc)
+            end
             o = SimulationStep(mc.step, :output)
             if report_now
                 put!(output, o)
@@ -470,6 +490,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     parallel && wait(output_task[])
     fetch(simu.record)
     time_end = time()
-    print_report(simu.outdir, time_begin, time_end, statistics)
+    print_report(simu, time_begin, time_end, statistics)
     reports
 end
