@@ -107,9 +107,11 @@ struct ShootingStarMinimizer{T} <: RecordFunction
     positions::Vector{SimulationStep{T}}
     energies::Vector{BaselineEnergyReport}
     outdir::String
+    printevery::Int
+    outtype::Vector{Symbol}
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}
 end
-function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="")
+function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, outtype::AbstractVector{Symbol}=[:energies, :zst])
     T = typeof_psystem(Val(3))
     positions = Vector{SimulationStep{T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
@@ -120,7 +122,7 @@ function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="")
             energies[ik] = newsimu.record.mine
         end
     end
-    ShootingStarMinimizer(every, length, positions, energies, outdir, lb)
+    ShootingStarMinimizer(every, length, positions, energies, outdir, printevery, outtype, lb)
 end
 function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
     n = simu.ncycles ÷ star.every
@@ -134,75 +136,14 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     r == 0 || return
     newmc = MonteCarloSetup(mc, o; parallel=false, mcmoves=fill(MCMoves(; translation=1), length(mc.mcmoves)))
     recordminimum = RMinimumEnergy(e, o)
-    printevery = Int(!isempty(star.outdir))*10
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
-    newsimu = SimulationSetup(300u"K", star.length; printevery, outdir, ninit=5000, record=recordminimum)
+    newsimu = SimulationSetup(300u"K", star.length; outdir, star.printevery, star.outtype, ninit=5000, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end
 
 Base.fetch(x::ShootingStarMinimizer) = wait(x.lb)
 
-
-struct RainfallMinimizer{T} <: RecordFunction
-    every::Int
-    length::Int
-    positions::Vector{SimulationStep{T}}
-    energies::Vector{BaselineEnergyReport}
-    tasks::Vector{Task}
-end
-
-function RainfallMinimizer(; length::Int=100, every::Int=1)
-    T = typeof_psystem(Val(3))
-    positions = Vector{SimulationStep{T}}(undef, 0)
-    energies = Vector{BaselineEnergyReport}(undef, 0)
-    tasks = Vector{Task}(undef, 0)
-    RainfallMinimizer{T}(every, length, positions, energies, tasks)
-end
-
-function initialize_record!(rain::T, simu::SimulationSetup{T}) where {T<:RainfallMinimizer}
-    n = simu.ncycles ÷ rain.every
-    resize!(rain.positions, n)
-    resize!(rain.energies, n)
-    resize!(rain.tasks, n)
-end
-
-function (rain::RainfallMinimizer)(o::SimulationStep, e::BaselineEnergyReport, k::Int, mc::MonteCarloSetup, _)
-    k ≤ 0 && return
-    ik, r = divrem(k, rain.every)
-    r == 0 || return
-    newmc = MonteCarloSetup(mc, o; parallel=false, mcmoves=fill(MCMoves(; translation=1), length(mc.mcmoves)))
-    recordminimum = RMinimumEnergy(e, o)
-    newsimu = SimulationSetup(300u"K", rain.length; printevery=0, record=recordminimum)
-    task = let newmc=newmc, newsimu=newsimu, rain=rain, ik=ik
-        Task(() -> begin
-            run_montecarlo!(newmc, newsimu)
-            rain.positions[ik] = newsimu.record.minpos
-            rain.energies[ik] = newsimu.record.mine
-            nothing
-        end)
-    end
-    task.sticky = false
-    rain.tasks[ik] = task
-    errormonitor(task)
-
-    schedule(task)
-    nothing
-end
-
-function Base.fetch(x::RainfallMinimizer)
-    retry = false
-    for (i, task) in enumerate(x.tasks)
-        if !isassigned(x.tasks, i)
-            retry = true
-            continue
-        end
-        wait(task)
-    end
-    if retry
-        foreach(wait, x.tasks)
-    end
-end
 
 
 function reconstitute_trace(path::AbstractString, skip, keep)
