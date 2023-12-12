@@ -626,7 +626,7 @@ wait(lb)
 function LoadBalancer{T}(f, n::Integer=nthreads()) where T
     busy::Atomic{Int} = Atomic{Int}(0)
     event::Event = Event(true)
-    channel::Channel{T} = Channel{T}(Inf)
+    channel::Channel{T} = Channel{T}(n)
     tasks = [(@spawn while true
         x = take!($channel)
         atomic_add!($busy, 1)
