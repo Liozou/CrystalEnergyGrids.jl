@@ -6,15 +6,20 @@ struct GridNeighbors{N}
 end
 Base.length(::GridNeighbors{N}) where {N} = 2*N
 Base.eltype(::GridNeighbors{N}) where {N} = NTuple{N,Int}
+
+struct _GridNeighborIterator{N}
+    is::NTuple{N,Int}
+    i::Int
+    sign::Int
+end
+(g::_GridNeighborIterator)(j::Int) = j == g.i ? g.is[j] + g.sign : g.is[j]
 function Base.iterate(x::GridNeighbors{N}, state=(0,1)) where N
     i, sign = state
     if sign == 1
         i += 1
         i == N+1 && return nothing
     end
-    return (ntuple(N) do j
-        (j == i ? x.i[j] + (sign::Int) : x.i[j])::Int
-    end::NTuple{3,Int}, (i, -sign))
+    return (ntuple(_GridNeighborIterator{N}(x.i, i, sign), Val{N}()), (i, -sign))
 end
 
 """
@@ -401,6 +406,138 @@ function closest_to_sites(grid::Array{T,3}, sites::Union{Vector{SVector{3,Float6
     # the barycenter of the positions of the belonging points weighted by their value.
     [(s, sum((SVector{3,Int}(ijk).-1)./dims.*w for (ijk, w) in zip(Q, ws))/s) for (Q, ws, s) in zip(Qs, weights, sumweights)]
 end
+
+function site_proximity_map!(sites::AbstractVector, dims, mat::AbstractMatrix, maxdist=2.0*oneunit(eltype(mat)))
+    a, b, c = dims
+    _, ortho, safemin = prepare_periodic_distance_computations(mat)
+    safemin2 = safemin^2
+    protoskin = norm(mat * SVector{3,Float64}(inv(a), inv(b), inv(c)))
+    Qs = [NTuple{3,Int}[(1+round(Int, a*i), 1+round(Int, b*j), 1+round(Int, c*k))] for (i,j,k) in sites]
+    nextQs = [Tuple{NTuple{3,Int},typeof(safemin2)}[] for _ in sites]
+    deletesite = Int[]
+    knownsites = Set{NTuple{3,Int}}()
+    for (idxQ, Q) in enumerate(Qs)
+        ijk = only(Q)
+        if ijk in knownsites
+            push!(deletesite, idxQ)
+        else
+            push!(knownsites, ijk)
+        end
+    end
+    deleteat!(Qs, deletesite)
+    deleteat!(sites, deletesite)
+    n = length(sites)
+
+    @threads for isite in 1:n
+        site = sites[isite]
+        Q = Qs[isite]
+        nextQ = nextQs[isite]
+        todelete = Int[]
+        bufferA = MVector{3,typeof(safemin)}(undef)
+        bufferB = MVector{3,Float64}(undef)
+        maxdist2 = absmaxdist2 = maxdist^2
+        for i2 in 1:n
+            isite == i2 && continue
+            bufferB .= site .- sites[i2]
+            dsites2 = periodic_distance2!(bufferA, mat, ortho, safemin2, bufferB)
+            maxdist2 = min(maxdist2, dsites2)
+        end
+        maxdist2 /= 4
+        visited = falses(a, b, c)
+        visited[mod1.(Q[1], dims)...] = true
+
+        #= The two iterations of the following loop correspond to the two parts of the
+        algorithm. In both cases, we loop on the points around each site by increasing
+        distance. Since it is easy to explore grid neighbors, we loop until reaching a
+        target distance plus an extra "skin" distance. The points between the target and
+        the skin will removed after, but they are a necessary steps to reach other points
+        that fall below the target.
+        In the first iteration, the target distance is the half distance between the target
+        site and its closest neighbor. As a consequence, all encountered points are
+        guaranteed to have the target site as their closest site.
+        In the second iteration, the target distance is the `maxdist` given as input. The
+        points encountered in the second iteration are kept along their distance to the
+        site to be later sorted by closest site.
+        =#
+        for (queue, nextqueue) in ((Q, nextQ), (nextQ, nothing))
+            skin2 = (protoskin + sqrt(maxdist2))^2
+            for _I in queue
+                I = _I isa NTuple{3,Int} ? _I : (_I::Tuple{NTuple{3,Int},typeof(safemin2)})[1]
+                for J in GridNeighbors(I)
+                    j1, j2, j3 = mod1.(J, dims)
+                    visited[j1,j2,j3] && continue
+                    visited[j1,j2,j3] = true
+                    bufferB .= site .- (J.-1)./dims
+                    mul!(bufferA, mat, bufferB)
+                    d2 = norm2(bufferA) # no periodic_distance! since the offset is known
+                    if d2 ≥ maxdist2
+                        if nextqueue isa Vector{Tuple{NTuple{3,Int},typeof(safemin2)}}
+                            d2 < absmaxdist2 && push!(nextqueue, (J, d2))
+                        end
+                        d2 ≥ skin2 && continue
+                        push!(todelete, length(queue)+1)
+                    end
+                    push!(queue, if queue isa Vector{NTuple{3,Int}}
+                        J
+                    else
+                        (J, d2)
+                    end)
+                end
+            end
+            deleteat!(queue, todelete)
+            empty!(todelete)
+            maxdist2 = maxdist^2
+        end
+    end
+
+    ret = fill((zero(Int32), zero(SVector{3,Int8})), a, b, c)
+    dist2s = fill(Inf*oneunit(safemin2), a, b, c)
+
+    # Handle the points encountered in the first iteration, which are guaranteed to have
+    # their designated site as closest site
+    for (s, Q) in enumerate(Qs)
+        for pos in Q
+            (oi, i), (oj, j), (ok, k) = fldmod1.(pos, dims)
+            @assert ret[i,j,k][1] == 0
+            ret[i,j,k] = (s, (oi-1, oj-1, ok-1))
+            dist2s[i,j,k] = zero(safemin2) # do not overwrite this in the next loop
+        end
+    end
+
+    # Handle the points encountered in the second iteration and only keep for each point
+    # the closest site
+    for (s, Q) in enumerate(nextQs)
+        for (pos, d2) in Q
+            (oi, i), (oj, j), (ok, k) = fldmod1.(pos, dims)
+            if d2 < dist2s[i,j,k]
+                dist2s[i,j,k] = d2
+                ret[i,j,k] = (s, (oi-1, oj-1, ok-1))
+            end
+        end
+    end
+
+    ret
+end
+
+function closest_from_proximity(grid, proximity, numsites)
+    ret = Vector{Tuple{Float64, SVector{3,Float64}}}(undef, numsites)
+    a, b, c = size(grid)
+    @assert (a, b, c) == size(proximity)
+    @threads for isite in 1:numsites
+        ρ = 0.0
+        pos = zero(SVector{3,Int})
+        for k in 1:c, j in 1:b, i in 1:a
+            s, o = proximity[i,j,k]
+            s == isite || continue
+            val = grid[i,j,k]
+            ρ += val
+            pos += val.*(o .+ SVector{3}((i-1)/a, (j-1)/b, (k-1)/c))
+        end
+        ret[isite] = (ρ, pos./ρ)
+    end
+    ret
+end
+
 
 function cluster_closer_than!(ret::Vector{Tuple{Float64,SVector{3,Float64}}}, mat, maxdist)
     n = length(ret)
