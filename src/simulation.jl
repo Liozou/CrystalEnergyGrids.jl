@@ -21,6 +21,8 @@ Definition of the simulation setup, which must provide the following information
 - `printevery`: one output of the positions is stored at the end of every `printevery`
   cycles. The first recorded position is that at the end of initialization. Using a value
   of 0 (the default) will record only that, as well as the last positions if `ncycles != 0`.
+  It is also possible to output positions during the initialization (see `outtype` below):
+  the only difference is that a value of `0` for `printevery` is then equivalent to `1`
 - `outtype`: a `Vector{Symbol}` whose elements represent the different outputs that
   should be produced in `outdir`. The elements can be:
   + `:energies` to have the list of energies output as a serialized
@@ -30,6 +32,8 @@ Definition of the simulation setup, which must provide the following information
     in a "steps.stream" file.
   + `:zst` to have the positions of the atoms output as a compressed
     [`StreamSimulationStep`](@ref) in a "steps.zst" file.
+  + `:initial_pdb`, `:initial_stream`, `:initial_zst` to have the corresponding output even
+    during initialization. The corresponding files have an "initial_" prefix.
   The default is `[:energies, :zst]`. See [`stream_to_pdb`] to convert a "steps.stream"
   or "steps.zst" file into the corresponding "trajectory.pdb" output.
 - `record::Trecord` a function which can be used to record extra information at the end of
@@ -133,8 +137,10 @@ Base.@kwdef struct SimulationSetup{Trecord}
         else
             n ≤ 1 ? [T(1,2)] : T.(1:n, n)
         end
-        unknownouttype = setdiff(outtype, Set((:energies, :pdb, :stream, :zst)))
-        isempty(unknownouttype) || error(lazy"Unknown outtype: $(join(unknownouttype, \", \", \" and \"))")
+        known_outtype = Set((:energies, :pdb, :stream, :zst))
+        union!(known_outtype, [Symbol(:initial_, x) for x in known_outtype])
+        unknown_outtype = setdiff(outtype, known_outtype)
+        isempty(unknown_outtype) || error(lazy"Unknown outtype: $(join(unknown_outtype, \", \", \" and \"))")
         ret = new{typeof(record)}(temperatures, ncycles, ninit, outdir, printevery, outtype, record)
         initialize_record!(record, ret)
         ret
@@ -318,12 +324,17 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     if isinf(Float64(energy)) || isnan(Float64(energy))
         @error "Initial energy is not finite, this probably indicates a problem with the initial configuration."
     end
-    reports = typeof(energy)[]
+    energies = typeof(energy)[]
+    initial_energies = typeof(energy)[]
 
     # record and outputs
     mkpath(simu.outdir)
     startstep = SimulationStep(mc.step, needcomplete(simu.record) ? :all : :output)
-    output, output_task = output_handler(simu.outdir, simu.outtype, startstep)
+    output, output_task = output_handler(simu.outdir, simu.outtype, startstep, false)
+
+    has_initial_output = any(startswith("initial")∘String, simu.outtype)
+    initial_output, initial_output_task = output_handler(simu.outdir, simu.outtype, startstep, true)
+
     parallel = mc.step.parallel
     if parallel
         record_task = @spawn $simu.record(startstep, $energy, -simu.ninit, $mc, $simu)
@@ -334,10 +345,13 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
     if simu.ninit == 0
         put!(output, startstep)
-        push!(reports, energy)
+        push!(energies, energy)
         if simu.ncycles == 0 # single-point computation
             @goto end_cleanup
         end
+    else
+        put!(initial_output, startstep)
+        push!(initial_energies, energy)
     end
 
     # idle initialisations
@@ -433,7 +447,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         end
 
         # end of cycle
-        report_now = idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))
+        report_now = (idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))) ||
+                     (idx_cycle < 0 && has_initial_output && (simu.printevery == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0)))
         if !(simu.record isa Returns) || report_now
             accepted && parallel && wait(running_update)
             if idx_cycle == 0 # start production with a precise energy
@@ -441,8 +456,13 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             end
             o = SimulationStep(mc.step, :output)
             if report_now
-                put!(output, o)
-                push!(reports, energy)
+                if idx_cycle < 0
+                    put!(initial_output, o)
+                    push!(initial_energies, energy)
+                else
+                    put!(output, o)
+                    push!(energies, energy)
+                end
             end
             if !(simu.record isa Returns)
                 ocomplete = needcomplete(simu.record) ? SimulationStep(o, :complete_output) : o
@@ -475,11 +495,17 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     @label end_cleanup
     if simu.printevery == 0 && simu.ncycles > 0
         put!(output, mc.step)
-        push!(reports, energy)
+        push!(energies, energy)
     end
-    put!(output, SimulationStep(mc.step, :zero))
-    if !isempty(simu.outdir) && :energies in simu.outtype
-        serialize(joinpath(simu.outdir, "energies.serial"), reports)
+    ozero = SimulationStep(mc.step, :zero)
+    put!(output, ozero)
+    put!(initial_output, ozero)
+    if !isempty(simu.outdir)
+        for initial_ in (:initial_, Symbol(""))
+            if Symbol(initial_, :energies) in simu.outtype
+                serialize(joinpath(simu.outdir, string(initial_, "energies.serial")), initial_ == :initial_ ? initial_energies : energies)
+            end
+        end
     end
     if !(simu.ninit == 0 && simu.ncycles == 0) # not a single-point computation
         lastenergy = baseline_energy(mc)
@@ -487,9 +513,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
         end
     end
-    parallel && wait(output_task[])
+    parallel && (wait(output_task[]); wait(initial_output_task[]))
     fetch(simu.record)
     time_end = time()
     print_report(simu, time_begin, time_end, statistics)
-    reports
+    energies
 end

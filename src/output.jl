@@ -150,21 +150,22 @@ function output_restart(path, step::SimulationStep)
 end
 output_restart(path, mc::MonteCarloSetup) = output_restart(path, SimulationStep(mc))
 
-function output_handler(outdir::AbstractString, outtype::Vector{Symbol}, step::SimulationStep)
+function output_handler(outdir::AbstractString, outtype::Vector{Symbol}, step::SimulationStep, initial::Bool)
     taskref = Ref{Task}()
-    if isempty(outdir) || length(outtype)  == (:energies in outtype)
-        Channel{SimulationStep}(Inf; taskref) do channel
+    if isempty(outdir) || !any(x -> (y = String(x); !endswith(y, "energies") && (!initial ⊻ startswith(y, "initial"))), outtype)
+        Channel{SimulationStep}(1; taskref) do channel
             while !isempty(take!(channel).ffidx) end # skip until isempty(o.ffidx)
         end
     else
         lengths, angles = cell_parameters(step.mat)
         atomcounter = Counter3D()
-        stream_path = :stream in outtype ? joinpath(outdir, "steps.stream") : ""
+        prefix = initial ? :initial_ : Symbol("")
+        stream_path = Symbol(prefix, :stream) in outtype ? joinpath(outdir, string(prefix, "steps.stream")) : ""
         isempty(stream_path) || save_init(stream_path, step)
-        zst_path = :zst in outtype ? joinpath(outdir, "steps.zst") : ""
+        zst_path = Symbol(prefix, :zst) in outtype ? joinpath(outdir, string(prefix, "steps.zst")) : ""
         isempty(zst_path) || save_init(zst_path, step)
-        pdb_path = :pdb in outtype ? joinpath(outdir, "trajectory.pdb") : ""
-        Channel{SimulationStep}(Inf; taskref) do channel
+        pdb_path = Symbol(prefix, :pdb) in outtype ? joinpath(outdir, string(prefix, "trajectory.pdb")) : ""
+        Channel{SimulationStep}(1; taskref) do channel
             i = 0
             while true
                 i += 1

@@ -144,16 +144,16 @@ function _bin_trajectory(path, ::Val{EXT}; step, skip, count, _bins, symmetries)
 end
 
 function bin_trajectories(path; step=0.15u"Å", skip=0, count=typemax(Int), except=(), symmetries=[])
-    dirs = filter(x -> isdir(joinpath(path, x)) && x ∉ except, readdir(path; join=false))
+    dirs = filter(x -> isdir(x) && basename(x) ∉ except && length(readdir(x)) > 1, readdir(path; join=true))
     isempty(dirs) && error(lazy"Directory $path does not contain any valid folder")
-    output, kind, valkind = find_output_file(joinpath(path, first(dirs)))
+    output, kind, valkind = find_output_file(first(dirs))
     kind === :none && error(lazy"Could not find any suitable output at $(joinpath(path, first(dirs)))")
     mat = mat_from_output(output, valkind)
     na, nb, nc = floor.(Int, NoUnits.(cell_lengths(mat) ./ step))
     bins = zeros(Int, na, nb, nc)
     counter = 0
     for dir in dirs
-        counter += last(bin_trajectory(joinpath(path, dir); step, skip, count, bins, symmetries))
+        counter += last(bin_trajectory(dir; step, skip, count, bins, symmetries))
         yield()
     end
     bins, counter
@@ -334,4 +334,10 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
         end
     end end # open(input) and open(output)
     nothing
+end
+
+function output_sites(path::AbstractString, framework_path::AbstractString, atomsymbol::Union{AbstractString,Symbol}; dist=1.0u"Å", step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
+    sites = average_clusters(dir, dist; step, symmetries, smooth, crop, atol, rtol, ntol)
+    output_sites(joinpath(path, "sites.cif"), framework_path, sites, atomsymbol)
+    sites
 end

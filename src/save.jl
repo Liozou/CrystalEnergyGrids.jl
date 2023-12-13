@@ -179,19 +179,26 @@ Base.isdone(stream::StreamSimulationStep, _=nothing) = eof(stream.io)
     stream_to_pdb(dir::AbstractString)
 
 Takes either "steps.serial" or "steps.zst" for the given folder `dir` and
-create an `output.pdb` file in the same folder containing the same information.
+create a `trajectory.pdb` file in the same folder containing the same information.
 """
 function stream_to_pdb(dir::AbstractString)
-    trajectory = joinpath(dir, "trajectory.pdb")
-    if isfile(joinpath(dir, "trajectory.pdb"))
-        error(lazy"$(joinpath(dir, \"trajectory.pdb\")) already exists.")
+    converted_one = false
+    for initial_ in (:initial_, Symbol(""))
+        trajectory = joinpath(dir, string(initial_, "trajectory.pdb"))
+        if isfile(trajectory)
+            println(trajectory, " already exists and will not be overwritten.")
+        end
+        _serialfile = joinpath(dir, string(initial_, "steps.stream"))
+        serialfile = isfile(_serialfile) ? _serialfile : joinpath(dir, string(initial_, "steps.zst"))
+        isfile(serialfile) || continue
+        converted_one = true
+        stream = StreamSimulationStep(serialfile)
+        atomcounter = Counter3D()
+        for (i, step) in enumerate(stream)
+            lengths, angles = cell_parameters(step.mat)
+            output_pdb(trajectory, step, lengths, angles, i, atomcounter)
+        end
     end
-    _serialfile = joinpath(dir, "steps.serial")
-    stream = StreamSimulationStep(isfile(_serialfile) ? _serialfile : joinpath(dir, "steps.zst"))
-    atomcounter = Counter3D()
-    for (i, step) in enumerate(stream)
-        lengths, angles = cell_parameters(step.mat)
-        output_pdb(trajectory, step, lengths, angles, i, atomcounter)
-    end
+    converted_one || error("Missing either steps.stream or steps.zst")
     nothing
 end
