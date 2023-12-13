@@ -480,7 +480,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
         translation_ratio = statistics.translation()
         if !isnan(translation_ratio)
-            statistics.dmax *= 1 + (translation_ratio - 0.5)*(1.0 + 3*translation_ratio)*100/(99+counter_cycle)
+            statistics.dmax = clamp(statistics.dmax * (1 + (translation_ratio - 0.5)*sqrt(10/(99+counter_cycle))), 0.1u"Å", 3.0u"Å")
         end
         rotation_ratio = statistics.rotation()
         if !isnan(rotation_ratio)
