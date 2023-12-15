@@ -361,7 +361,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     local after::MCEnergyReport
 
     # value initialisations
-    nummol = max(20, length(mc.indices))
     old_idx = (0,0)
     accepted = false
     statistics = MoveStatistics(1.3u"Å", 30.0u"°")
@@ -371,7 +370,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
         temperature = simu.temperatures[counter_cycle]
 
-        for idnummol in 1:nummol
+        numsteps = max(20, length(mc.indices))
+        for idx_step in 1:numsteps
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
             ffidxi = mc.step.ffidx[idx[1]]
