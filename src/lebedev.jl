@@ -80,11 +80,12 @@ of the orientation of system `mol` along the three Euler angles `θ`, `φ` and `
 sum(weight * f(ChangePositionSystem(mol, (rot,) .* position(mol))) for (rot, weight) in zip(rots, weights))
 ```
 
-!!! note
+!!! warning
     In order to compute the average of `f`, the result should be divided by 4π since
     `sum(weights) == 4π`
 """
 function get_rotation_matrices(mol::AbstractSystem, num)
+    length(mol) == 1 && return [one(SMatrix{3,3,Float64,9})], [4π]
     islin = is_zaxis_linear(mol)
     issym = is_zaxis_linear_symmetric(mol, islin)
     lebedev = get_lebedev(islin ? num : div(num, 5), issym)
@@ -93,7 +94,7 @@ function get_rotation_matrices(mol::AbstractSystem, num)
     for zrot in zrots, point in lebedev.points
         push!(rots, SMatrix{3,3,Float64,9}(hcat([1, 0, 0], [0, 1, 0], point))*zrot)
     end
-    rots, (islin ? lebedev.weights : repeat(lebedev.weights, 5)./5)
+    return rots, (islin ? lebedev.weights : repeat(lebedev.weights, 5)./5)
 end
 
 function lebedev_average(l, weights)
