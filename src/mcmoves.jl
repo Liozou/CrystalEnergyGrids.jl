@@ -1,3 +1,11 @@
+const mcmovenames = (
+    :translation,
+    :rotation,
+    :random_translation,
+    :random_rotation,
+    :random_reinsertion,
+)
+
 """
     MCMoves
 
@@ -45,15 +53,8 @@ julia> x(rand())
 """
 struct MCMoves
     # the stored values are the cumulative probability
-    cumulatives::NTuple{4,Float64}
+    cumulatives::NTuple{length(mcmovenames)-1,Float64}
 end
-const mcmovenames = (
-    :translation,
-    :rotation,
-    :random_translation,
-    :random_rotation,
-    :random_reinsertion,
-)
 function MCMoves(monoatomic::Bool)
     MCMoves(if monoatomic
         (0.98, 0.98, 1.0, 1.0) # 98% translation, 2% random translation
