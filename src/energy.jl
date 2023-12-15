@@ -163,7 +163,13 @@ function SimulationStep(ff::ForceField, systemkinds::Vector{T} where T<:Abstract
                         parallel::Bool=true)
     @assert length(systemkinds) == length(inputpos) == length(isrigid)
     ffidx = [[ff.sdict[atomic_symbol(s, k)] for k in 1:length(s)] for s in systemkinds]
-    charges = [[uconvert(u"e_au", s[k,:atomic_charge])::Te_au for k in 1:length(s)] for s in systemkinds]
+    charges = fill(NaN*u"e_au", length(ff.symbols))
+    for (syst, ffidxi) in zip(systemkinds, ffidx)
+        for (k, ix) in enumerate(ffidxi)
+            isnan(charges[ix]) || continue
+            charges[ix] = uconvert(u"e_au", syst[k,:atomic_charge])::Te_au
+        end
+    end
     SimulationStep(ff, charges, inputpos, isrigid, ffidx, cell; parallel)
 end
 
@@ -306,30 +312,6 @@ function energy_intra(step::SimulationStep, i::Int, positions::Vector{SVector{3,
     end
     energy
 end
-
-# function energy_nocutoff(step::SimulationStep)
-#     energy = 0.0u"K"
-#     nkinds = length(step.ffidx)
-#     for i1 in 1:nkinds
-#         poskind1 = step.positions[i1]
-#         idx1 = step.ffidx[i1]
-#         rigid1 = step.isrigid[i1]
-#         for (j1, pos1) in enumerate(poskind1)
-#             rigid1 || (energy += energy_intra(step, i1, pos1))
-#             for i2 in i1:nkinds
-#                 poskind2 = step.positions[i2]
-#                 idx2 = step.ffidx[i2]
-#                 for j2 in (j1*(i1==i2)+1):length(poskind2)
-#                     pos2 = poskind2[j2]
-#                     for (k1, p1) in enumerate(pos1), (k2, p2) in enumerate(pos2)
-#                         energy += step.ff[idx1[k1], idx2[k2]](norm2(p1, p2))
-#                     end
-#                 end
-#             end
-#         end
-#     end
-#     energy
-# end
 
 struct TotalVdwComputation{T} <: Function
     step::SimulationStep{T}
