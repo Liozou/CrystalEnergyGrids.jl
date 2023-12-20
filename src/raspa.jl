@@ -406,7 +406,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
 end
 
 
-function parse_interaction_RASPA(l, mixingrules::Bool, pseudoatoms::PseudoAtomListing, shift::Bool, cutoff, tailcorrection::Bool)
+function parse_interaction_RASPA(l, mixingrules::Bool, shift::Bool, cutoff, tailcorrection::Bool)
     splits = split(l)
     for (i, x) in enumerate(splits)
         if x[1] == '#' || (length(x)>1 && x[1] == '/' && x[2] == '/')
@@ -414,10 +414,8 @@ function parse_interaction_RASPA(l, mixingrules::Bool, pseudoatoms::PseudoAtomLi
             break
         end
     end
-    a = pseudoatoms[splits[1]].type
-    b = pseudoatoms[splits[2-mixingrules]].type
     kind = lowercase(splits[3-mixingrules])
-    (a, b) => if kind == "lennard-jones"
+    (Symbol(splits[1]), Symbol(splits[2-mixingrules])) => if kind == "lennard-jones"
         InteractionRule(FF.LennardJones, parse.(Float64, splits[(4-mixingrules):end]), shift, cutoff, tailcorrection)
     elseif kind == "none"
         FF.NoInteraction()
@@ -500,7 +498,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         num_interactions_ffmr = parse(Int, lines_ffmr[idx])
         for i in 1:num_interactions_ffmr
             idx = next_noncomment_line(lines_ffmr, idx)
-            interaction = parse_interaction_RASPA(lines_ffmr[idx], true, pseudoatoms, shift, cutoff, tailcorrection)
+            interaction = parse_interaction_RASPA(lines_ffmr[idx], true, shift, cutoff, tailcorrection)
             sdict[interaction[1][1]] = i
             push!(input, interaction)
         end
@@ -521,7 +519,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         numnewinteractions = parse(Int, lines_ff[jdx])
         for _ in 1:numnewinteractions
             jdx = next_noncomment_line(lines_ff, jdx)
-            (x1, y1), newinteraction = parse_interaction_RASPA(lines_ff[jdx], false, pseudoatoms, shift, cutoff, tailcorrection)
+            (x1, y1), newinteraction = parse_interaction_RASPA(lines_ff[jdx], false, shift, cutoff, tailcorrection)
             i1, j1 = forcefield_indices(x1, y1, sdict)
             ff.interactions[i1,j1] = ff.interactions[j1,i1] = newinteraction
         end
@@ -530,7 +528,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         for _ in 1:numnewmixing
             jdx = next_noncomment_line(lines_ff, jdx)
             _x2, _y2, _newmix = split(lines_ff[jdx])
-            x2 = pseudoatoms[_x2].type; y2 = pseudoatoms[_y2].type
+            x2 = Symbol(_x2); y2 = Symbol(_y2)
             i2, j2 = forcefield_indices(x2, y2, sdict)
             newmix = parse_mixingrule_RASPA(_newmix)
             ff.interactions[i2,j2] = ff.interactions[j2,i2] = mix_rules(ff.interactions[i2,i2], ff.interactions[j2,j2], newmix)
@@ -539,7 +537,7 @@ function parse_forcefield_RASPA(name, pseudoatoms::PseudoAtomListing=parse_pseud
         for _ in 1:numnewrules
             jdx = next_noncomment_line(lines_ff, jdx)
             _x3, _y3, _newshift, _newtailcorrection = split(lines_ff[jdx])
-            x3 = pseudoatoms[_x3].type; y3 = pseudoatoms[_y3].type
+            x3 = Symbol(_x3); y3 = Symbol(_y3)
             newshift = parse_shift(_newshift)
             newtailcorrection = parse_yesno(_newtailcorrection)
             i3, j3 = forcefield_indices(x3, y3, sdict)
