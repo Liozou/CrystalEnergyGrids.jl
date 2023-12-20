@@ -463,6 +463,8 @@ end
 
 function get_atom_name(atom)
     name = atom isa String ? atom : String(atom)
+    @assert isascii(name)
+    any(!isletter, name) || return name
     s = split(name, '_')
     if length(s) > 1
         if all(isnumeric, last(s))
@@ -473,7 +475,7 @@ function get_atom_name(atom)
         while isnumeric(name[i])
             i -= 1
         end
-        return name[1:i]
+        i < length(name) && return name[1:i]
     end
     return name
 end

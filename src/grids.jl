@@ -30,8 +30,7 @@ function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
         print(io, " supercell of the ")
     end
     print("unit cell of size ")
-    join(io, rg.csetup.unitcell, " Å × ")
-    print(io, " Å")
+    join(io, rg.csetup.unitcell, " × ")
 end
 
 macro triplet(foo)
