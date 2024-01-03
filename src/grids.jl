@@ -243,10 +243,10 @@ function interpolate_grid(g::EnergyGrid, point)
         mry = 1 - ry
         mrz = 1 - rz
         ret = begin
-            g.grid[x0,y0,z0,1]*mrx*mry*mrz + g.grid[x1,y0,z0,1]*rx*mry*mrz +
-            g.grid[x0,y1,z0,1]*mrx*ry*mrz  + g.grid[x0,y0,z1,1]*mrx*mry*rz +
-            g.grid[x1,y1,z0,1]*rx*ry*mrz   + g.grid[x1,y0,z1,1]*rx*mry*rz  +
-            g.grid[x0,y1,z1,1]*mrx*ry*rz   + g.grid[x1,y1,z1,1]*rx*ry*rz
+            g.grid[x0,y0,z0,1]*mrx*mry*mrz + g.grid[x1,y0,z0,1]* rx*mry*mrz +
+            g.grid[x0,y1,z0,1]*mrx* ry*mrz + g.grid[x0,y0,z1,1]*mrx*mry* rz +
+            g.grid[x1,y1,z0,1]* rx* ry*mrz + g.grid[x1,y0,z1,1]* rx*mry* rz +
+            g.grid[x0,y1,z1,1]*mrx* ry* rz + g.grid[x1,y1,z1,1]* rx* ry* rz
         end
     end
 
@@ -296,7 +296,7 @@ function energy_point(setup::CrystalEnergySetup, positions)
     num_atoms = length(setup.atomsidx)
     vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], positions[i]) for i in 1:num_atoms)
     setup.coulomb.ewald_precision == -Inf && return vdw, 0.0u"K"
-    coulomb_direct = sum((Float64(setup.molecule[i,:atomic_charge]/u"e_au"))*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
+    coulomb_direct = sum((ustrip(u"e_au", setup.molecule[i,:atomic_charge])::Float64)*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
     newmolecule = ChangePositionSystem(setup.molecule, positions)
     coulomb_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
     return (vdw, coulomb_direct + coulomb_reciprocal)
@@ -341,13 +341,15 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     Base.Threads.@threads for iABC in CartesianIndices((numA, numB, numC))
         iA, iB, iC = Tuple(iABC)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
+        bufferpos = Vector{SVector{3,TÅ}}(undef, length(__pos))
         for (k, pos) in enumerate(rotpos)
             ofs = if num_rotate < 0
                 rand()*numA*stepA + rand()*numB*stepB + rand()*numC*stepC
             else
                 thisofs
             end
-            newval = NoUnits(sum(energy_point(setup, [SVector{3}(ofs + p*u"Å") for p in pos]))/u"K")
+            bufferpos .= SVector{3,TÅ}.((ofs,) .+ pos.*u"Å")
+            newval = NoUnits(sum(energy_point(setup, bufferpos))/u"K")
             allvals[k,iA,iB,iC] = newval
         end
     end
