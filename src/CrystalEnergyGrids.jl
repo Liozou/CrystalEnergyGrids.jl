@@ -13,6 +13,14 @@ export CrystalEnergySetup
 export energy_point, energy_grid
 # other exports in files
 
+using Scratch: @get_scratch!
+const MODULE_VERSION = VersionNumber(TOML.parsefile(joinpath(dirname(@__DIR__), "Project.toml"))["version"])
+scratchspace::String = ""
+function __init__()
+    global scratchspace
+    scratchspace = @get_scratch!("CEG-$(MODULE_VERSION.major).$(MODULE_VERSION.minor)")
+end
+
 include("constants.jl")
 include("lebedev.jl")
 include("utils.jl")
@@ -26,6 +34,7 @@ include("basins.jl")
 include("raspa.jl")
 include("ewald.jl")
 include("grids.jl")
+include("hash.jl")
 include("mcmoves.jl")
 include("montecarlo.jl")
 include("save.jl")

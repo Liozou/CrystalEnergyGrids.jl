@@ -217,22 +217,32 @@ function interpolate_grid(g::EnergyGrid, point)
 
     ret = 0.0
     if g.higherorder # use derivatives
-        X = MVector{64,Cfloat}(undef)
-        for i in 1:8
-            X[i*8-7] = g.grid[z0,y0,x0,i]
-            X[i*8-3] = g.grid[z1,y0,x0,i]
-            X[i*8-5] = g.grid[z0,y1,x0,i]
-            X[i*8-1] = g.grid[z1,y1,x0,i]
-            X[i*8-6] = g.grid[z0,y0,x1,i]
-            X[i*8-2] = g.grid[z1,y0,x1,i]
-            X[i*8-4] = g.grid[z0,y1,x1,i]
-            X[i*8  ] = g.grid[z1,y1,x1,i]
-        end
+        X = SA[
+            g.grid[z0,y0,x0,1], g.grid[z0,y0,x1,1], g.grid[z0,y1,x0,1], g.grid[z0,y1,x1,1],
+            g.grid[z1,y0,x0,1], g.grid[z1,y0,x1,1], g.grid[z1,y1,x0,1], g.grid[z1,y1,x1,1],
+            g.grid[z0,y0,x0,2], g.grid[z0,y0,x1,2], g.grid[z0,y1,x0,2], g.grid[z0,y1,x1,2],
+            g.grid[z1,y0,x0,2], g.grid[z1,y0,x1,2], g.grid[z1,y1,x0,2], g.grid[z1,y1,x1,2],
+            g.grid[z0,y0,x0,3], g.grid[z0,y0,x1,3], g.grid[z0,y1,x0,3], g.grid[z0,y1,x1,3],
+            g.grid[z1,y0,x0,3], g.grid[z1,y0,x1,3], g.grid[z1,y1,x0,3], g.grid[z1,y1,x1,3],
+            g.grid[z0,y0,x0,4], g.grid[z0,y0,x1,4], g.grid[z0,y1,x0,4], g.grid[z0,y1,x1,4],
+            g.grid[z1,y0,x0,4], g.grid[z1,y0,x1,4], g.grid[z1,y1,x0,4], g.grid[z1,y1,x1,4],
+            g.grid[z0,y0,x0,5], g.grid[z0,y0,x1,5], g.grid[z0,y1,x0,5], g.grid[z0,y1,x1,5],
+            g.grid[z1,y0,x0,5], g.grid[z1,y0,x1,5], g.grid[z1,y1,x0,5], g.grid[z1,y1,x1,5],
+            g.grid[z0,y0,x0,6], g.grid[z0,y0,x1,6], g.grid[z0,y1,x0,6], g.grid[z0,y1,x1,6],
+            g.grid[z1,y0,x0,6], g.grid[z1,y0,x1,6], g.grid[z1,y1,x0,6], g.grid[z1,y1,x1,6],
+            g.grid[z0,y0,x0,7], g.grid[z0,y0,x1,7], g.grid[z0,y1,x0,7], g.grid[z0,y1,x1,7],
+            g.grid[z1,y0,x0,7], g.grid[z1,y0,x1,7], g.grid[z1,y1,x0,7], g.grid[z1,y1,x1,7],
+            g.grid[z0,y0,x0,8], g.grid[z0,y0,x1,8], g.grid[z0,y1,x0,8], g.grid[z0,y1,x1,8],
+            g.grid[z1,y0,x0,8], g.grid[z1,y0,x1,8], g.grid[z1,y1,x0,8], g.grid[z1,y1,x1,8],
+        ]
         if g.ewald_precision == Inf && any(>(5e6), @view X[1:8])
             # release_buffers((X,a))
             return 1e100*u"K"
         end
-        a = COEFF * X
+        a::Vector{Float64} = get!(task_local_storage(), :buffer_interpolation) do
+            Vector{Float64}(undef, 64)
+        end
+        @inbounds mul!(a, COEFF, X)
         rx2 = rx*rx; rxs = SVector{4,Float64}((1.0, rx, rx2, rx2*rx))
         ry2 = ry*ry; rys = SVector{4,Float64}((1.0, ry, ry2, ry2*ry))
         rz2 = rz*rz; rzs = SVector{4,Float64}((1.0, rz, rz2, rz2*rz))
@@ -268,6 +278,7 @@ struct CrystalEnergySetup{TFramework,TMolecule}
     framework::TFramework
     molecule::TMolecule
     coulomb::EnergyGrid
+    charges::Vector{Float64}
     grids::Vector{EnergyGrid}
     atomsidx::Vector{Int} # index of the grid corresponding to the atom
     ewald::EwaldFramework
@@ -290,16 +301,21 @@ If one of the atom is on a blocking sphere, return `(1e100u"K", 0.0u"K")`
     No validation is used to ensure that the input `positions` are consistent with the
     shape of the molecule.
 """
-function energy_point(setup::CrystalEnergySetup, positions)
+function energy_point(setup::CrystalEnergySetup, positions, ctx=nothing)
     for pos in positions
         setup.block[pos] && return (1e100u"K", 0.0u"K")
     end
     num_atoms = length(setup.atomsidx)
     vdw = sum(interpolate_grid(setup.grids[setup.atomsidx[i]], positions[i]) for i in 1:num_atoms)
     setup.coulomb.ewald_precision == -Inf && return vdw, 0.0u"K"
-    coulomb_direct = sum((ustrip(u"e_au", setup.molecule[i,:atomic_charge])::Float64)*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
-    newmolecule = ChangePositionSystem(setup.molecule, positions)
-    coulomb_reciprocal = compute_ewald(setup.ewald, (newmolecule,))
+    coulomb_direct = sum(setup.charges[i]*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
+    coulomb_reciprocal = if ctx isa Nothing
+        newmolecule = ChangePositionSystem(setup.molecule, positions)
+        compute_ewald(setup.ewald, (newmolecule,))
+    else
+        move_one_system!(ctx, 1, positions)
+        compute_ewald(ctx)
+    end
     return (vdw, coulomb_direct + coulomb_reciprocal)
 end
 
@@ -317,6 +333,21 @@ Otherwise (or if `num_rotate == 0`), the first axe can be dropped through`dropdi
 A value of 1e100 in the grid indicates an inaccessible point due to blocking spheres.
 """
 function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
+    pre_printwarn = PRINT_CHARGE_WARNING[]
+    # do one empty computation to trigger the warnings if need be
+    __pos = position(setup.molecule) / u"Å"
+    if pre_printwarn
+        energy_point(setup, [SVector{3}(p)*u"Å" for p in __pos])
+        PRINT_CHARGE_WARNING[] = false
+    end
+    store = string(hash_string(setup), '-', ustrip(u"Å", step), '-', lebedev_num(setup.molecule, num_rotate))
+    path = joinpath(scratchspace, store)
+    if isfile(path)
+        printstyled("Retrieved energy grid at ", path, ".\n"; color=:cyan)
+        return deserialize(path)::Array{Float64,4}
+    end
+
+    printstyled("Creating energy grid at ", path, "..."; color=:yellow)
     axeA, axeB, axeC = bounding_box(setup.framework)
     numA = floor(Int, norm(axeA) / step) + 1
     numB = floor(Int, norm(axeB) / step) + 1
@@ -324,18 +355,11 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     stepA = (axeA / norm(axeA)) * step
     stepB = (axeB / norm(axeB)) * step
     stepC = (axeC / norm(axeC)) * step
-    __pos = position(setup.molecule) / u"Å"
     rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == 0 || length(setup.molecule) == 1
         [[SVector{3}(p) for p in __pos]]
     else
         rots, _ = get_rotation_matrices(setup.molecule, num_rotate)
         [[SVector{3}(r*p) for p in __pos] for r in rots]
-    end
-    pre_printwarn = PRINT_CHARGE_WARNING[]
-    # do one empty computation to trigger the warnings if need be
-    if pre_printwarn
-        energy_point(setup, [p*u"Å" for p in first(rotpos)])
-        PRINT_CHARGE_WARNING[] = false
     end
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
     allvals .= NaN
@@ -343,6 +367,9 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
         iA, iB, iC = Tuple(iABC)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         bufferpos = Vector{SVector{3,TÅ}}(undef, length(__pos))
+        if length(rotpos) > 1
+            ctx = EwaldContext(setup.ewald, (setup.molecule,))
+        end
         for (k, pos) in enumerate(rotpos)
             ofs = if num_rotate < 0
                 rand()*numA*stepA + rand()*numB*stepB + rand()*numC*stepC
@@ -350,10 +377,16 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
                 thisofs
             end
             bufferpos .= SVector{3,TÅ}.((ofs,) .+ pos.*u"Å")
-            newval = NoUnits(sum(energy_point(setup, bufferpos))/u"K")
+            newval = ustrip(u"K", sum(if @isdefined ctx
+                energy_point(setup, bufferpos, ctx)
+            else
+                energy_point(setup, bufferpos)
+            end))
             allvals[k,iA,iB,iC] = newval
         end
     end
     pre_printwarn && (PRINT_CHARGE_WARNING[] = pre_printwarn)
-    allvals
+    serialize(path, allvals)
+    printstyled("Done.\n"; color=:yellow)
+    return allvals
 end

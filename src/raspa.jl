@@ -323,16 +323,18 @@ function retrieve_or_create_grid(grid_path, syst_framework, forcefield, gridstep
     (isempty(grid_path) || isinf(cutoff)) && return EnergyGrid()
     cutoff == 12.0u"Å" || error("Cutoff other than 12 Å or infinity is not supported.")
     iscoulomb = atom_or_eframework isa EwaldFramework
+    text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
     if new || !isfile(grid_path)
-        text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
         mkpath(dirname(grid_path))
-        printstyled("Creating $text at $grid_path... "; color=:cyan)
+        printstyled("Creating ", text, " at ", grid_path, "..."; color=:yellow)
         if iscoulomb
             create_grid_coulomb(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework)
         else
             create_grid_vdw(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework)
         end
-        printstyled("$text created.\n"; color=:cyan)
+        printstyled(text, " created.\n"; color=:cyan)
+    else
+        printstyled("Retrieved ", text, " at ", grid_path, ".\n"; color=:cyan)
     end
     parse_grid(grid_path, iscoulomb, mat)
 end
@@ -399,7 +401,9 @@ function setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15u"�
         grids[i] = retrieve_or_create_grid(vdw_grid_path, syst_framework, forcefield, gridstep, atom, mat, new, cutoff)
     end
 
-    CrystalEnergySetup(syst_framework, syst_mol, coulomb, grids, atomsidx, ewald, forcefield, block)
+    charges = [ustrip(u"e_au", syst_mol[i,:atomic_charge])::Float64 for i in 1:length(syst_mol)]
+
+    CrystalEnergySetup(syst_framework, syst_mol, coulomb, charges, grids, atomsidx, ewald, forcefield, block)
 end
 function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=0.15u"Å", supercell=nothing, blockfile=nothing, new=false, cutoff=12.0u"Å")
     syst_framework = load_framework_RASPA(framework, forcefield_framework)

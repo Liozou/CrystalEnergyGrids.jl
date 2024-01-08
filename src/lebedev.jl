@@ -43,9 +43,20 @@ function read_lebedev_grid(file, islinearsymmetric)
     end
 end
 
-function get_lebedev(size, islinearsymmetric)
+function lebedev_num(size::Integer, islinearsymmetric::Bool)
     idx = searchsortedfirst(lebedev_sizes, size*(1+islinearsymmetric))
-    kept = lebedev_sizes[idx-(idx>length(lebedev_sizes))]
+    lebedev_sizes[idx-(idx>length(lebedev_sizes))]
+end
+
+function lebedev_num(mol, num::Integer)
+    length(mol) == 1 && return 1
+    islin = is_zaxis_linear(mol)
+    issym = is_zaxis_linear_symmetric(mol, islin)
+    lebedev_num(islin ? num : div(num, 5), issym)
+end
+
+function get_lebedev(size, islinearsymmetric)
+    kept = lebedev_num(size, islinearsymmetric)
     ret = read_lebedev_grid(joinpath(lebedev_path, string(kept)), islinearsymmetric)
     # ret.size != size && @info "Using a Lebedev grid of size $(ret.size)"
     ret
