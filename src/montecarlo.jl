@@ -207,7 +207,8 @@ end
     setup_montecarlo(framework, forcefield_framework::String, systems;
                      blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
                      supercell=nothing, new=false, restart=nothing, parallel=true,
-                     mcmoves=fill(nothing, length(systems)), rng=default_rng())
+                     mcmoves=fill(nothing, length(systems)), rng=default_rng(),
+                     cutoff=12.0u"Å")
 
 Prepare a Monte Carlo simulation of the input list of `systems` in a `framework` with the
 given force field.
@@ -231,7 +232,8 @@ and monoatomic (considered to be a small cation), or to `true` otherwise.
 
 `supercell` is a triplet of integer specifying the number of repetitions of unit cell to
 use. If unspecified, it is the smallest supercell such that the perpendicular lengths are
-all above 24.0 Å (i.e. twice the 12.0 Å cutoff).
+all above twice the `cutoff`. The default cutoff being 12 Å, the default minimal
+perpendicular length is 24 Å.
 
 If `new` is set, force recomputing all the grids. Otherwise, existing grids will be used
 when available.
@@ -249,12 +251,13 @@ monoatomic species, or [49% translation, 49% rotation, 2% random reinsertion] el
 function setup_montecarlo(framework, forcefield_framework::String, systems;
                           blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
                           supercell=nothing, new=false, restart=nothing, parallel=true,
-                          mcmoves=fill(nothing, length(systems)), rng=default_rng())
+                          mcmoves=fill(nothing, length(systems)), rng=default_rng(),
+                          cutoff=12.0u"Å")
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
-    ff = parse_forcefield_RASPA(forcefield_framework)
+    ff = parse_forcefield_RASPA(forcefield_framework; cutoff)
     mat = stack3(bounding_box(syst_framework))
     if supercell isa Nothing
-        supercell = find_supercell(syst_framework, 12.0u"Å")
+        supercell = find_supercell(syst_framework, cutoff)
     end
     supercell::NTuple{3,Int}
     cell = CellMatrix(SMatrix{3,3,TÅ,9}(stack(bounding_box(syst_framework).*supercell)))
@@ -282,7 +285,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
 
     coulomb, eframework = if needcoulomb
         _eframework = initialize_ewald(syst_framework)
-        retrieve_or_create_grid(coulomb_grid_path, syst_framework, ff, gridstep, _eframework, mat, new), _eframework
+        retrieve_or_create_grid(coulomb_grid_path, syst_framework, ff, gridstep, _eframework, mat, new, cutoff), _eframework
     else
         EnergyGrid(), EwaldFramework(mat)
     end
@@ -293,7 +296,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
     else
         _grids = Vector{EnergyGrid}(undef, length(ff.sdict))
         for (j, (atom, i)) in enumerate(atoms)
-            _grids[i] = retrieve_or_create_grid(vdw_grid_paths[j], syst_framework, ff, gridstep, atom, mat, new)
+            _grids[i] = retrieve_or_create_grid(vdw_grid_paths[j], syst_framework, ff, gridstep, atom, mat, new, cutoff)
         end
         _grids
     end
