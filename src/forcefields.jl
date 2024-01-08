@@ -180,6 +180,7 @@ Build a force field from a description of the pairwise interactions.
 or an [`InteractionRuleSum`](@ref)
 
 Pair interactions are only considered between particles whose distance is below the `cutoff`.
+The `cutoff` can be set to `Inf` to remove it.
 
 Missing pairs of species are attributed an interaction according to the given `mixing` rule,
 see [`FF.MixingRule`](@ref).
@@ -194,6 +195,7 @@ unique identifier. Identifiers populate the range `1:n` (where `n == length(sdic
 """
 function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å", shift::Bool=true, tailcorrection::Bool=!shift;
                     sdict::Union{Nothing,IdDict{Symbol,Int}}=nothing, name::String="(unnamed)")
+    cut = @convertifnotfloat u"Å" cutoff
     smap::IdDict{Symbol,Int} = if sdict isa IdDict{Symbol,Int}
         sdict
     else
@@ -247,11 +249,11 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å
 
     for i in 1:n, j in (i+1):n
         interactions[i,j] = interactions[j,i] = map_rule(interactions[i,j]) do r
-            InteractionRule(r.kind, r.params, shift, cutoff, tailcorrection)
+            InteractionRule(r.kind, r.params, shift, cut, tailcorrection)
         end
     end
 
-    ForceField(interactions, smap, symbols, cutoff, name)
+    ForceField(interactions, smap, symbols, cut*u"Å", name)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", ff::ForceField)
