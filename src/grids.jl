@@ -204,6 +204,7 @@ Interpolate grid `g` at the given `point`, which should be a triplet of coordina
 their corresponding unit).
 """
 function interpolate_grid(g::EnergyGrid, point)
+    g.ewald_precision === -Inf32 && error("Empty grid cannot be interpolated!")
     shifted = offsetpoint(point, g.csetup)
     p0 = floor.(Int, shifted)
     # The following is p1 = p0 .+ 1 adapted to avoid BoundsError on numerical imprecision

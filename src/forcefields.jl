@@ -255,7 +255,13 @@ function ForceField(input, mixing::FF.MixingRule=FF.ErrorOnMix, cutoff=12.0u"Å
 end
 
 function Base.show(io::IO, ::MIME"text/plain", ff::ForceField)
-    print(io, "Force field ", ff.name, " with cutoff ", ff.cutoff, " Å (ᵀ = tail correction, ₛ = shifted)\n")
+    print(io, "Force field ", ff.name)
+    if isinf(ff.cutoff)
+        print(io, " with no cutoff")
+    else
+        print(io, " with cutoff of ", ff.cutoff)
+    end
+    println(io, " (ᵀ = tail correction, ₛ = shifted)")
     revdict = Dict([i => at for (at, i) in ff.sdict])
     for i in 1:length(revdict)
         ati = revdict[i]
