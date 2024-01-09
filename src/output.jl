@@ -4,10 +4,10 @@ export output_pdb, output_restart
 
 SimulationStep(mc::MonteCarloSetup) = SimulationStep(mc.step, :output)
 
-function output_pdb(path, o::Union{ProtoSimulationStep,SimulationStep}, (a, b, c), (α, β, γ), i, atomcounter)
+function output_pdb(path, o::Union{ProtoSimulationStep,SimulationStep}, (a, b, c), (α, β, γ), modelidx, atomcounter)
     invmat = inv(ustrip.(u"Å", o.mat))*u"Å^-1"
     open(path, "a") do io
-        @printf io "MODEL     %4d\n" i
+        @printf io "MODEL     %4d\n" modelidx
         @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
         for (l, opos) in enumerate(o.positions)
             i, j, k = o.atoms[l]
@@ -21,6 +21,15 @@ function output_pdb(path, o::Union{ProtoSimulationStep,SimulationStep}, (a, b, c
         @printf io "ENDMDL\n"
         nothing
     end
+end
+
+function output_pdb(path, o::Union{ProtoSimulationStep,SimulationStep})
+    if splitext(path)[2] != ".pdb"
+        path = path*".pdb"
+    end
+    lengths, angles = cell_parameters(o.mat)
+    atomcounter = Counter3D()
+    output_pdb(path, o, lengths, angles, 0, atomcounter)
 end
 
 """

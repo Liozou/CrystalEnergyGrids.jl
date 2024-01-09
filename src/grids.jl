@@ -347,7 +347,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
         return deserialize(path)::Array{Float64,4}
     end
 
-    printstyled("Creating energy grid at ", path, "..."; color=:yellow)
+    printstyled("Creating energy grid at ", path, " ... "; color=:yellow)
     axeA, axeB, axeC = bounding_box(setup.framework)
     numA = floor(Int, norm(axeA) / step) + 1
     numB = floor(Int, norm(axeB) / step) + 1
@@ -387,6 +387,6 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     end
     pre_printwarn && (PRINT_CHARGE_WARNING[] = pre_printwarn)
     serialize(path, allvals)
-    printstyled("Done.\n"; color=:yellow)
+    printstyled("Done.\n"; color=:cyan)
     return allvals
 end

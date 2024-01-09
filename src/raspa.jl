@@ -326,7 +326,7 @@ function retrieve_or_create_grid(grid_path, syst_framework, forcefield, gridstep
     text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
     if new || !isfile(grid_path)
         mkpath(dirname(grid_path))
-        printstyled("Creating ", text, " at ", grid_path, "..."; color=:yellow)
+        printstyled("Creating ", text, " at ", grid_path, " ... "; color=:yellow)
         if iscoulomb
             create_grid_coulomb(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework)
         else
