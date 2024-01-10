@@ -343,6 +343,12 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         record_task = Task(Returns(nothing)) # for type stability
     end
 
+    # value initialisations
+    old_idx = (0,0)
+    accepted = false
+    statistics = MoveStatistics(1.3u"Å", 30.0u"°")
+    randomdmax = maximum(norm, eachcol(mc.step.mat))
+
     if simu.ninit == 0
         put!(output, startstep)
         push!(energies, energy)
@@ -359,12 +365,6 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     local oldpos::Vector{SVector{3,TÅ}}
     local before::MCEnergyReport
     local after::MCEnergyReport
-
-    # value initialisations
-    old_idx = (0,0)
-    accepted = false
-    statistics = MoveStatistics(1.3u"Å", 30.0u"°")
-    randomdmax = maximum(norm, eachcol(mc.step.mat))
 
     # main loop
     for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
