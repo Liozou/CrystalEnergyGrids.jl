@@ -43,6 +43,21 @@ perpendicular widths `(cx, cy, cz)`.
 function find_supercell((cx, cy, cz)::NTuple{3,T}, cutoff::T) where T
     ceil(Int, 2cutoff/cx), ceil(Int, 2cutoff/cy), ceil(Int, 2*cutoff/cz)
 end
+function find_supercell((ux, uy, uz)::NTuple{3,T}, cutoff::Real) where {T<:Quantity}
+    cx, _cx = promote(ux, cutoff)
+    cy, _cy = promote(uy, cutoff)
+    cz, _cz = promote(uz, cutoff)
+    @assert _cx == _cy == _cz
+    find_supercell((cx, cy, cz), _cx * unit(T))
+end
+function find_supercell((ux, uy, uz)::NTuple{3,T}, cutoff::Quantity) where {T<:Real}
+    cx, _cx = promote(ux, cutoff)
+    cy, _cy = promote(uy, cutoff)
+    cz, _cz = promote(uz, cutoff)
+    @assert _cx == _cy == _cz
+    U = unit(cutoff)
+    find_supercell((cx*U, cy*U, cz*U), _cx)
+end
 find_supercell(mat::AbstractMatrix, cutoff) = find_supercell((view(mat, :, 1), view(mat, :, 2), view(mat, :, 3)), cutoff)
 find_supercell((a, b, c)::NTuple{3,<:AbstractVector}, cutoff) = find_supercell(perpendicular_lengths(a, b, c), cutoff)
 find_supercell(syst::AbstractSystem{3}, cutoff) = find_supercell(bounding_box(syst), cutoff)

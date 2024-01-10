@@ -276,6 +276,21 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst
                           StoreRigidChargeFramework, net_charges_framework, precision)
 end
 
+"""
+    initialize_ewald(mat::AbstractMatrix, supercell=find_supercell(mat, 12.0u"Å"), precision=1e-6)
+
+Return an `EwaldFramework` object representing the empty system of dimensions given by its
+unit cell matrix `mat` and optionally a supercell.
+
+See also [initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst, 12.0u"Å"), precision=1e-6)](@ref)
+"""
+function initialize_ewald(mat::AbstractMatrix, supercell=find_supercell(mat, 12.0u"Å"), precision=1e-6)
+    col1, col2, col3 = eltype(mat) <: Quantity ? broadcast.(Base.Fix1(ustrip, u"Å"), eachcol(mat)) : eachcol(mat)
+    smat = SA[SVector{3,Float64}(col1)*u"Å", SVector{3,Float64}(col2)*u"Å", SVector{3,Float64}(col3)*u"Å"]
+    emptysystem = RASPASystem(smat, SVector{3,TÅ}[], Symbol[], Int[], typeof(1.0u"u")[], Te_au[], false)
+    initialize_ewald(emptysystem, supercell, precision)
+end
+
 
 function derivatives_ewald(ewald::EwaldFramework, charge::Float64, r2::Float64)
     r = sqrt(r2)
