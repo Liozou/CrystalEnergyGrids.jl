@@ -146,9 +146,10 @@ function parse_blockfile(file, csetup)
         end
     end for taskid in 1:numtasks]
     foreach(wait, tasks)
-    for (_, _, (ic, jc, kc)) in protoblocks
+    for (_center, _radius2, (ic, jc, kc)) in protoblocks
+        _radius = sqrt(_radius2)
         if !block[ic,jc,kc]
-            @warn "Blocking sphere of $radius Å around position $center is too small to be used with grid step $(csetup.spacing)"
+            @warn "Blocking sphere of $_radius Å around position $_center is too small to be used with grid step $(csetup.spacing)"
         end
     end
     return BlockFile(csetup, BitArray(block))
