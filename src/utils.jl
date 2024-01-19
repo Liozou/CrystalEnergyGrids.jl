@@ -373,7 +373,7 @@ end
 #     B
 # end
 
-function meanBoltzmann(A, T)
+function meanBoltzmann(A, T, weights=nothing)
     n = size(A, 1)
     if ndims(A) == 1
         facts = 0.0
@@ -381,7 +381,7 @@ function meanBoltzmann(A, T)
         M = minimum(A) - 30.0*T
         for j in 1:n
             y = A[j]
-            fact = exp((M-y)/T)
+            fact = exp((M-y)/T)*(weights isa Nothing ? true : weights[j])
             facts += fact
             tot += fact*y
         end
@@ -394,7 +394,7 @@ function meanBoltzmann(A, T)
         m = minimum(view(A, 1:n, i)) - 30.0*T # exp(30.0) ≈ 1e13
         for j in 1:n
             x = A[j,i]
-            factor = exp((m-x)/T)
+            factor = exp((m-x)/T)*(weights isa Nothing ? true : weights[j])
             factors += factor
             total += factor*x
         end
