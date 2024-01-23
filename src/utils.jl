@@ -191,15 +191,15 @@ function periodic_distance2!(buffer, mat, ortho, safemin2, buffer2)
     ref2 = norm2(buffer)
     (ortho || ref2 ≤ safemin2) && return ref2
     @inbounds for i in 1:3
-        buffer[i] += 1
+        buffer2[i] += 1
         mul!(buffer, mat, buffer2)
         newnorm2 = norm2(buffer)
         newnorm2 < ref2 && return newnorm2 # in a reduced lattice, there should be at most one
-        buffer[i] -= 2
+        buffer2[i] -= 2
         mul!(buffer, mat, buffer2)
         newnorm2 = norm2(buffer)
         newnorm2 < ref2 && return newnorm2
-        buffer[i] += 1
+        buffer2[i] += 1
     end
     return ref2
 end
