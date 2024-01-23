@@ -352,9 +352,9 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
     numA = floor(Int, norm(axeA) / step) + 1
     numB = floor(Int, norm(axeB) / step) + 1
     numC = floor(Int, norm(axeC) / step) + 1
-    stepA = (axeA / norm(axeA)) * step
-    stepB = (axeB / norm(axeB)) * step
-    stepC = (axeC / norm(axeC)) * step
+    stepA = axeA / numA
+    stepB = axeB / numB
+    stepC = axeC / numC
     rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == 0 || length(setup.molecule) == 1
         [[SVector{3}(p) for p in __pos]]
     else
