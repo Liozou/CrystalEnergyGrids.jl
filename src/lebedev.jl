@@ -79,7 +79,7 @@ function get_lebedev_direct(size)
 end
 
 """
-    get_rotation_matrices(mol::AbstractSystem, num)
+    get_rotation_matrices(mol::AbstractSystem, num, strict=false)
 
 Return a tuple `(rots, weights)` where:
 - `rots` is a list of 3×3 rotation matrices
@@ -94,12 +94,19 @@ sum(weight * f(ChangePositionSystem(mol, (rot,) .* position(mol))) for (rot, wei
 !!! warning
     In order to compute the average of `f`, the result should be divided by 4π since
     `sum(weights) == 4π`
+
+`num` is the approximate precision of the lebedev grid. The actual number may be much lower
+if the molecule has symmetries, which will keep the same precision.
+Use `strict=true` to make sure that the lebedev points is exactly `num`.
 """
-function get_rotation_matrices(mol::AbstractSystem, num)
-    length(mol) == 1 && return [one(SMatrix{3,3,Float64,9})], [4π]
+function get_rotation_matrices(mol::AbstractSystem, num, strict=false)
+    if length(mol) == 1
+        strict && num != 1 && error("Cannot return more than one rotation matrix for a monoatomic molecule")
+        return [one(SMatrix{3,3,Float64,9})], [4π]
+    end
     islin = is_zaxis_linear(mol)
     issym = is_zaxis_linear_symmetric(mol, islin)
-    lebedev = get_lebedev(islin ? num : div(num, 5), issym)
+    lebedev = strict ? get_lebedev_direct(num) : get_lebedev(islin ? num : div(num, 5), issym)
     zrots = [SMatrix{3,3,Float64,9}([cospi(2i/5) -sinpi(2i/5) 0; sinpi(2i/5) cospi(2i/5) 0; 0 0 1]) for i in 0:(4-4islin)]
     rots = SMatrix{3,3,Float64,9}[]
     for zrot in zrots, point in lebedev.points
