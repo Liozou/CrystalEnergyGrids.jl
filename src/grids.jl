@@ -14,12 +14,15 @@ struct EnergyGrid
     higherorder::Bool # true if grid contains derivatives, false if only raw values
     grid::Array{Cfloat,4}
 end
-function EnergyGrid()
-    EnergyGrid(GridCoordinatesSetup(), (0, 0, 0), -Inf, false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
+function EnergyGrid(valid::Bool=false)
+    EnergyGrid(GridCoordinatesSetup(), (0, 0, 0), copysign(Inf, valid-true), false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
 end
 function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
-    if rg.ewald_precision == -Inf
+    if rg.ewald_precision == Inf
         print("Empty grid")
+        return
+    elseif rg.ewald_precision == -Inf
+        print("Invalid grid")
         return
     end
     print(io, rg.ewald_precision == Inf ? "VdW" : "Coulomb", " grid with ")
@@ -205,6 +208,7 @@ their corresponding unit).
 """
 function interpolate_grid(g::EnergyGrid, point)
     g.ewald_precision === -Inf32 && error("Empty grid cannot be interpolated!")
+    g.ewald_precision === Inf32 && return 0.0u"K"
     shifted = offsetpoint(point, g.csetup)
     p0 = floor.(Int, shifted)
     # The following is p1 = p0 .+ 1 adapted to avoid BoundsError on numerical imprecision

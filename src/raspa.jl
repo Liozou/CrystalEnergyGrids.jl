@@ -390,15 +390,22 @@ function setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15u"â
     needcoulomb = any(!iszero(syst_mol[i,:atomic_charge])::Bool for i in 1:length(syst_mol))
     coulomb, ewald = if needcoulomb
         _eframework = initialize_ewald(syst_framework, supercell)
-        retrieve_or_create_grid(coulomb_grid_path, syst_framework, forcefield, gridstep, _eframework, mat, new, cutoff), _eframework
+        if framework isa AbstractMatrix
+            EnergyGrid(true)
+        else
+            retrieve_or_create_grid(coulomb_grid_path, syst_framework, forcefield, gridstep, _eframework, mat, new, cutoff)
+        end, _eframework
     else
         EnergyGrid(), EwaldFramework(mat)
     end
 
     grids = Vector{EnergyGrid}(undef, length(atomdict))
     for (atom, i) in atomdict
-        vdw_grid_path = vdws[i]
-        grids[i] = retrieve_or_create_grid(vdw_grid_path, syst_framework, forcefield, gridstep, atom, mat, new, cutoff)
+        grids[i] = if framework isa AbstractMatrix
+            EnergyGrid(true)
+        else
+            retrieve_or_create_grid(vdws[i], syst_framework, forcefield, gridstep, atom, mat, new, cutoff)
+        end
     end
 
     charges = [ustrip(u"e_au", syst_mol[i,:atomic_charge])::Float64 for i in 1:length(syst_mol)]
