@@ -10,19 +10,19 @@ Use [`interpolate_grid`](@ref) to access the value of the grid at any point in s
 struct EnergyGrid
     csetup::GridCoordinatesSetup
     num_unitcell::NTuple{3,Cint}
-    ewald_precision::Cfloat # Inf for VdW grid, -Inf for empty grid
+    ewald_precision::Cfloat # Inf for VdW grid, -Inf for zero grid, NaN for empty/invalid grid
     higherorder::Bool # true if grid contains derivatives, false if only raw values
     grid::Array{Cfloat,4}
 end
-function EnergyGrid(valid::Bool=false)
-    EnergyGrid(GridCoordinatesSetup(), (0, 0, 0), copysign(Inf, valid-true), false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
+function EnergyGrid(zero::Bool=false)
+    EnergyGrid(GridCoordinatesSetup(), (0, 0, 0), ifelse(zero, -Inf, NaN), false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
 end
 function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
-    if rg.ewald_precision == Inf
-        print("Empty grid")
+    if rg.ewald_precision == -Inf
+        print("Zero grid")
         return
-    elseif rg.ewald_precision == -Inf
-        print("Invalid grid")
+    elseif isnan(rg.ewald_precision)
+        print("No grid")
         return
     end
     print(io, rg.ewald_precision == Inf ? "VdW" : "Coulomb", " grid with ")
@@ -207,8 +207,8 @@ Interpolate grid `g` at the given `point`, which should be a triplet of coordina
 their corresponding unit).
 """
 function interpolate_grid(g::EnergyGrid, point)
-    g.ewald_precision === -Inf32 && error("Empty grid cannot be interpolated!")
-    g.ewald_precision === Inf32 && return 0.0u"K"
+    g.ewald_precision === -Inf32 && 0.0u"K"
+    isnan(g.ewald_precision) && error("Invalid grid cannot be interpolated!")
     shifted = offsetpoint(point, g.csetup)
     p0 = floor.(Int, shifted)
     # The following is p1 = p0 .+ 1 adapted to avoid BoundsError on numerical imprecision
