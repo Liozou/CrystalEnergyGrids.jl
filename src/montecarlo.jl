@@ -344,17 +344,18 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
                     mcmoves, rng)
 end
 
+#=
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
     molpos = mc.step.posidx[i][j]
     for (k, newpos) in enumerate(newpositions)
         mc.step.positions[molpos[k]] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
-            newpos
+            newpos*u"Å"
         else
-            NoUnits(newpos/u"Å")
+            newpos
         end
     end
 
-    oldEikx, oldEiky, oldEikz = mc.ewald.Eiks
+    oldEikx, oldEiky, oldEikz = mc.ewald.tmpEiks
     if newEiks isa Nothing
         move_one_system!(mc.ewald, mc.offsets[i] + j, newpositions)
     else
@@ -368,7 +369,7 @@ function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothin
     end
     nothing
 end
-
+=#
 
 struct FrameworkEnergyReport
     vdw::TK
