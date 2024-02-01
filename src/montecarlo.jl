@@ -178,7 +178,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         end
     end
 
-    ewaldsystems = EwaldSystem[]
+    ewaldsystems = [EwaldSystem[] for _ in poss]
     for (i, positioni) in enumerate(poss)
         ffidxi = ffidx[i]
         charge = [charges[k] for k in ffidxi]
@@ -192,7 +192,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
             if n > 1
                 randomize_position!(positioni[j], rng, 1:length(ffidxi), bead, block, ffidxi, atomblocks, d)
             end
-            push!(ewaldsystems, EwaldSystem(positioni[j], charge))
+            push!(ewaldsystems[i], EwaldSystem(positioni[j], charge))
         end
     end
 
@@ -330,11 +330,11 @@ parallelized or not.
     modifying states outside of the API.
 """
 function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel, mcmoves::AbstractVector{MCMoves}=copy(mc.mcmoves))
-    ewaldsystems = EwaldSystem[]
+    ewaldsystems = Vector{EwaldSystem}[]
     for (i, posidxi) in enumerate(o.posidx)
         ffidxi = o.ffidx[i]
         charge = [o.charges[k] for k in ffidxi]
-        append!(ewaldsystems, EwaldSystem(o.positions[molpos], charge) for molpos in posidxi)
+        push!(ewaldsystems, [EwaldSystem(o.positions[molpos], charge) for molpos in posidxi])
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)

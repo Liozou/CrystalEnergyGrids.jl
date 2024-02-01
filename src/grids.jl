@@ -10,11 +10,11 @@ Use [`interpolate_grid`](@ref) to access the value of the grid at any point in s
 struct EnergyGrid
     csetup::GridCoordinatesSetup
     num_unitcell::NTuple{3,Cint}
-    ewald_precision::Cfloat # Inf for VdW grid, -Inf for zero grid, NaN for empty/invalid grid
+    ewald_precision::Cfloat # Inf for VdW grid, -Inf for zero grid, NaN for invalid grid
     higherorder::Bool # true if grid contains derivatives, false if only raw values
     grid::Array{Cfloat,4}
 end
-function EnergyGrid(zero::Bool=false)
+function EnergyGrid(zero::Bool)
     EnergyGrid(GridCoordinatesSetup(), (0, 0, 0), ifelse(zero, -Inf, NaN), false, Array{Cfloat,4}(undef, 0, 0, 0, 0))
 end
 function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
@@ -315,7 +315,7 @@ function energy_point(setup::CrystalEnergySetup, positions, ctx=nothing; mc=noth
     coulomb_direct = sum(setup.charges[i]*interpolate_grid(setup.coulomb, positions[i]) for i in 1:num_atoms)
     coulomb_reciprocal = if ctx isa Nothing
         newmolecule = ChangePositionSystem(setup.molecule, positions)
-        compute_ewald(setup.ewald, (newmolecule,))
+        compute_ewald(setup.ewald, ((newmolecule,),))
     else
         move_one_system!(ctx, 1, positions)
         compute_ewald(ctx)
@@ -385,7 +385,7 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         bufferpos = Vector{SVector{3,TÅ}}(undef, length(__pos))
         if length(rotpos) > 1
-            ctx = EwaldContext(setup.ewald, (setup.molecule,))
+            ctx = EwaldContext(setup.ewald, ((setup.molecule,),))
         end
         for (k, pos) in enumerate(rotpos)
             ofs = if num_rotate < 0
