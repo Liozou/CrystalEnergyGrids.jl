@@ -291,7 +291,7 @@ struct CrystalEnergySetup{TFramework,TMolecule}
 end
 
 """
-    energy_point(setup::CrystalEnergySetup, positions)
+    energy_point(setup::CrystalEnergySetup, positions, mc=nothing)
 
 Compute the energy of a guest molecule whose atoms are at the given `positions` in the
 framework. `positions` is a list of triplet of coordinates (with their unit).
@@ -305,7 +305,7 @@ If one of the atom is on a blocking sphere, return `(1e100u"K", 0.0u"K")`
     No validation is used to ensure that the input `positions` are consistent with the
     shape of the molecule.
 """
-function energy_point(setup::CrystalEnergySetup, positions, ctx=nothing)
+function energy_point(setup::CrystalEnergySetup, positions, ctx=nothing; mc=nothing)
     for pos in positions
         setup.block[pos] && return (1e100u"K", 0.0u"K")
     end
@@ -325,7 +325,7 @@ end
 
 
 """
-    energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
+    energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
 
 Compute the energy on the the system given by `setup` on a regular grid with the given
 `step` (with its unit).
@@ -335,20 +335,33 @@ the rotation angle of the molecule, and its size will be greater or equal to `nu
 Otherwise (or if `num_rotate == 0`), the first axe can be dropped through`dropdims`.
 
 A value of 1e100 in the grid indicates an inaccessible point due to blocking spheres.
+
+If `mc` is set to a [`MonteCarloSetup`](@ref), it will be used to compute the energies
+instead of the empty framework. The framework of `setup` and `mc` must be identical and the
+molecule of `setup` must be the first species kind in `mc`.
 """
-function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
-    pre_printwarn = PRINT_CHARGE_WARNING[]
-    # do one empty computation to trigger the warnings if need be
-    __pos = position(setup.molecule) / u"Å"
-    if pre_printwarn
-        energy_point(setup, [SVector{3}(p)*u"Å" for p in __pos])
-        PRINT_CHARGE_WARNING[] = false
-    end
-    store = string(hash_string(setup), '-', ustrip(u"Å", step), '-', lebedev_num(setup.molecule, num_rotate))
+function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
+    mc_store = mc isa Nothing ? "" : string('_', hash_string(mc::MonteCarloSetup))
+    store = string(hash_string(setup), mc_store, '-', ustrip(u"Å", step), '-', lebedev_num(setup.molecule, num_rotate))
     path = joinpath(scratchspace, store)
     if isfile(path)
         printstyled("Retrieved energy grid at ", path, ".\n"; color=:cyan)
         return deserialize(path)::Array{Float64,4}
+    end
+    if mc isa MonteCarloSetup
+        if setup.ewald != mc.ewald.ctx.eframework
+            error("Input setup and mc mismatch in framework")
+        elseif setup.charges != ustrip.(u"e_au", mc.step.charges[mc.step.ffidx[1]])
+            error("Input setup and mc mismatch in molecule")
+        end
+    end
+
+    pre_printwarn = PRINT_CHARGE_WARNING[]
+    # do one empty computation to trigger the warnings if need be
+    __pos = position(setup.molecule) / u"Å"
+    if pre_printwarn
+        energy_point(setup, [SVector{3}(p)*u"Å" for p in __pos]; mc)
+        PRINT_CHARGE_WARNING[] = false
     end
 
     printstyled("Creating energy grid at ", path, " ... "; color=:yellow)
@@ -382,9 +395,9 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40)
             end
             bufferpos .= SVector{3,TÅ}.((ofs,) .+ pos.*u"Å")
             newval = ustrip(u"K", sum(if @isdefined ctx
-                energy_point(setup, bufferpos, ctx)
+                energy_point(setup, bufferpos, ctx; mc)
             else
-                energy_point(setup, bufferpos)
+                energy_point(setup, bufferpos; mc)
             end))
             allvals[k,iA,iB,iC] = newval
         end
