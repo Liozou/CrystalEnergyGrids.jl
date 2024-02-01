@@ -496,7 +496,7 @@ end
 
 
 """
-    single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions)
+    single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions; tmpEiks::NTuple{3,<:AbstractMatrix{ComplexF64}}=ewald.tmpEiks, tmpsums::AbstractVector{ComplexF64}=ewald.tmpsums)
 
 Compute the contribution of species number `ij` at the given `positions` (one position per
 atom) to the reciprocal Ewald sum, so that
@@ -516,8 +516,23 @@ If `positions == nothing`, use the position for the species currently stored in 
     This function is not thread-safe if `positions !== nothing`. This means that it must
     not be called from multiple threads in parallel on the same `ewald` with
     `positions !== nothing`.
+
+    !!! note
+        It is possible to make it thread-safe even with `positions !== nothing`: to do so,
+        you must pass thread-local buffers as keyword arguments `tmpEiks` and `tmpsums`.
+        Note that in that case, this function cannot be used with `update_ewald_context!`,
+        see the following danger.
+
+!!! danger
+    Specifying a value to either keyword arguments `tmpEiks` or `tmpsums` will prevent the
+    state-local change required to perform [`update_ewald_context!`](@ref) afterwards.
+    Calling [`update_ewald_context`](@ref) will thus not perform any actual update, but may
+    not error either.
 """
-function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions)
+function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions;
+                                   tmpEiks::NTuple{3,<:AbstractMatrix{ComplexF64}}=ewald.tmpEiks,
+                                   tmpsums::AbstractVector{ComplexF64}=ewald.tmpsums
+                                  )
     iszero(ewald.ctx.eframework.α) && return 0.0u"K"
     ewald.last[] == -1 && error("Please call `compute_ewald(ewald)` before calling `single_contribution_ewald(ewald, ...)`")
     if positions isa Nothing
@@ -525,12 +540,11 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
     else
         kx, ky, kz = ewald.ctx.eframework.kspace.ks
         kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
-        Eiks = ewald.tmpEiks
-        Eikx, Eiky, Eikz = Eiks
+        Eikx, Eiky, Eikz = tmpEiks
         m = length(positions)
         resize!(Eikx, kxp, m); resize!(Eiky, tkyp, m); resize!(Eikz, tkzp, m)
-        move_one_system!(Eiks, ewald.ctx, positions, 0) # this only modifies Eiks, not ewald
-        contribution = ewald.tmpsums
+        move_one_system!(tmpEiks, ewald.ctx, positions, 0) # this only modifies tmpEiks, not ewald
+        contribution = tmpsums
         contribution .= zero(ComplexF64)
         charges = ewald.ctx.allcharges[ij]
         kindices = ewald.ctx.eframework.kspace.kindices
@@ -544,7 +558,9 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
                 end
             end
         end
-        ewald.last[] = ij # signal for update_ewald_context!
+        if tmpEiks===ewald.tmpEiks && tmpsums===ewald.tmpsums
+            ewald.last[] = ij # signal for update_ewald_context!
+        end
     end
 
     rest_single = 0.0
