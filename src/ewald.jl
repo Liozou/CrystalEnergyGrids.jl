@@ -415,7 +415,7 @@ are not taken into account.
 """
 function compute_ewald(ctx::EwaldContext, skipcontribution=0)
     iszero(ctx.eframework.α) && return 0.0u"K"
-    newcharges::Vector{ComplexF64} = get!(task_local_storage(), :buffer_vector) do
+    newcharges::Vector{ComplexF64} = get!(task_local_storage(), :CEG_buffer_ewald_context) do
         Vector{ComplexF64}(undef, ctx.eframework.kspace.num_kvecs)
     end
     resize!(newcharges, ctx.eframework.kspace.num_kvecs)

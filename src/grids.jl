@@ -243,7 +243,7 @@ function interpolate_grid(g::EnergyGrid, point)
             # release_buffers((X,a))
             return 1e100*u"K"
         end
-        a::Vector{Float64} = get!(task_local_storage(), :buffer_interpolation) do
+        a::Vector{Float64} = get!(task_local_storage(), :CEG_buffer_interpolation) do
             Vector{Float64}(undef, 64)
         end
         @inbounds mul!(a, COEFF, X)
