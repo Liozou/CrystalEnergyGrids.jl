@@ -287,7 +287,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
         _eframework = initialize_ewald(syst_framework)
         retrieve_or_create_grid(coulomb_grid_path, syst_framework, ff, gridstep, _eframework, mat, new, cutoff), _eframework
     else
-        EnergyGrid(), EwaldFramework(mat)
+        EnergyGrid(true), EwaldFramework(mat)
     end
 
     grids = if isempty(vdw_grid_paths) || isempty(framework)

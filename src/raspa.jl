@@ -320,7 +320,7 @@ function grid_locations(framework, forcefield_framework, atoms, gridstep, superc
 end
 
 function retrieve_or_create_grid(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework, mat, new, cutoff)
-    (isempty(grid_path) || isinf(cutoff)) && return EnergyGrid()
+    (isempty(grid_path) || isinf(cutoff)) && return EnergyGrid(false)
     cutoff == 12.0u"Å" || error("Cutoff other than 12 Å or infinity is not supported.")
     iscoulomb = atom_or_eframework isa EwaldFramework
     text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
@@ -396,7 +396,7 @@ function setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15u"�
             retrieve_or_create_grid(coulomb_grid_path, syst_framework, forcefield, gridstep, _eframework, mat, new, cutoff)
         end, _eframework
     else
-        EnergyGrid(), EwaldFramework(mat)
+        EnergyGrid(true), EwaldFramework(mat)
     end
 
     grids = Vector{EnergyGrid}(undef, length(atomdict))
