@@ -338,10 +338,10 @@ function Base.:(==)(e1::EwaldContext, e2::EwaldContext)
                                       # no need to compare indexof because of atoms
                                       # no need to compare numspecies because of speciesof
                                       e1.static_contribution == e2.static_contribution &&
-                                      e1.energy_net_charges && e2.energy_net_charges
+                                      e1.energy_net_charges == e2.energy_net_charges
 end
 
-function move_one_system!(Eiks, ctx::EwaldContext, ij, positions)
+function move_one_system!(Eiks, ctx::EwaldContext, ij::Union{Nothing,Int}, positions)
     Eikx, Eiky, Eikz = Eiks
     _, ky, kz = ctx.eframework.kspace.ks
     invmat = ctx.eframework.invmat
@@ -356,7 +356,103 @@ function move_one_system!(Eiks, ctx::EwaldContext, ij, positions)
         make_line_neg!(Eikz, ofs, kz, cispi(2*pz))
     end
 end
+
+"""
+    move_one_system!(ctx::EwaldContext, ij::Int, positions)
+
+Move one molecule given by its index `ij` in the [`EwaldContext`](@ref) to the given atom
+`positions`.
+"""
 move_one_system!(ctx::EwaldContext, ij::Int, positions) = move_one_system!(ctx.Eiks, ctx, ij, positions)
+
+"""
+    add_one_system!(ctx::EwaldContext, i::Int, positions)
+
+Add to the [`EwaldContext`](]ref) one system defined by its kind `i` and its atom
+`positions`.
+
+Return the index `ij` of the newly introduced molecule.
+"""
+function add_one_system!(ctx::EwaldContext, i::Int, positions)
+    push!(ctx.speciesof, i)
+    ctx.numspecies[i] += 1
+    ij = length(ctx.speciesof)
+    l0 = length(ctx.atoms)
+    n = length(positions)
+    push!(ctx.indexof, collect((l0+1):(l0+n)))
+    oldn = length(ctx.atoms)
+    resize!(ctx.atoms, oldn + n)
+    for k in 1:n
+        ctx.atoms[l0+k] = (ij,k)
+    end
+    Eikx, Eiky, Eikz = ctx.Eiks
+    sx = size(Eikx, 1); sy = size(Eiky, 1); sz = size(Eikz, 1)
+    resize!(Eikx, sx, oldn + n); resize!(Eiky, sy, oldn + n); resize!(Eikz, sz, oldn + n)
+    move_one_system!(ctx.Eiks, ctx, ij, positions)
+    ij
+end
+
+"""
+    remove_one_system!(ctx::EwaldContext, ij::Int)
+
+Remove from the [`EwaldContext`](@ref) one system identified by its index `ij`, and return
+the index `oldij` of the system which is now referred to as `ij`. It may return
+`oldij == ij` to signify that there is no change to the current indices.
+
+In other words, if `remove_one_system!(ctx, 7)` returns `12`, then the system which used to
+be called `12` is now called `7`, and there is no system which is now called `12`.
+
+## Implementation note
+The value returned by `remove_one_system!` is always the highest index referring to a
+system in `ctx`.
+"""
+function remove_one_system!(ctx::EwaldContext, ij::Int)
+    oldij = length(ctx.speciesof)
+    ctx.numspecies[ctx.speciesof[ij]] -= 1
+    prev_atoms = sort!(ctx.indexof[ij])
+    if oldij != ij
+        ctx.speciesof[ij] = ctx.speciesof[oldij]
+        for l in (ctx.indexof[ij] = ctx.indexof[oldij])
+            _oldij, _k = ctx.atoms[l]
+            @assert _oldij == oldij
+            ctx.atoms[l] = (ij, _k)
+        end
+    end
+    pop!(ctx.speciesof)
+    pop!(ctx.indexof)
+
+    #=
+    Put removed atoms at the end. To do so, exchange atom l with atom first_l, where l goes
+    decreasing in the indices of ctx.atoms, and first_l goes increasing through
+    If l == last_l, skip since it means that the removed atom of index last_l is among the
+    last indices of atoms.
+    =#
+    n = length(prev_atoms)
+    oldn = length(ctx.atoms)
+    lastidx = n
+    firstidx = 1
+    Eikx, Eiky, Eikz = ctx.Eiks
+    for k in 1:n
+        l = oldn + 1 - k
+        if l == prev_atoms[lastidx]
+            lastidx -= 1
+        else
+            first_l = prev_atoms[firstidx]
+            (atomij, atomk) = ctx.atoms[l]
+            ctx.indexof[atomij][atomk] = first_l
+            ctx.atoms[first_l] = (atomij, atomk)
+            Eikx[:,first_l] .= Eikx[:,l]
+            Eiky[:,first_l] .= Eiky[:,l]
+            Eikz[:,first_l] .= Eikz[:,l]
+            firstidx += 1
+        end
+    end
+
+    resize!(ctx.atoms, oldn - n)
+    sx = size(Eikx, 1); sy = size(Eiky, 1); sz = size(Eikz, 1)
+    resize!(Eikx, sx, oldn - n); resize!(Eiky, sy, oldn - n); resize!(Eikz, sz, oldn - n)
+    oldij
+end
 
 """
     EwaldContext(eframework::EwaldFramework, systems)

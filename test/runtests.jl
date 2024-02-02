@@ -62,10 +62,11 @@ end
     setupNaCHA = setup_RASPA("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", "Na", "TraPPE");
     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
     pos1 = [SVector{3}((1.0, 2.5, 1.7))*u"Å"]
+    pos2 = [SVector{3}((6.2, 5.1, 3.0))*u"Å"]
     ctx = CEG.EwaldContext(setupNaCHA.ewald,[
         [
             CEG.ChangePositionSystem(setupNaCHA.molecule, pos1),
-            CEG.ChangePositionSystem(setupNaCHA.molecule, [SVector{3}((6.2, 5.1, 3.0))*u"Å"]),
+            CEG.ChangePositionSystem(setupNaCHA.molecule, pos2),
         ],
         [co2]
     ])
@@ -74,6 +75,35 @@ end
     @test reciprocal == compute_ewald(iec)
     # /!\ call to single_contribution_ewald must be after call to compute_ewald
     @test reciprocal ≈ compute_ewald(iec.ctx, 1) + CEG.single_contribution_ewald(iec, 1, pos1)
+
+    oldctx = deepcopy(ctx)
+    @test CEG.remove_one_system!(ctx, 3) == 3
+    @test CEG.add_one_system!(ctx, 2, position(co2)) == 3
+    @test ctx == oldctx
+
+    @test CEG.remove_one_system!(ctx, 2) == 3
+    @test CEG.add_one_system!(ctx, 1, pos2) == 3
+    @test compute_ewald(ctx) ≈ reciprocal
+    @test ctx != oldctx
+
+    tmpctx = deepcopy(ctx)
+    @test CEG.remove_one_system!(ctx, 2) == 3
+    @test CEG.add_one_system!(ctx, 2, position(co2)) == 3
+    @test ctx == oldctx
+
+    @test CEG.remove_one_system!(ctx, 2) == 3
+    @test CEG.remove_one_system!(ctx, 1) == 2
+    @test CEG.add_one_system!(ctx, 1, pos2) == 2
+    @test CEG.add_one_system!(ctx, 1, pos1) == 3
+    @test compute_ewald(ctx) ≈ reciprocal
+    @test ctx != oldctx && ctx != tmpctx
+
+    pos3 = [SVector{3}((4.1, 3.7, 2.2))*u"Å"]
+    CEG.move_one_system!(ctx, 3, pos3)
+    reciprocal3 = compute_ewald(ctx)
+    @test CEG.remove_one_system!(ctx, 3) == 3
+    @test CEG.add_one_system!(ctx, 1, pos3) == 3
+    @test compute_ewald(ctx) ≈ reciprocal3
 end
 
 @testset "MonteCarloSetup" begin
