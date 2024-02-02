@@ -514,8 +514,10 @@ end
 function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::Vector{Int}, newpos::Vector{SVector{3,TÅ}})
     for (j, pos) in enumerate(newpos)
         block[pos] && return true
-        ablock = atomblocks[ffidxi[j]]
-        ablock[pos + ablock.csetup.Δ./2] && return true
+        if !isempty(atomblocks) # atomblocks
+            ablock = atomblocks[ffidxi[j]]
+            ablock[pos + ablock.csetup.Δ./2] && return true
+        end
     end
     return false
 end
