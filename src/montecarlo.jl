@@ -173,6 +173,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
             end
         end
         beads[i] = thisbead
+        models[i] .-= (models[i][thisbead],)
     end
 
     atomblocks = Vector{BlockFile}(undef, length(grids))
