@@ -109,8 +109,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     if charge_flag isa NTuple{4,Int}
         idxsystem′, kind′, i_revidxk′, i_possk′ = charge_flag
         system′, _ = systems[idxsystem]
-        tot_charge = eframework.net_charges_framework + sum(sum(ustrip(u"e_au", charges[ix]) for ix in ffidx[i]; init=0.0)*length(poss[i]) for i in 1:length(poss); init=0.0)
-        this_charge = sum(ustrip(u"e_au", system′[i,:atomic_charge])::Float64 for i in 1:length(system′); init=0.0)
+        tot_charge = eframework.net_charges_framework + sum(sum(charges[ix] for ix in ffidx[i]; init=0.0u"e_au")*length(poss[i]) for i in 1:length(poss); init=0.0u"e_au")
+        this_charge = sum(uconvert(u"e_au", system′[i,:atomic_charge])::Te_au for i in 1:length(system′); init=0.0u"e_au")
         iszero(this_charge) && error("Cannot use a number equal to -1 on a neutral species")
         n′ = round(Int, -tot_charge/this_charge)
         n′ ≥ 0 || error(lazy"Cannot compensate the total charge of $tot_charge with a species of the charge $this_charge")
