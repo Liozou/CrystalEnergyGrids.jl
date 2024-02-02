@@ -341,21 +341,22 @@ function Base.:(==)(e1::EwaldContext, e2::EwaldContext)
                                       e1.energy_net_charges && e2.energy_net_charges
 end
 
-function move_one_system!(Eiks, ctx::EwaldContext, positions, ofs)
+function move_one_system!(Eiks, ctx::EwaldContext, ij, positions)
     Eikx, Eiky, Eikz = Eiks
     _, ky, kz = ctx.eframework.kspace.ks
     invmat = ctx.eframework.invmat
     isnumber = eltype(positions) <: AbstractVector{<:AbstractFloat}
     n = length(positions)
-    @inbounds for j in 1:n
-        px, py, pz = invmat * (isnumber ? positions[j]*u"Å" : positions[j])
-        jofs = ofs + j
-        make_line_pos!(Eikx, jofs, cispi(2*px))
-        make_line_neg!(Eiky, jofs, ky, cispi(2*py))
-        make_line_neg!(Eikz, jofs, kz, cispi(2*pz))
+    indexofij = ij isa Nothing ? nothing : ctx.indexof[ij]
+    @inbounds for k in 1:n
+        px, py, pz = invmat * (isnumber ? positions[k]*u"Å" : positions[k])
+        ofs = ij isa Nothing ? k : indexofij[k]
+        make_line_pos!(Eikx, ofs, cispi(2*px))
+        make_line_neg!(Eiky, ofs, ky, cispi(2*py))
+        make_line_neg!(Eikz, ofs, kz, cispi(2*pz))
     end
 end
-move_one_system!(ctx::EwaldContext, ij::Int, positions) = move_one_system!(ctx.Eiks, ctx, positions, ctx.offsets[ij])
+move_one_system!(ctx::EwaldContext, ij::Int, positions) = move_one_system!(ctx.Eiks, ctx, ij, positions)
 
 """
     EwaldContext(eframework::EwaldFramework, systems)
@@ -559,7 +560,7 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
         Eikx, Eiky, Eikz = tmpEiks
         m = length(positions)
         resize!(Eikx, kxp, m); resize!(Eiky, tkyp, m); resize!(Eikz, tkzp, m)
-        move_one_system!(tmpEiks, ewald.ctx, positions, 0) # this only modifies tmpEiks, not ewald
+        move_one_system!(tmpEiks, ewald.ctx, nothing, positions) # this only modifies tmpEiks, not ewald
         contribution = tmpsums
         contribution .= zero(ComplexF64)
         charges = ewald.ctx.charges[ewald.ctx.speciesof[ij]]
