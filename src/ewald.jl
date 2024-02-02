@@ -321,12 +321,14 @@ struct EwaldContext
     atoms::Vector{Tuple{Int,Int}}
     # atoms[l] is (ij,k) where `ij` is the index of the specific molecule and `k` is the
     # atom number within the molecule
-    charges::Vector{Vector{Te_au}} # charges[i] is the list of atom charges of species i
     speciesof::Vector{Int} # speciesof[ij] is the kind i of the corresponding species
     indexof::Vector{Vector{Int}}
     # indexof[ij][k] is the index `l` such that atoms[l] == (ij, k)
     numspecies::Vector{Int} # numspecies[i] is the number of ij such that speciesof[ij]==i
-    static_contribution::TK
+    static_contribution::Base.RefValue{TK}
+    charges::Vector{Vector{Te_au}} # charges[i] is the list of atom charges of species i
+    energies::Vector{TK} # energies[i] is the negative energy contribution to
+    # static_contribution of each species of kind i
     energy_net_charges::TK
 end
 
@@ -337,8 +339,8 @@ function Base.:(==)(e1::EwaldContext, e2::EwaldContext)
                                       e1.speciesof == e2.speciesof &&
                                       # no need to compare indexof because of atoms
                                       # no need to compare numspecies because of speciesof
-                                      e1.static_contribution == e2.static_contribution &&
-                                      e1.energy_net_charges == e2.energy_net_charges
+                                      e1.static_contribution[] ≈ e2.static_contribution[] &&
+                                      e1.energy_net_charges ≈ e2.energy_net_charges
 end
 
 function move_one_system!(Eiks, ctx::EwaldContext, ij::Union{Nothing,Int}, positions)
@@ -374,6 +376,7 @@ Add to the [`EwaldContext`](]ref) one system defined by its kind `i` and its ato
 Return the index `ij` of the newly introduced molecule.
 """
 function add_one_system!(ctx::EwaldContext, i::Int, positions)
+    ctx.static_contribution[] -= ctx.energies[i]
     push!(ctx.speciesof, i)
     ctx.numspecies[i] += 1
     ij = length(ctx.speciesof)
@@ -407,9 +410,11 @@ The value returned by `remove_one_system!` is always the highest index referring
 system in `ctx`.
 """
 function remove_one_system!(ctx::EwaldContext, ij::Int)
-    oldij = length(ctx.speciesof)
-    ctx.numspecies[ctx.speciesof[ij]] -= 1
+    i = ctx.speciesof[ij]
+    ctx.static_contribution[] += ctx.energies[i]
+    ctx.numspecies[i] -= 1
     prev_atoms = sort!(ctx.indexof[ij])
+    oldij = length(ctx.speciesof)
     if oldij != ij
         ctx.speciesof[ij] = ctx.speciesof[oldij]
         for l in (ctx.indexof[ij] = ctx.indexof[oldij])
@@ -462,58 +467,64 @@ Build an [`EwaldContext`](@ref) for a fixed framework and any number of rigid mo
 `eframework` can be obtained from [`initialize_ewald`](@ref).
 """
 function EwaldContext(eframework::EwaldFramework, systems)
-    iszero(eframework.α) && return EwaldContext(eframework, ntuple(Returns(ElasticMatrix{ComplexF64}(undef, 0, 0)), 3), Tuple{Int,Int}[], Vector{Vector{Te_au}}[], Int[], Vector{Int}[], Int[], 0.0u"K", 0.0u"K")
+    iszero(eframework.α) && return EwaldContext(eframework, ntuple(Returns(ElasticMatrix{ComplexF64}(undef, 0, 0)), 3), Tuple{Int,Int}[], Int[], Vector{Int}[], Int[], Ref(0.0u"K"), Vector{Vector{Te_au}}[], TK[], 0.0u"K")
     allcharges::Vector{Vector{Te_au}} = [first(kind)[:,:atomic_charge] for kind in systems]
     numspecies::Vector{Int} = [length(kind) for kind in systems]
 
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α*u"K*Å/e_au^2"
-    energy_adsorbate_self = sum(sum(abs2, charges; init=0.0u"e_au^2")*chargefactor*num for (num, charges) in zip(numspecies, allcharges); init=0.0u"K")
-    net_charges = sum(sum(charges; init=0.0u"e_au")*num for (num, charges) in zip(numspecies, allcharges); init=0.0u"e_au")
-    if abs(net_charges + eframework.net_charges_framework) > 1e-5u"e_au" && PRINT_CHARGE_WARNING[]
-        @warn lazy"Framework charge of $(eframework.net_charges_framework) and additional charge of $net_charges do not make a neutral system."
+    energies = [sum(abs2, charges; init=0.0u"e_au^2")*chargefactor for charges in allcharges]
+    energy_adsorbate_self = sum(eas*num for (num, eas) in zip(numspecies, energies); init=0.0u"K")
+    net_charges = sum.(allcharges; init=0.0u"e_au")
+    total_net_charges = sum(charge*num for (num, charge) in zip(numspecies, net_charges); init=0.0u"e_au")
+    if abs(total_net_charges + eframework.net_charges_framework) > 1e-5u"e_au" && PRINT_CHARGE_WARNING[]
+        @warn lazy"Framework charge of $(eframework.net_charges_framework) and additional charge of $total_net_charges do not make a neutral system."
     end
 
     buffer2, ortho, safemin = prepare_periodic_distance_computations(eframework.mat)
     safemin2 = safemin^2
     buffer = MVector{3,TÅ}(undef)
     # m = length(systems)
-    energy_adsorbate_excluded = 0.0u"e_au^2/Å"
+    energy_adsorbate_excluded = 0.0u"K"
     speciesof = zeros(Int, sum(numspecies))
     atoms = Tuple{Int,Int}[]
     indexof = Vector{Vector{Int}}(undef, length(speciesof))
     systcounter = 0
-    for (i, (kind, charges)) in enumerate(zip(systems, allcharges)), syst in kind
+    for (i, kind) in enumerate(systems), syst in kind
         systcounter += 1
         speciesof[systcounter] = i
         n = length(syst)
-        thisindexof = Vector{Int}(undef, n)
-        indexof[systcounter] = thisindexof
+        indexof[systcounter] = collect((length(atoms)+1):(length(atoms)+n))
+        append!(atoms, (systcounter, k) for k in 1:n)
+    end
+    for (i, (kind, charges)) in enumerate(zip(systems, allcharges))
+        syst = first(kind)
+        this_energy = 0.0u"e_au^2/Å"
+        n = length(syst)
         for atomA in 1:n
-            push!(atoms, (systcounter, atomA))
-            thisindexof[atomA] = length(atoms)
             chargeA = charges[atomA]
             posA = position(syst, atomA)
             for atomB in (atomA+1):n
                 chargeB = charges[atomB]
                 buffer .= position(syst, atomB) .- posA
                 r = sqrt(periodic_distance2_fromcartesian!(buffer, eframework.mat, eframework.invmat, ortho, safemin2, buffer2))
-                energy_adsorbate_excluded += erf(eframework.α*r)*chargeA*chargeB/r
+                this_energy += erf(eframework.α*r)*chargeA*chargeB/r
             end
         end
+        energies[i] += this_energy*COULOMBIC_CONVERSION_FACTOR*u"K*Å/e_au^2"
+        energy_adsorbate_excluded += length(kind)*this_energy*COULOMBIC_CONVERSION_FACTOR*u"K*Å/e_au^2"
     end
     @assert !any(iszero, speciesof)
 
-    static_contribution = eframework.UIon*net_charges^2 - energy_adsorbate_self -
-                          energy_adsorbate_excluded*COULOMBIC_CONVERSION_FACTOR*u"K*Å/e_au^2"
+    static_contribution = eframework.UIon*total_net_charges^2 - energy_adsorbate_self - energy_adsorbate_excluded
 
-    energy_net_charges = eframework.UIon*eframework.net_charges_framework*net_charges
+    energy_net_charges = eframework.UIon*eframework.net_charges_framework*total_net_charges
     # offsets = Vector{Int}(undef, m)
     # m > 0 && (offsets[1] = 0)
     # @inbounds for i in 1:(m-1)
     #     offsets[i+1] = offsets[i] + length(systems[i])
     # end
     Eiks = setup_Eik(systems, eframework.kspace.ks, eframework.invmat, (1,1,1))
-    return EwaldContext(eframework, Eiks, atoms, allcharges, speciesof, indexof, numspecies, static_contribution, energy_net_charges)
+    return EwaldContext(eframework, Eiks, atoms, speciesof, indexof, numspecies, Ref(static_contribution), allcharges, energies, energy_net_charges)
 end
 
 """
@@ -545,7 +556,7 @@ function compute_ewald(ctx::EwaldContext, skipcontribution=0)
 
     UHostAdsorbateChargeChargeFourier = 2*(framework_adsorbate + ustrip(u"K", ctx.energy_net_charges))
 
-    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate + ustrip(u"K", ctx.static_contribution)
+    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate + ustrip(u"K", ctx.static_contribution[])
 
     return (UHostAdsorbateChargeChargeFourier + UAdsorbateAdsorbateChargeChargeFourier)*ENERGY_TO_KELVIN
 end
@@ -600,7 +611,7 @@ function compute_ewald(ewald::IncrementalEwaldContext)
 
     UHostAdsorbateChargeChargeFourier = 2*(framework_adsorbate + ustrip(u"K", ewald.ctx.energy_net_charges))
 
-    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate + ustrip(u"K", ewald.ctx.static_contribution)
+    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate + ustrip(u"K", ewald.ctx.static_contribution[])
 
     ewald.last[] = 0 # signal for single_contribution_ewald
 

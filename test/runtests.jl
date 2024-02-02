@@ -104,6 +104,19 @@ end
     @test CEG.remove_one_system!(ctx, 3) == 3
     @test CEG.add_one_system!(ctx, 1, pos3) == 3
     @test compute_ewald(ctx) ≈ reciprocal3
+
+    co2_2 = CEG.ChangePositionSystem(co2, SVector{3}.([[5.491645446274333, 8.057854365959964, 8.669190836544463]u"Å",
+                                                       [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
+                                                       [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
+    @test CEG.add_one_system!(ctx, 2, position(co2_2)) == 4
+    ctx_twoco2 = CEG.EwaldContext(setupNaCHA.ewald,[
+        [co2_2, co2],
+        [
+            CEG.ChangePositionSystem(setupNaCHA.molecule, pos3),
+            CEG.ChangePositionSystem(setupNaCHA.molecule, pos2),
+        ]
+    ])
+    @test compute_ewald(ctx) ≈ compute_ewald(ctx_twoco2)
 end
 
 @testset "MonteCarloSetup" begin
