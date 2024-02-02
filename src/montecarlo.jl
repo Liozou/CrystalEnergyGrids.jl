@@ -17,6 +17,8 @@ struct MonteCarloSetup{T,Trng}
     atomblocks::Vector{BlockFile}
     # atomblock[ix][pos] is set if pos is blocked for all atoms of index ix in ff.
     bead::Vector{Int} # k = bead[i] is the number of the reference bead of kind i.
+    models::Vector{Vector{SVector{3,TÅ}}}
+    # models[i] is a list of atom positions compatible with a species of kind i
     mcmoves::Vector{MCMoves} # mcmoves[i] is the set of MC moves for kind i
     rng::Trng
 end
@@ -66,6 +68,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     rev_indices = Vector{Int}[]
     speciesblocks = BlockFile[]
     newmcmoves = MCMoves[]
+    models = Vector{SVector{3,TÅ}}[]
     idxsystem = 0
     # charge_flat is a signal that the system should be expanded based on charges
     charge_flag::Union{Nothing,NTuple{4,Int}} = nothing
@@ -87,6 +90,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
                 push!(speciesblocks, parse_blockfile(joinpath(getdir_RASPA(), "structures", "block", block)*".block", csetup))
             end
             push!(newmcmoves, mcmove)
+            push!(models, copy(position(system)::Vector{SVector{3,TÅ}}))
         end
         push!(indices, (kind, length(poss[kind])+1))
         append!(rev_indices[kind], idxsystem for _ in 1:n)
@@ -200,7 +204,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     ewald, Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
-                    speciesblocks, atomblocks, beads, newmcmoves, rng), indices
+                    speciesblocks, atomblocks, beads, models, newmcmoves, rng), indices
 end
 
 """
@@ -340,7 +344,7 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
-                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead,
+                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead, mc.models,
                     mcmoves, rng)
 end
 
