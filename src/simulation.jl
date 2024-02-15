@@ -395,7 +395,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             accepted && parallel && wait(running_update)
 
             i, j = idx
-            ij = mc.offsets[i]+j
+            ij = mc.ewidx[i][j]
 
             if old_idx == idx
                 if accepted

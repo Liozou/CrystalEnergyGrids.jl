@@ -5,11 +5,11 @@ struct MonteCarloSetup{T,Trng}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     ewald::IncrementalEwaldContext
+    ewidx::Vector{Vector{Int}}
+    # ewidx[i][j] is the index ij used to refer to the j-th species of kind i in ewald.
     tailcorrection::TailCorrection
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[ix] is the VdW grid for atom ix in ff.
-    offsets::Vector{Int}
-    # offsets[i] is the number of molecules belonging to a kind strictly lower than i.
     indices::Set{Tuple{Int,Int}}
     # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
     speciesblocks::Vector{BlockFile}
@@ -25,7 +25,7 @@ end
 
 function Base.show(io::IO, mc::MonteCarloSetup)
     n = length(mc.indices)
-    m = length(mc.offsets)
+    m = length(mc.mcmoves)
     print(io, "Monte-Carlo setup with ", n , " atoms in ", m, " molecule kind")
     m > 1 && print(io, 's')
 end
@@ -127,15 +127,13 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     tailcorrection = TailCorrection(ff, ffidx, num_framework_atoms, λ, length.(poss))
 
     n = length(poss)
-    offsets = Vector{Int}(undef, n)
-    offsets[1] = 0
+    ewidx = Vector{Vector{Int}}(undef, length(poss))
     indices_list = Tuple{Int,Int}[]
-    for i in 1:(n-1)
-        numi = length(poss[i])
-        offsets[i+1] = offsets[i] + numi
-        append!(indices_list, (i,j) for j in 1:length(poss[i]))
+    for i in 1:n
+        len = length(poss[i])
+        ewidx[i] = collect((length(indices_list)+1):(length(indices_list)+len))
+        append!(indices_list, (i,j) for j in 1:len)
     end
-    append!(indices_list, (n,j) for j in 1:length(poss[n]))
 
     buffer = MVector{3,TÅ}(undef)
     buffer2 = MVector{3,Float64}(undef)
@@ -190,7 +188,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    ewald, tailcorrection, coulomb, grids, offsets, Set(indices_list),
+                    ewald, ewidx, tailcorrection, coulomb, grids, Set(indices_list),
                     speciesblocks, atomblocks, beads, models, newmcmoves, rng), indices
 end
 
@@ -330,7 +328,7 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
-                    ewald, copy(mc.tailcorrection), mc.coulomb, mc.grids, mc.offsets,
+                    ewald, map(copy, mc.ewidx), copy(mc.tailcorrection), mc.coulomb, mc.grids,
                     copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead, mc.models,
                     mcmoves, rng)
 end
@@ -475,7 +473,7 @@ The energy difference between the new position for the molecule and the current 
 """
 function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     i, j = idx
-    ij = mc.offsets[i]+j
+    ij = mc.ewidx[i][j]
     poss = if positions isa Nothing
         molpos = mc.step.posidx[i][j]
         @view mc.step.positions[molpos]
