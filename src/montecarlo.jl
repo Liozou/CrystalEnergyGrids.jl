@@ -5,7 +5,7 @@ struct MonteCarloSetup{T,Trng}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     ewald::IncrementalEwaldContext
-    tailcorrection::Base.RefValue{TK}
+    tailcorrection::TailCorrection
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[ix] is the VdW grid for atom ix in ff.
     offsets::Vector{Int}
@@ -123,22 +123,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         restartpositions isa Nothing && splice!(poss[kind′], (i_possk′+1):i_possk′, copy(position(system′)::Vector{SVector{3,TÅ}}) for _ in 1:n′)
     end
 
-    num_atoms = copy(num_framework_atoms)
-    for (i, indices) in enumerate(ffidx)
-        mult = length(poss[i])
-        for id in indices
-            num_atoms[id] += mult
-        end
-    end
-    tcorrection = 0.0u"K"
-    for (i, ni) in enumerate(num_atoms)
-        ni == 0 && continue
-        for (j, nj) in enumerate(num_atoms)
-            nj == 0 && continue
-            tcorrection += ni*nj*tailcorrection(ff[i,j], ff.cutoff)
-        end
-    end
-    tcorrection *= 2π/det(ustrip.(u"Å", cell.mat))
+    λ = ustrip(u"Å^-3", 2π/det(cell.mat))
+    tailcorrection = TailCorrection(ff, ffidx, num_framework_atoms, λ, length.(poss))
 
     n = length(poss)
     offsets = Vector{Int}(undef, n)
@@ -204,7 +190,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    ewald, Ref(tcorrection), coulomb, grids, offsets, Set(indices_list),
+                    ewald, tailcorrection, coulomb, grids, offsets, Set(indices_list),
                     speciesblocks, atomblocks, beads, models, newmcmoves, rng), indices
 end
 
@@ -344,7 +330,7 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
-                    ewald, Ref(mc.tailcorrection[]), mc.coulomb, mc.grids, mc.offsets,
+                    ewald, copy(mc.tailcorrection), mc.coulomb, mc.grids, mc.offsets,
                     copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead, mc.models,
                     mcmoves, rng)
 end

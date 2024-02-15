@@ -10,6 +10,7 @@ using Unitful, UnitfulAtomic
 using AtomsBase
 using StableRNGs: StableRNG
 
+using LinearAlgebra: det
 using Serialization
 
 # using Aqua
@@ -262,6 +263,33 @@ end
     setupArCIT7block = setup_RASPA("CIT7block", "BoulfelfelSholl2021", "Ar", "TraPPE");
     @test energy_point(setupArCIT7block, [SVector{3}([12.5, 0.8, 0.3]u"Å")]) == (1e100u"K", 0.0u"K")
     @test energy_point(setupArCIT7block, [SVector{3}([20.175808361078516, 10.58027451750961, 9.185277912816744]u"Å")]) == (1e100u"K", 0.0u"K") # same in another cell
+end
+
+@testset "TailCorrection" begin
+    co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
+    na = CEG.load_molecule_RASPA("Na", "TraPPE", "BoulfelfelSholl2021");
+    mc, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [(na, 2), (co2, 3)]; blockfiles=[false,false]);
+
+    ff = mc.step.ff
+    ffidx = mc.step.ffidx
+    @test getindex.((ff.symbols,), ffidx) == [[:Na], [:O, :C, :O]]
+    framework_atoms = [0, 720, 0, 0, 360, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    λ = ustrip(u"Å^-3", 2π/det(mc.step.mat))
+
+    tc0 = CEG.TailCorrection(ff, ffidx, framework_atoms, λ, [0,0])
+    @test tc0[] == 0.0u"K"
+    CEG.modify_species!(tc0, 1, 2)
+    CEG.modify_species!(tc0, 2, 3)
+    @test tc0[] ≈ mc.tailcorrection[] ≈ -322.46442841047406u"K"
+
+    tc1 = CEG.TailCorrection(ff, ffidx, framework_atoms, λ, [2,3])
+    @test tc1[] ≈ mc.tailcorrection[]
+
+    tc2 = CEG.TailCorrection(ff, ffidx, framework_atoms, λ, [1,5])
+    CEG.modify_species!(tc2, 2, -1)
+    CEG.modify_species!(tc2, 1, 1)
+    CEG.modify_species!(tc2, 2, -1)
+    @test tc2[] ≈ mc.tailcorrection[]
 end
 
 @testset "Random walk" begin
