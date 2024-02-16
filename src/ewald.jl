@@ -584,7 +584,7 @@ function IncrementalEwaldContext(ctx::EwaldContext)
     Eiky = ElasticMatrix{ComplexF64}(undef, tkyp, 1)
     Eikz = ElasticMatrix{ComplexF64}(undef, tkzp, 1)
     tmpsums = Vector{ComplexF64}(undef, m)
-    IncrementalEwaldContext(ctx, ElasticMatrix{ComplexF64}(undef, m, (m!=0)*(n+1)), (Eikx, Eiky, Eikz), tmpsums, Ref(-1))
+    IncrementalEwaldContext(ctx, ElasticMatrix{ComplexF64}(undef, m, (m!=0)*(n+1)), (Eikx, Eiky, Eikz), tmpsums, Ref(-!iszero(ctx.eframework.α)))
 end
 
 """

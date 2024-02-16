@@ -291,7 +291,7 @@ struct CrystalEnergySetup{TFramework,TMolecule}
 end
 
 """
-    energy_point(setup::CrystalEnergySetup, positions, mc=nothing)
+    energy_point(setup::CrystalEnergySetup, positions, ctx=nothing; mc=nothing)
 
 Compute the energy of a guest molecule whose atoms are at the given `positions` in the
 framework. `positions` is a list of triplet of coordinates (with their unit).
@@ -304,8 +304,13 @@ If one of the atom is on a blocking sphere, return `(1e100u"K", 0.0u"K")`
 !!! warning
     No validation is used to ensure that the input `positions` are consistent with the
     shape of the molecule.
+
+!!! note
+    If `mc` is not nothing, the energy will be computed using the [`MonteCarloSetup`](@ref)
+    code stack.
 """
 function energy_point(setup::CrystalEnergySetup, positions, ctx=nothing; mc=nothing)
+    mc isa MonteCarloSetup && return (energy_point_mc!(mc, positions), 0.0u"K")
     for pos in positions
         setup.block[pos] && return (1e100u"K", 0.0u"K")
     end
@@ -354,13 +359,16 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
         elseif setup.charges != ustrip.(u"e_au", mc.step.charges[mc.step.ffidx[1]])
             error("Input setup and mc mismatch in molecule")
         end
+        mc = MonteCarloSetup(mc; parallel=false) # use a copy
+        add_one_system!(mc, 1) # the newly added molecule will be the probe
+        @assert mc.ewald.last[] == -1
     end
 
     pre_printwarn = PRINT_CHARGE_WARNING[]
     # do one empty computation to trigger the warnings if need be
     __pos = position(setup.molecule) / u"Å"
     if pre_printwarn
-        energy_point(setup, [SVector{3}(p)*u"Å" for p in __pos]; mc)
+        energy_point(setup, [SVector{3}(p)*u"Å" for p in __pos])
         PRINT_CHARGE_WARNING[] = false
     end
 
@@ -384,7 +392,11 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
         iA, iB, iC = Tuple(iABC)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         bufferpos = Vector{SVector{3,TÅ}}(undef, length(__pos))
-        if length(rotpos) > 1
+        if mc isa MonteCarloSetup
+            tmc::typeof(mc) = get!(task_local_storage(), :CEG_mc_energy_grid) do
+                MonteCarloSetup(mc)
+            end
+        elseif length(rotpos) > 1
             ctx = EwaldContext(setup.ewald, ((setup.molecule,),))
         end
         for (k, pos) in enumerate(rotpos)
@@ -395,9 +407,9 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
             end
             bufferpos .= SVector{3,TÅ}.((ofs,) .+ pos.*u"Å")
             newval = ustrip(u"K", sum(if @isdefined ctx
-                energy_point(setup, bufferpos, ctx; mc)
+                energy_point(setup, bufferpos, ctx)
             else
-                energy_point(setup, bufferpos; mc)
+                energy_point(setup, bufferpos; mc=tmc)
             end))
             allvals[k,iA,iB,iC] = newval
         end

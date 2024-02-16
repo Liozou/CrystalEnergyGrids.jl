@@ -364,7 +364,8 @@ struct FrameworkEnergyReport
     direct::TK
 end
 FrameworkEnergyReport() = FrameworkEnergyReport(0.0u"K", 0.0u"K")
-Base.Float64(f::FrameworkEnergyReport) = Float64((f.vdw + f.direct)/u"K")
+Base.Number(f::FrameworkEnergyReport) = f.vdw + f.direct
+Base.Float64(f::FrameworkEnergyReport) = ustrip(u"K", Number(f))::Float64
 function Base.isapprox(f1::FrameworkEnergyReport, f2::FrameworkEnergyReport; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
     isapprox(ustrip(u"K", f1.vdw), ustrip(u"K", f2.vdw); atol, rtol) &&
     isapprox(ustrip(u"K", f1.direct), ustrip(u"K", f2.direct); atol, rtol)
@@ -380,7 +381,8 @@ struct MCEnergyReport
 end
 MCEnergyReport(v::TK, d::TK, i::TK, r::TK) = MCEnergyReport(FrameworkEnergyReport(v, d), i, r)
 MCEnergyReport(v::T, d::T, i::T, r::T) where {T<:Real} = MCEnergyReport(v*u"K", d*u"K", i*u"K", r*u"K")
-Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
+Base.Number(e::MCEnergyReport) = Number(e.framework) + e.inter + e.reciprocal
+Base.Float64(e::MCEnergyReport) = ustrip(u"K", Number(e))::Float64
 Base.show(io::IO, e::MCEnergyReport) = show(io, Float64(e)*u"K")
 function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
     println(io, Float64(e), " = [", e.framework.vdw, " (f VdW) + ", e.framework.direct, " (f direct)] + [", e.inter, " (internal) + ", e.reciprocal, " (reciprocal)]")
@@ -401,7 +403,8 @@ end
 BaselineEnergyReport(f::FrameworkEnergyReport, i::TK, r::TK, t::TK) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
 BaselineEnergyReport(v::TK, d::TK, i::TK, r::TK, t::TK) = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t)
 BaselineEnergyReport(v::T, d::T, i::T, r::T, t::T) where {T<:Real} = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t*u"K")
-Base.Float64(ber::BaselineEnergyReport) = Float64(ber.er) + Float64(ber.tailcorrection/u"K")
+Base.Number(ber::BaselineEnergyReport) = Number(ber.er) + ber.tailcorrection
+Base.Float64(ber::BaselineEnergyReport) = ustrip(u"K", Number(ber))::Float64
 Base.show(io::IO, ber::BaselineEnergyReport) = show(io, Float64(ber)*u"K")
 function Base.show(io::IO, ::MIME"text/plain", b::BaselineEnergyReport)
     println(io, Float64(b), " = [", b.er.framework.vdw, " (f VdW) + ", b.er.framework.direct, " (f direct)] + [", b.er.inter, " (internal) + ", b.er.reciprocal, " (reciprocal)] + ", b.tailcorrection, " (tailcorrection)")
@@ -533,6 +536,62 @@ function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::
     end
     return false
 end
+
+
+"""
+    energy_point_mc!(mc::MonteCarloSetup, positions, current)
+
+Compute the energy associated with the last molecule of kind 1 in `mc` at the given
+`positions`. `current` is the energy of `mc` in its current state.
+
+If `current` is above `1e50u"K"`, the energy will be computed with [`baseline_energy`](@ref).
+
+!!! warning
+    This function modifies `mc`. In particular, it is assumed that `mc` is task-local, i.e.
+    `mc` must not be modified concurrently.
+"""
+function energy_point_mc!(mc::MonteCarloSetup, positions)
+    if inblockpocket(mc.speciesblocks[1], mc.atomblocks, first(mc.step.ffidx), positions)
+        return 1e100u"K"
+    end
+    current::TK = get!(task_local_storage(), :CEG_mc_energy_grid_current) do
+        Inf*u"K"
+    end
+    if mc.ewald.last[] == -1 || current == Inf*u"K"
+        @label compute_baseline
+        mc.step.positions[last(mc.step.posidx[1])] = positions
+        ret = Number(baseline_energy(mc))
+        ret < current && task_local_storage(:CEG_mc_energy_grid_current, ret)
+        delete!(task_local_storage(), :CEG_mc_energy_grid_before)
+        return ret
+    end
+    j = length(mc.flatidx[1])
+    ij = mc.flatidx[1][j]
+    before::TK = get!(task_local_storage(), :CEG_mc_energy_grid_before) do
+        molpos = mc.step.posidx[1][j]
+        oldpos = @view mc.step.positions[molpos]
+        fer_before = framework_interactions(mc, 1, oldpos)
+        singlevdw_before = single_contribution_vdw(mc.step, (1,j), oldpos)
+        singlereciprocal_before = single_contribution_ewald(mc.ewald, ij, nothing)
+        fer_before + singlevdw_before + singlereciprocal_before
+    end
+    fer = framework_interactions(mc, 1, positions)
+    singlereciprocal = single_contribution_ewald(mc.ewald, ij, positions)
+    singlevdw = single_contribution_vdw(mc.step, (1,j), positions)
+    after = fer + singlevdw + singlereciprocal
+    result = current + after - before
+    if result < current && (abs(result) < max(abs(current), abs(before))/10)
+        @goto compute_baseline
+    elseif result < (current < 0 ? 2*current : current/2)
+        molpos = mc.step.posidx[1][j]
+        oldpos = @view mc.step.positions[molpos]
+        update_mc!(mc, (1,j), positions)
+        task_local_storage(:CEG_mc_energy_grid_before, after)
+    end
+    task_local_storage(:CEG_mc_energy_grid_current, result)
+    return result
+end
+
 
 choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.revflatidx)
 function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T, rng)
