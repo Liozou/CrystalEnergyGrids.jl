@@ -1,17 +1,16 @@
-export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy, run_montecarlo!
+export MonteCarloSetup, setup_montecarlo, baseline_energy, movement_energy
 
 struct MonteCarloSetup{T,Trng}
     step::SimulationStep{T}
     # step contains all the information that is not related to the framework nor to Ewald.
     # It contains all the information necessary to compute the species-species VdW energy.
     ewald::IncrementalEwaldContext
-    ewidx::Vector{Vector{Int}}
-    # ewidx[i][j] is the index ij used to refer to the j-th species of kind i in ewald.
+    flatidx::Vector{Vector{Int}}
+    # flatidx[i][j] is the index ij used to refer to the j-th species of kind i in ewald.
+    revflatidx::Vector{Tuple{Int,Int}} # revflatidx[ij] == (i,j) iff flatidx[i][j] == ij
     tailcorrection::TailCorrection
     coulomb::EnergyGrid
     grids::Vector{EnergyGrid} # grids[ix] is the VdW grid for atom ix in ff.
-    indices::Set{Tuple{Int,Int}}
-    # indices is the set of all (i,j) with 1 ≤ j ≤ number of species of kind i.
     speciesblocks::Vector{BlockFile}
     # speciesblocks[i][pos] is set if pos is blocked for any atom of a species of kind i.
     atomblocks::Vector{BlockFile}
@@ -24,9 +23,9 @@ struct MonteCarloSetup{T,Trng}
 end
 
 function Base.show(io::IO, mc::MonteCarloSetup)
-    n = length(mc.indices)
+    n = length(mc.revflatidx)
     m = length(mc.mcmoves)
-    print(io, "Monte-Carlo setup with ", n , " atoms in ", m, " molecule kind")
+    print(io, "Monte-Carlo setup with ", n , " molecules among ", m, " molecule kind")
     m > 1 && print(io, 's')
 end
 
@@ -127,12 +126,12 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     tailcorrection = TailCorrection(ff, ffidx, num_framework_atoms, λ, length.(poss))
 
     n = length(poss)
-    ewidx = Vector{Vector{Int}}(undef, length(poss))
-    indices_list = Tuple{Int,Int}[]
+    flatidx = Vector{Vector{Int}}(undef, length(poss))
+    revflatidx = Tuple{Int,Int}[]
     for i in 1:n
         len = length(poss[i])
-        ewidx[i] = collect((length(indices_list)+1):(length(indices_list)+len))
-        append!(indices_list, (i,j) for j in 1:len)
+        flatidx[i] = collect((length(revflatidx)+1):(length(revflatidx)+len))
+        append!(revflatidx, (i,j) for j in 1:len)
     end
 
     buffer = MVector{3,TÅ}(undef)
@@ -188,7 +187,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
 
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
-                    ewald, ewidx, tailcorrection, coulomb, grids, Set(indices_list),
+                    ewald, flatidx, revflatidx, tailcorrection, coulomb, grids,
                     speciesblocks, atomblocks, beads, models, newmcmoves, rng), indices
 end
 
@@ -311,7 +310,7 @@ simulations in parallel, and the state of one will not influence that of the oth
 `parallel` specifies whether the computations on the resulting `MonteCarloSetup` should be
 parallelized or not.
 
-!!! warn
+!!! warning
     Internal states that are semantically immutable are shared, although some of them are
     technically mutable, like the value of the atom charges for instance. Modifying such a
     state on the original or the copy can thus also modify that of the other: use
@@ -328,8 +327,8 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
     rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
-                    ewald, map(copy, mc.ewidx), copy(mc.tailcorrection), mc.coulomb, mc.grids,
-                    copy(mc.indices), mc.speciesblocks, mc.atomblocks, mc.bead, mc.models,
+                    ewald, map(copy, mc.flatidx), copy(mc.revflatidx), copy(mc.tailcorrection),
+                    mc.coulomb, mc.grids, mc.speciesblocks, mc.atomblocks, mc.bead, mc.models,
                     mcmoves, rng)
 end
 
@@ -366,29 +365,53 @@ struct FrameworkEnergyReport
 end
 FrameworkEnergyReport() = FrameworkEnergyReport(0.0u"K", 0.0u"K")
 Base.Float64(f::FrameworkEnergyReport) = Float64((f.vdw + f.direct)/u"K")
+function Base.isapprox(f1::FrameworkEnergyReport, f2::FrameworkEnergyReport; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
+    isapprox(ustrip(u"K", f1.vdw), ustrip(u"K", f2.vdw); atol, rtol) &&
+    isapprox(ustrip(u"K", f1.direct), ustrip(u"K", f2.direct); atol, rtol)
+end
+function Base.isapprox(f::FrameworkEnergyReport, x::Number; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
+    isapprox(Float64(f), x; atol, rtol)
+end
 
 struct MCEnergyReport
     framework::FrameworkEnergyReport
     inter::TK
     reciprocal::TK
 end
-MCEnergyReport(v, d, i, r) = MCEnergyReport(FrameworkEnergyReport(v, d), i, r)
+MCEnergyReport(v::TK, d::TK, i::TK, r::TK) = MCEnergyReport(FrameworkEnergyReport(v, d), i, r)
+MCEnergyReport(v::T, d::T, i::T, r::T) where {T<:Real} = MCEnergyReport(v*u"K", d*u"K", i*u"K", r*u"K")
 Base.Float64(e::MCEnergyReport) = Float64(e.framework) + Float64((e.inter + e.reciprocal)/u"K")
 Base.show(io::IO, e::MCEnergyReport) = show(io, Float64(e)*u"K")
 function Base.show(io::IO, ::MIME"text/plain", e::MCEnergyReport)
     println(io, Float64(e), " = [", e.framework.vdw, " (f VdW) + ", e.framework.direct, " (f direct)] + [", e.inter, " (internal) + ", e.reciprocal, " (reciprocal)]")
+end
+function Base.isapprox(e1::MCEnergyReport, e2::MCEnergyReport; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
+    isapprox(e1.framework, e2.framework; atol, rtol) &&
+    isapprox(ustrip(u"K", e1.inter), ustrip(u"K", e2.inter); atol, rtol) &&
+    isapprox(ustrip(u"K", e1.reciprocal), ustrip(u"K", e2.reciprocal); atol, rtol)
+end
+function Base.isapprox(e::MCEnergyReport, x::Number; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
+    isapprox(Float64(e), x; atol, rtol)
 end
 
 struct BaselineEnergyReport
     er::MCEnergyReport
     tailcorrection::TK
 end
-BaselineEnergyReport(f, i, r, t) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
-BaselineEnergyReport(v, d, i, r, t) = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t)
+BaselineEnergyReport(f::FrameworkEnergyReport, i::TK, r::TK, t::TK) = BaselineEnergyReport(MCEnergyReport(f, i, r), t)
+BaselineEnergyReport(v::TK, d::TK, i::TK, r::TK, t::TK) = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t)
+BaselineEnergyReport(v::T, d::T, i::T, r::T, t::T) where {T<:Real} = BaselineEnergyReport(MCEnergyReport(v, d, i, r), t*u"K")
 Base.Float64(ber::BaselineEnergyReport) = Float64(ber.er) + Float64(ber.tailcorrection/u"K")
 Base.show(io::IO, ber::BaselineEnergyReport) = show(io, Float64(ber)*u"K")
 function Base.show(io::IO, ::MIME"text/plain", b::BaselineEnergyReport)
     println(io, Float64(b), " = [", b.er.framework.vdw, " (f VdW) + ", b.er.framework.direct, " (f direct)] + [", b.er.inter, " (internal) + ", b.er.reciprocal, " (reciprocal)] + ", b.tailcorrection, " (tailcorrection)")
+end
+function Base.isapprox(b1::BaselineEnergyReport, b2::BaselineEnergyReport; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
+    isapprox(b1.er, b2.er; atol, rtol) &&
+    isapprox(ustrip(u"K", b1.tailcorrection), ustrip(u"K", b2.tailcorrection); atol, rtol)
+end
+function Base.isapprox(b::BaselineEnergyReport, x::Number; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
+    isapprox(Float64(b), x; atol, rtol)
 end
 
 for op in (:+, :-)
@@ -473,7 +496,7 @@ The energy difference between the new position for the molecule and the current 
 """
 function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     i, j = idx
-    ij = mc.ewidx[i][j]
+    ij = mc.flatidx[i][j]
     poss = if positions isa Nothing
         molpos = mc.step.posidx[i][j]
         @view mc.step.positions[molpos]
@@ -511,7 +534,7 @@ function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::
     return false
 end
 
-choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.indices)
+choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.revflatidx)
 function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T, rng)
     b = Float64(before)
     a = Float64(after)
@@ -542,11 +565,11 @@ end
 
 Put the species at the given index to a random position and orientation.
 
-!!! warn
+!!! warning
     Using `update_ewald=false` will result in an inconsistent state for `mc` which will
     error on [`run_montecarlo`](@ref) unless [`baseline_energy(mc)`](@ref) is called.
 
-!!! warn
+!!! warning
     `update_ewald=true` requires a prior call to [`baseline_energy(mc)`](@ref).
 """
 function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
@@ -561,3 +584,68 @@ function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
     newpos
 end
 =#
+
+"""
+    remove_one_system!(mc::MonteCarloSetup, i::Int, j::Int)
+
+Remove the `j`-th molecule of kind i.
+
+Return an index `j′` such that the molecule which used to be the `j′`-th molecule of kind
+`i` is now the `j`-th molecule of kind `i`. `j′ == j` if there is no modification.
+"""
+function remove_one_system!(mc::MonteCarloSetup, i::Int, j::Int)
+    # 0. Sanity check
+    hasewald = !isempty(mc.ewald.ctx.charges)
+    hasewald && abs(sum(mc.ewald.ctx.charges[i])) ≥ 1e-8u"e_au" && error("Cannot remove a charged species.")
+
+    # 1. Update step
+    # see comment on the method in remove_one_system! in ewald.jl
+    oldn = length(mc.step.atoms)
+    prev_atoms = sort!(mc.step.posidx[i][j])
+    n = length(prev_atoms) # number of atoms of the molecule to delete
+    lastidx = length(prev_atoms)
+    firstidx = 1
+    for k in 1:n
+        l = oldn + 1 - k
+        if l == prev_atoms[lastidx]
+            lastidx -= 1
+        else
+            first_l = prev_atoms[firstidx]
+            mc.step.positions[first_l] = mc.step.positions[l]
+            new_i, new_j, new_k = mc.step.atoms[first_l] = mc.step.atoms[l]
+            mc.step.posidx[new_i][new_j][new_k] = first_l
+            firstidx += 1
+        end
+    end
+    resize!(mc.step.positions, length(mc.step.positions) - n)
+    resize!(mc.step.atoms, length(mc.step.atoms) - n)
+
+    # 2. Ewald
+    if hasewald
+        ewij = mc.flatidx[i][j]
+        oldewij = remove_one_system!(mc.ewald, ewij)
+        oldewi, oldewj = mc.revflatidx[oldewij]
+        mc.flatidx[oldewi][oldewj] = ewij
+        mc.revflatidx[ewij] = (oldewi, oldewj)
+    end
+
+    # 3. Swap the j-th and lastj-th molecules and shrink the vectors
+    lastj = length(mc.step.posidx[i])
+    @assert lastj == length(mc.flatidx[i])
+    if j != lastj
+        lastij = mc.flatidx[i][j] = mc.flatidx[i][lastj]
+        mc.revflatidx[lastij] = (i,j)
+        mc.step.posidx[i][j] = mc.step.posidx[i][lastj]
+        for (k, l) in enumerate(mc.step.posidx[i][j])
+            mc.step.atoms[l] = (i, j, k)
+        end
+    end
+    pop!(mc.flatidx[i])
+    pop!(mc.revflatidx)
+    pop!(mc.step.posidx[i])
+
+    # 4. Tail correction
+    modify_species!(mc.tailcorrection, i, -1)
+
+    lastj
+end

@@ -410,6 +410,8 @@ The value returned by `remove_one_system!` is always the highest index referring
 system in `ctx`.
 """
 function remove_one_system!(ctx::EwaldContext, ij::Int)
+    isempty(ctx.charges) && return 0
+
     i = ctx.speciesof[ij]
     ctx.static_contribution[] += ctx.energies[i]
     ctx.numspecies[i] -= 1
@@ -428,7 +430,7 @@ function remove_one_system!(ctx::EwaldContext, ij::Int)
 
     #=
     Put removed atoms at the end. To do so, exchange atom l with atom first_l, where l goes
-    decreasing in the indices of ctx.atoms, and first_l goes increasing through
+    decreasing in the indices of ctx.atoms, and first_l goes increasing through prev_atoms.
     If l == last_l, skip since it means that the removed atom of index last_l is among the
     last indices of atoms.
     =#
@@ -456,7 +458,7 @@ function remove_one_system!(ctx::EwaldContext, ij::Int)
     resize!(ctx.atoms, oldn - n)
     sx = size(Eikx, 1); sy = size(Eiky, 1); sz = size(Eikz, 1)
     resize!(Eikx, sx, oldn - n); resize!(Eiky, sy, oldn - n); resize!(Eikz, sz, oldn - n)
-    oldij
+    return oldij
 end
 
 """
@@ -723,4 +725,20 @@ function update_ewald_context!(ewald::IncrementalEwaldContext)
     Eikz[:,chargepos] .= newEikz
     ewald.last[] = 0
     nothing
+end
+
+function remove_one_system!(ewald::IncrementalEwaldContext, ij)
+    isempty(ewald.ctx.charges) && return 0
+    oldij = remove_one_system!(ewald.ctx, ij)
+    initialized = ewald.last[] != -1
+    a, b = size(ewald.sums)
+    if initialized
+        ijp1 = ij + 1
+        ewald.sums[:,1] .-= ewald.sums[:,ijp1]
+        if ijp1 != b
+            ewald.sums[:,ijp1] .= ewald.sums[:,b]
+        end
+    end
+    resize!(ewald.sums, a, b-1)
+    return oldij
 end

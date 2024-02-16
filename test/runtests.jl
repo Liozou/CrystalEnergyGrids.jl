@@ -292,6 +292,51 @@ end
     @test tc2[] ≈ mc.tailcorrection[]
 end
 
+@testset "Deletion" begin
+    ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
+    co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
+    molCO2_1 = CEG.ChangePositionSystem(co2, SVector{3}.([[11.93940309885289, 8.48657378465003, 2.135736631609201]u"Å",
+                                                         [11.10485516124311, 7.710040763525694, 1.991767166323031]u"Å",
+                                                         [10.27030722363334, 6.933507742401357, 1.84779770103686]u"Å"]));
+    molCO2_2 = CEG.ChangePositionSystem(co2, SVector{3}.([[5.491645446274333, 8.057854365959964, 8.669190836544463]u"Å",
+                                                         [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
+                                                         [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
+    molCO2_3 = CEG.ChangePositionSystem(co2, SVector{3}.([[13.42743359428526, 5.88514252774792, 0.2365217062365641]u"Å",
+                                                         [12.63490386933698, 6.57742338343067, 0.6978728219052126]u"Å",
+                                                         [11.84237414438881, 7.26970423911337, 1.1592239375736035]u"Å"]));
+    pos2 = position(molCO2_2)
+    posX = SVector{3}.([[5.638658023382916, 2.57030037242215, 3.8069109835626733]u"Å",
+                        [6.02578632069842, 3.535416772575985, 4.295667585126047]u"Å",
+                        [6.41291461801397, 4.500533172729845, 4.784424186689428]u"Å"])
+
+    mcRef, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [molCO2_1, molCO2_3, ar]);
+    baseRef = baseline_energy(mcRef)
+    moveRef = movement_energy(mcRef, (1,2), pos2)
+    CEG.update_mc!(mcRef, (1, 2), pos2)
+    othermoveRef = movement_energy(mcRef, (1,1), posX)
+
+    for (mols, i, j) in (([ar, molCO2_1, molCO2_2, molCO2_3], 2, 2),
+                         ([ar, molCO2_2, molCO2_1, molCO2_3], 2, 1),
+                         ([molCO2_1, molCO2_2, molCO2_3, ar], 1, 2),
+                         ([molCO2_2, molCO2_1, molCO2_3, ar], 1, 1))
+        @info "Testing $i $j"
+
+        mcA, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", mols);
+        mcB = deepcopy(mcA)
+        CEG.remove_one_system!(mcA, i, j)
+        @test baseline_energy(mcA) ≈ baseRef
+        @test movement_energy(mcA, (i, j), pos2) ≈ moveRef
+        CEG.update_mc!(mcA, (i, j), pos2)
+        @test movement_energy(mcA, (i, 3-j), posX) ≈ othermoveRef
+
+        baseline_energy(mcB)
+        CEG.remove_one_system!(mcB, i, j)
+        @test movement_energy(mcB, (i, j), pos2) ≈ moveRef
+        CEG.update_mc!(mcB, (i, j), pos2)
+        @test movement_energy(mcB, (i, 3-j), posX) ≈ othermoveRef
+    end
+end
+
 @testset "Random walk" begin
     na = CEG.load_molecule_RASPA("Na", "TraPPE", "BoulfelfelSholl2021");
     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
@@ -309,19 +354,79 @@ end
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])
 
+    #= Update protocol:
+    In the tests below, if the results fails because the simulation protocol was updated,
+    the values must be updated as well. To do so, run the Monte-Carlo simulation, then
+    export a restart file and launch RASPA from the restart file to extract the comparison
+    values.
+    For instance, to regenerate mc2, run in julia:
+
+    ```julia
+    framework2 = "CHA_1.4_3b4eeb96"
     mc2, _ = setup_montecarlo("CHA_1.4_3b4eeb96", "BoulfelfelSholl2021", [(na, 135),]; rng=StableRNG(2));
     reports2 = run_montecarlo!(mc2, SimulationSetup(300.0u"K", 1000; outdir="", printevery=1000))
+    mkpath("/tmp/mc2/RestartInitial/System_0/")
+    CEG.output_restart("/tmp/mc2/RestartInitial/System_0/restart_$(framework2)_1.1.1_300.000000_2e+08", mc2)
+    ```
+
+    then, from the "/tmp/mc2" directory, create a "simulation.input" file containing the
+    following (after putting the appropriate molecule name and framework)
+
+    ```
+    SimulationType                MonteCarlo
+    NumberOfCycles                0
+    NumberOfInitializationCycles  0
+    PrintEvery                    1
+    RestartFile                   yes
+
+    Forcefield                    BoulfelfelSholl2021
+
+    Component 0 MoleculeName                     Na
+                MoleculeDefinition               TraPPE
+                ExtraFrameworkMolecule           no
+
+    Framework 0
+    ChargeMethod Ewald
+    EwaldPrecision 1e-06
+    FrameworkName CHA_1.4_3b4eeb96
+    CutOffVDW 12.0
+    UnitCells 1 1 1
+    ExternalPressure 2.0e8
+    RemoveAtomNumberCodeFromLabel yes
+    Movies yes
+    WriteMoviesEvery 1
+    ExternalTemperature 300
+    ```
+
+    then run it with:
+
+    ```bash
+    $RASPA_DIR/bin/simulate -i simulation.input
+    ```
+
+    and finally fetch the result with:
+
+    ```bash
+    grep -m1 -A70 "Host/Adsorbate energy:" Output/System_0/*.data
+    ```
+    =#
+
+    framework2 = "CHA_1.4_3b4eeb96"
+    mc2, _ = setup_montecarlo(framework2, "BoulfelfelSholl2021", [(na, 135),]; rng=StableRNG(2));
+    reports2 = run_montecarlo!(mc2, SimulationSetup(300.0u"K", 1000; outdir="", printevery=1000))
     @test length(reports2) == 2
-    @test Float64(reports2[end]) ≈ -133080713.003222897649 rtol=0.0001
+    @test reports2[end] ≈ CEG.BaselineEnergyReport(-718484.79640543, -6214557.02749673, 626259.86449476, -248250821.39479709+121425571.41820429, -8575.23090402) rtol=0.0001
 
     ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
-    mc3, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [(ar, 30)]; rng=StableRNG(3));
+    framework3 = "CHA_1.4_3b4eeb96_Na_11812"
+    mc3, _ = setup_montecarlo(framework3, "BoulfelfelSholl2021", [(ar, 30)]; rng=StableRNG(3));
     reports3 = run_montecarlo!(mc3, CEG.SimulationSetup(300.0u"K", 1000; outdir="", printevery=0))
-    @test Float64(reports3[end]) ≈ -47908.526083237113 rtol=0.0001
+    @test reports3[end] ≈ CEG.BaselineEnergyReport(-42195.81574644, 0.0, -563.48165902, 0.0, -8575.23090402) rtol=0.0001
 
-    mc4, _ = setup_montecarlo("FAU_1.4_03f7b3ba", "BoulfelfelSholl2021", [(na, -1)]; rng=StableRNG(4));
+    framework4 = "FAU_1.4_03f7b3ba"
+    mc4, _ = setup_montecarlo(framework4, "BoulfelfelSholl2021", [(na, -1)]; rng=StableRNG(4));
     reports4 = run_montecarlo!(mc4, SimulationSetup(300.0u"K", 1000, outdir="", printevery=0))
-    @test Float64(reports4[end]) ≈ -56187229.966015212238 rtol=0.0001
+    @test reports4[end] ≈ CEG.BaselineEnergyReport(-422811.87279224, -3825797.13918730, 390589.13414715, -101231726.22144973+49027959.61839646, -4782.44322153) rtol=0.0003
 end
 
 @testset "Restart" begin

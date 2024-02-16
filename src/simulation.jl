@@ -1,4 +1,4 @@
-export SimulationSetup
+export SimulationSetup, run_montecarlo!
 
 """
     SimulationSetup{Trecord}
@@ -370,7 +370,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
         temperature = simu.temperatures[counter_cycle]
 
-        numsteps = max(20, length(mc.indices))
+        numsteps = max(20, length(mc.revflatidx))
         for idx_step in 1:numsteps
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
@@ -395,7 +395,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             accepted && parallel && wait(running_update)
 
             i, j = idx
-            ij = mc.ewidx[i][j]
+            ij = mc.flatidx[i][j]
 
             if old_idx == idx
                 if accepted
