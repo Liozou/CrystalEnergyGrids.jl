@@ -370,7 +370,7 @@ move_one_system!(ctx::EwaldContext, ij::Int, positions) = move_one_system!(ctx.E
 """
     add_one_system!(ctx::EwaldContext, i::Int, positions)
 
-Add to the [`EwaldContext`](]ref) one system defined by its kind `i` and its atom
+Add to the [`EwaldContext`](@ref) one system defined by its kind `i` and its atom
 `positions`.
 
 Return the index `ij` of the newly introduced molecule.
@@ -621,6 +621,27 @@ function compute_ewald(ewald::IncrementalEwaldContext)
 end
 
 
+function update_sums!(sums, ewald::IncrementalEwaldContext, ij::Int, (Eikx, Eiky, Eikz), signal)
+    sums .= zero(ComplexF64)
+    charges = ewald.ctx.charges[ewald.ctx.speciesof[ij]]
+    kindices = ewald.ctx.eframework.kspace.kindices
+    _, ky, kz = ewald.ctx.eframework.kspace.ks
+    for (chargecounter, c) in enumerate(charges)
+        for (jy, jz, jxrange, rangeidx) in kindices
+            Eik_xy = ustrip(u"e_au", c)*Eiky[jy+ky+1,chargecounter]*Eikz[jz+kz+1,chargecounter]
+            n = length(jxrange)
+            ofs = first(jxrange)
+            @simd for I in 1:n
+                sums[rangeidx+I] += Eikx[ofs+I,chargecounter]*Eik_xy
+            end
+        end
+    end
+    if signal
+        ewald.last[] = ij # signal for update_ewald_context!
+    end
+    nothing
+end
+
 """
     single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions; tmpEiks::NTuple{3,<:AbstractMatrix{ComplexF64}}=ewald.tmpEiks, tmpsums::AbstractVector{ComplexF64}=ewald.tmpsums)
 
@@ -671,22 +692,7 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
         resize!(Eikx, kxp, m); resize!(Eiky, tkyp, m); resize!(Eikz, tkzp, m)
         move_one_system!(tmpEiks, ewald.ctx, nothing, positions) # this only modifies tmpEiks, not ewald
         contribution = tmpsums
-        contribution .= zero(ComplexF64)
-        charges = ewald.ctx.charges[ewald.ctx.speciesof[ij]]
-        kindices = ewald.ctx.eframework.kspace.kindices
-        for (chargecounter, c) in enumerate(charges)
-            for (jy, jz, jxrange, rangeidx) in kindices
-                Eik_xy = ustrip(u"e_au", c)*Eiky[jy+ky+1,chargecounter]*Eikz[jz+kz+1,chargecounter]
-                n = length(jxrange)
-                ofs = first(jxrange)
-                @simd for I in 1:n
-                    contribution[rangeidx+I] += Eikx[ofs+I,chargecounter]*Eik_xy
-                end
-            end
-        end
-        if tmpEiks===ewald.tmpEiks && tmpsums===ewald.tmpsums
-            ewald.last[] = ij # signal for update_ewald_context!
-        end
+        update_sums!(contribution, ewald, ij, tmpEiks, (tmpEiks===ewald.tmpEiks) & (tmpsums===ewald.tmpsums))
     end
 
     rest_single = 0.0
@@ -727,7 +733,27 @@ function update_ewald_context!(ewald::IncrementalEwaldContext)
     nothing
 end
 
-function remove_one_system!(ewald::IncrementalEwaldContext, ij)
+function add_one_system!(ewald::IncrementalEwaldContext, i::Int, positions)
+    isempty(ewald.ctx.charges) && return 0
+    ij = add_one_system!(ewald.ctx, i, positions)
+    initialized = ewald.last[] != -1
+    a, b = size(ewald.sums)
+    resize!(ewald.sums, a, b+1)
+    if initialized
+        Eikx, Eiky, Eikz = ewald.tmpEiks
+        m = length(positions)
+        kx, ky, kz = ewald.ctx.eframework.kspace.ks
+        kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
+        resize!(Eikx, kxp, m); resize!(Eiky, tkyp, m); resize!(Eikz, tkzp, m)
+        newsums = @view(ewald.sums[:,b+1])
+        update_sums!(newsums, ewald, ij, (Eikx, Eiky, Eikz), false)
+        ewald.sums[:,1] .+= newsums
+        ewald.last[] = 0 # system is still initialized but tmpEiks were modified
+    end
+    return ij
+end
+
+function remove_one_system!(ewald::IncrementalEwaldContext, ij::Int)
     isempty(ewald.ctx.charges) && return 0
     oldij = remove_one_system!(ewald.ctx, ij)
     initialized = ewald.last[] != -1
@@ -738,6 +764,7 @@ function remove_one_system!(ewald::IncrementalEwaldContext, ij)
         if ijp1 != b
             ewald.sums[:,ijp1] .= ewald.sums[:,b]
         end
+        ewald.last[] = 0 # system is still initialized
     end
     resize!(ewald.sums, a, b-1)
     return oldij

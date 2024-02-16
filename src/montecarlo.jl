@@ -649,3 +649,48 @@ function remove_one_system!(mc::MonteCarloSetup, i::Int, j::Int)
 
     lastj
 end
+
+"""
+    add_one_system!(mc::MonteCarloSetup, i::Int, positions=nothing; uninitialize=isnothing(positions))
+
+Add a new molecule of kind `i`. Return its index `j`.
+
+If `positions` is unset, the atom positions will be that of the model molecule used to
+create `mc`. Otherwise, these specify the new atomic positions.
+
+If `uninitialize` is set, then the Ewald state is not updated and a call to
+`baseline_energy` will be required to obtain correct energies. Otherwise, the Ewald state
+is maintained up to date if it had already been initialized.
+"""
+function add_one_system!(mc::MonteCarloSetup, i::Int, positions=nothing; uninitialize=false)
+    # 0. Sanity check
+    hasewald = !isempty(mc.ewald.ctx.charges)
+    hasewald && abs(sum(mc.ewald.ctx.charges[i])) ≥ 1e-8u"e_au" && error("Cannot add a charged species.")
+
+    # 1. Update step
+    oldn = length(mc.step.atoms)
+    n = length(mc.step.ffidx[i]) # number of atoms of the molecule to add
+    @assert n == length(mc.models[i])
+    push!(mc.step.posidx[i], collect((oldn+1):(oldn+n)))
+    j = length(mc.step.posidx[i])
+    append!(mc.step.atoms, (i, j, k) for k in 1:n)
+    poss = positions isa Nothing ? mc.models[i] : positions
+    append!(mc.step.positions, poss)
+
+    # 2. Ewald
+    ij = length(mc.revflatidx)+1
+    if hasewald
+        if uninitialize
+            mc.ewald.last[] = -1 # reset the Ewald state
+        end
+        ewij = add_one_system!(mc.ewald, i, poss)
+        @assert ewij == ij
+    end
+    push!(mc.flatidx[i], ij)
+    push!(mc.revflatidx, (i,j))
+
+    # 3. Tail correction
+    modify_species!(mc.tailcorrection, i, 1)
+
+    j
+end

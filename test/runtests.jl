@@ -292,28 +292,29 @@ end
     @test tc2[] ≈ mc.tailcorrection[]
 end
 
-@testset "Deletion" begin
+@testset "Deletion and addition" begin
     ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
-    molCO2_1 = CEG.ChangePositionSystem(co2, SVector{3}.([[11.93940309885289, 8.48657378465003, 2.135736631609201]u"Å",
-                                                         [11.10485516124311, 7.710040763525694, 1.991767166323031]u"Å",
-                                                         [10.27030722363334, 6.933507742401357, 1.84779770103686]u"Å"]));
-    molCO2_2 = CEG.ChangePositionSystem(co2, SVector{3}.([[5.491645446274333, 8.057854365959964, 8.669190836544463]u"Å",
-                                                         [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
-                                                         [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
-    molCO2_3 = CEG.ChangePositionSystem(co2, SVector{3}.([[13.42743359428526, 5.88514252774792, 0.2365217062365641]u"Å",
-                                                         [12.63490386933698, 6.57742338343067, 0.6978728219052126]u"Å",
-                                                         [11.84237414438881, 7.26970423911337, 1.1592239375736035]u"Å"]));
+    molCO2_1 = CEG.ChangePositionSystem(co2, SVector{3}.([[4.221014336721, 2.235273775272, 5.118873160667]u"Å",
+                                                         [4.915895823098, 3.103469549355, 4.829776606287]u"Å",
+                                                         [5.610777309474, 3.971665323438, 4.540680051907]u"Å"]));
+    molCO2_2 = CEG.ChangePositionSystem(co2, SVector{3}.([[13.732840754800, 5.744459327798, 8.119705823930]u"Å",
+                                                         [13.418141549103, 6.398573841906, 7.229032139371]u"Å",
+                                                         [13.103442343406, 7.052688356015, 6.338358454812]u"Å"]));
+    molCO2_3 = CEG.ChangePositionSystem(co2, SVector{3}.([[21.473519181736, 19.719777629492, 13.809504713725]u"Å",
+                                                         [21.888511731126, 20.756701257738, 13.539742646090]u"Å",
+                                                         [22.303504280517, 21.793624885985, 13.269980578454]u"Å"]));
+    pos1 = position(molCO2_1)
     pos2 = position(molCO2_2)
-    posX = SVector{3}.([[5.638658023382916, 2.57030037242215, 3.8069109835626733]u"Å",
-                        [6.02578632069842, 3.535416772575985, 4.295667585126047]u"Å",
-                        [6.41291461801397, 4.500533172729845, 4.784424186689428]u"Å"])
+    posX = SVector{3}.([[5.488965064161, 14.335087694715, 16.087580364999]u"Å",
+                        [4.887655471102, 13.508430918264, 15.562922050243]u"Å",
+                        [4.286345878043, 12.681774141812, 15.038263735487]u"Å"])
 
     mcRef, _ = setup_montecarlo("CHA_1.4_3b4eeb96_Na_11812", "BoulfelfelSholl2021", [molCO2_1, molCO2_3, ar]);
     baseRef = baseline_energy(mcRef)
-    moveRef = movement_energy(mcRef, (1,2), pos2)
-    CEG.update_mc!(mcRef, (1, 2), pos2)
-    othermoveRef = movement_energy(mcRef, (1,1), posX)
+    moveRef = movement_energy(mcRef, (1,1), pos2)
+    CEG.update_mc!(mcRef, (1, 1), pos2)
+    othermoveRef = movement_energy(mcRef, (1,2), posX)
 
     for (mols, i, j) in (([ar, molCO2_1, molCO2_2, molCO2_3], 2, 2),
                          ([ar, molCO2_2, molCO2_1, molCO2_3], 2, 1),
@@ -325,15 +326,21 @@ end
         mcB = deepcopy(mcA)
         CEG.remove_one_system!(mcA, i, j)
         @test baseline_energy(mcA) ≈ baseRef
-        @test movement_energy(mcA, (i, j), pos2) ≈ moveRef
-        CEG.update_mc!(mcA, (i, j), pos2)
-        @test movement_energy(mcA, (i, 3-j), posX) ≈ othermoveRef
+        @test movement_energy(mcA, (i, 3-j), pos2) ≈ moveRef
+        CEG.update_mc!(mcA, (i, 3-j), pos2)
+        @test movement_energy(mcA, (i, j), posX) ≈ othermoveRef
+        @test CEG.add_one_system!(mcA, i, pos1) == 3
+        CEG.remove_one_system!(mcA, i, 3-j)
+        @test movement_energy(mcA, (i, 3-j), pos2) ≈ moveRef
 
         baseline_energy(mcB)
         CEG.remove_one_system!(mcB, i, j)
-        @test movement_energy(mcB, (i, j), pos2) ≈ moveRef
-        CEG.update_mc!(mcB, (i, j), pos2)
-        @test movement_energy(mcB, (i, 3-j), posX) ≈ othermoveRef
+        @test movement_energy(mcB, (i, 3-j), pos2) ≈ moveRef
+        CEG.update_mc!(mcB, (i, 3-j), pos2)
+        @test movement_energy(mcB, (i, j), posX) ≈ othermoveRef
+        @test CEG.add_one_system!(mcB, i, pos1) == 3
+        CEG.remove_one_system!(mcB, i, 3-j)
+        @test movement_energy(mcB, (i, 3-j), pos2) ≈ moveRef
     end
 end
 
