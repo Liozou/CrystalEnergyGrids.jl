@@ -184,7 +184,13 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         end
     end
 
-    ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems))
+    # Collect empty entries separately to create a proper EwaldSystem
+    emptysystems = findall(isempty, ewaldsystems)
+    for i_empty in emptysystems
+        push!(ewaldsystems[i_empty], EwaldSystem(models[i_empty], charges[ffidx[i_empty]]))
+    end
+
+    ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems, emptysystems))
 
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     ewald, flatidx, revflatidx, tailcorrection, coulomb, grids,
@@ -324,7 +330,7 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
         charge = [o.charges[k] for k in ffidxi]
         push!(ewaldsystems, [EwaldSystem(o.positions[molpos], charge) for molpos in posidxi])
     end
-    ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems))
+    ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems; charges=mc.ewald.ctx.charges))
     rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     ewald, map(copy, mc.flatidx), copy(mc.revflatidx), copy(mc.tailcorrection),

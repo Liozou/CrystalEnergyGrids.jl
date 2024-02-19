@@ -87,7 +87,7 @@ end
 
 
 """
-    setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
+    setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC), numspecies)
 
 Setup the computation of the e^(ik...) necessary for Ewald summation, for the given
 `systems`, with `numsites` total number of point charges (including those in the supercell)
@@ -106,10 +106,10 @@ Return `(Eikx, Eiky, Eikz)` where, for `m` in `1:numsites`
 
 with `fracpos_x[m], fracpos_y[m], fracpos_z[m] == invmat*position[m]`
 """
-function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
+function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC), numspecies)
     ΠBC = ΠB*ΠC
     ΠABC = ΠA*ΠBC
-    numsites = ΠABC * sum(Base.Fix1(sum, length), systems; init=0)::Int
+    numsites = ΠABC * sum(sum(length(kind[i_species]) for i_species in 1:num; init=0)::Int for (num, kind) in zip(numspecies, systems); init=0)::Int
 
     kxp = kx + 1
     tkyp = ky + ky + 1
@@ -120,7 +120,8 @@ function setup_Eik(systems, (kx, ky, kz), invmat, (ΠA, ΠB, ΠC))
     Eikz = ElasticMatrix{ComplexF64}(undef, tkzp, numsites)
 
     ofs = -1
-    @inbounds for kind in systems, syst in kind
+    @inbounds for (i_kind, kind) in enumerate(systems), i_syst in 1:numspecies[i_kind]
+        syst = kind[i_syst]
         for j in 1:length(syst)
             px, py, pz = invmat * position(syst, j)
             for πs in CartesianIndices((0:(ΠC-1), 0:(ΠB-1), 0:(ΠA-1)))
@@ -260,7 +261,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst
     charges::Vector{Te_au} = repeat(syst[:,:atomic_charge]; inner=Π)
 
     kspace = EwaldKspace((kx, ky, kz), num_kvecs, kindices)
-    Eiks = setup_Eik(((syst,),), kspace.ks, invmat*u"Å^-1", supercell)
+    Eiks = setup_Eik(((syst,),), kspace.ks, invmat*u"Å^-1", supercell, (1,))
     StoreRigidChargeFramework = Vector{ComplexF64}(undef, num_kvecs)
     atoms = [(1,k) for k in 1:length(charges)]
     pseudoctx = (; atoms, Eiks, charges=[charges], speciesof=[1])
@@ -468,10 +469,18 @@ Build an [`EwaldContext`](@ref) for a fixed framework and any number of rigid mo
 `systems`.
 `eframework` can be obtained from [`initialize_ewald`](@ref).
 """
-function EwaldContext(eframework::EwaldFramework, systems)
+function EwaldContext(eframework::EwaldFramework, systems, emptysystems=(); givencharges=nothing)
     iszero(eframework.α) && return EwaldContext(eframework, ntuple(Returns(ElasticMatrix{ComplexF64}(undef, 0, 0)), 3), Tuple{Int,Int}[], Int[], Vector{Int}[], Int[], Ref(0.0u"K"), Vector{Vector{Te_au}}[], TK[], 0.0u"K")
-    allcharges::Vector{Vector{Te_au}} = [first(kind)[:,:atomic_charge] for kind in systems]
+    allcharges::Vector{Vector{Te_au}} = if givencharges isa Nothing
+        [first(kind)[:,:atomic_charge] for kind in systems]
+    else
+        givencharges
+    end
     numspecies::Vector{Int} = [length(kind) for kind in systems]
+    for i_empty in emptysystems
+        @assert numspecies[i_empty] == 1
+        numspecies[i_empty] = 0
+    end
 
     chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α*u"K*Å/e_au^2"
     energies = [sum(abs2, charges; init=0.0u"e_au^2")*chargefactor for charges in allcharges]
@@ -491,14 +500,17 @@ function EwaldContext(eframework::EwaldFramework, systems)
     atoms = Tuple{Int,Int}[]
     indexof = Vector{Vector{Int}}(undef, length(speciesof))
     systcounter = 0
-    for (i, kind) in enumerate(systems), syst in kind
-        systcounter += 1
-        speciesof[systcounter] = i
-        n = length(syst)
-        indexof[systcounter] = collect((length(atoms)+1):(length(atoms)+n))
-        append!(atoms, (systcounter, k) for k in 1:n)
+    for (i, (num, kind)) in enumerate(zip(numspecies, systems))
+        num == 0 && continue
+        for syst in kind
+            systcounter += 1
+            speciesof[systcounter] = i
+            n = length(syst)
+            indexof[systcounter] = collect((length(atoms)+1):(length(atoms)+n))
+            append!(atoms, (systcounter, k) for k in 1:n)
+        end
     end
-    for (i, (kind, charges)) in enumerate(zip(systems, allcharges))
+    for (i, (num, kind, charges)) in enumerate(zip(numspecies, systems, allcharges))
         syst = first(kind)
         this_energy = 0.0u"e_au^2/Å"
         n = length(syst)
@@ -513,7 +525,7 @@ function EwaldContext(eframework::EwaldFramework, systems)
             end
         end
         energies[i] += this_energy*COULOMBIC_CONVERSION_FACTOR*u"K*Å/e_au^2"
-        energy_adsorbate_excluded += length(kind)*this_energy*COULOMBIC_CONVERSION_FACTOR*u"K*Å/e_au^2"
+        energy_adsorbate_excluded += num*this_energy*COULOMBIC_CONVERSION_FACTOR*u"K*Å/e_au^2"
     end
     @assert !any(iszero, speciesof)
 
@@ -525,7 +537,7 @@ function EwaldContext(eframework::EwaldFramework, systems)
     # @inbounds for i in 1:(m-1)
     #     offsets[i+1] = offsets[i] + length(systems[i])
     # end
-    Eiks = setup_Eik(systems, eframework.kspace.ks, eframework.invmat, (1,1,1))
+    Eiks = setup_Eik(systems, eframework.kspace.ks, eframework.invmat, (1,1,1), numspecies)
     return EwaldContext(eframework, Eiks, atoms, speciesof, indexof, numspecies, Ref(static_contribution), allcharges, energies, energy_net_charges)
 end
 

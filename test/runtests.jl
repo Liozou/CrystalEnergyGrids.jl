@@ -151,11 +151,18 @@ end
     movNa1_2 = CEG.movement_energy(mcNa1, (2,1), pos2)
     @test movNa1_1 == CEG.movement_energy(mcNa1, (2,1), pos1)
     @test Float64(CEG.baseline_energy(mcNa2)) ≈ Float64(baseNa1 - movNa1_1 + movNa1_2)
+
+    # Handling of empty systems
+    mcCO2_1, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [(co2, 0)]; blockfiles=[false]);
+    @test iszero(Float64(CEG.baseline_energy(mcCO2_1)))
+    mcCO2_2, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(co2, mcCO2_1.models[1])]; blockfiles=[false]);
+    CEG.add_one_system!(mcCO2_1, 1)
+    @test CEG.baseline_energy(mcCO2_1) ≈ CEG.baseline_energy(mcCO2_2)
 end
 
 @testset "Triclinic" begin
     # triclinic input
-    setupArCIT7 = setup_RASPA("CIT7", "BoulfelfelSholl2021", "Ar", "TraPPE"; blockfile=false);
+    setupArCIT7 = setup_RASPA("CIT-7", "BoulfelfelSholl2021", "Ar", "TraPPE"; blockfile=false);
     @test only(setupArCIT7.grids).num_unitcell == (2, 3, 3)
     vdw, coulomb = energy_point(setupArCIT7, [SVector{3}([-6.2437738548095165, 22.4072046579578092, 5.7557837121224642]u"Å")])
     @test iszero(coulomb)
@@ -184,7 +191,7 @@ end
     supermat = [axeA .* ΠA;; axeB .* ΠB;; axeC .* ΠC]
     ar = CEG.load_molecule_RASPA("Ar", "TraPPE", "BoulfelfelSholl2021");
     molAr = CEG.ChangePositionSystem(ar, [SVector{3}([5.86207, 16.23616, 17.52779]u"Å")]);
-    mcArCIT7, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molAr]; blockfiles=[false]);
+    mcArCIT7, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molAr]; blockfiles=[false]);
     mcVoidArCIT7, _ = setup_montecarlo(supermat, "BoulfelfelSholl2021", [molAr, superCIT7]);
     CEG.baseline_energy(mcArCIT7); movArCIT7 = CEG.movement_energy(mcArCIT7, (1,1))
     CEG.baseline_energy(mcVoidArCIT7); movVoidArCIT7 = CEG.movement_energy(mcVoidArCIT7, (1,1))
@@ -192,7 +199,7 @@ end
 
     molAr1 = CEG.ChangePositionSystem(ar, [SVector{3}([-7.7365250811304911,31.5070011601372251,1.5285305931479920]u"Å")]);
     molAr2 = CEG.ChangePositionSystem(ar, [SVector{3}([10.7586599791867421,-2.3259182727570948,20.5642722996513001]u"Å")]);
-    mcAr2, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molAr1, molAr2]; blockfiles=[false, false]);
+    mcAr2, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molAr1, molAr2]; blockfiles=[false, false]);
     baseAr2 = Float64(CEG.baseline_energy(mcAr2))
     movAr2_1 = Float64(CEG.movement_energy(mcAr2, (1,1)))
     CEG.baseline_energy(mcAr2); movAr2_2 = Float64(CEG.movement_energy(mcAr2, (1,2)))
@@ -221,13 +228,13 @@ end
     @test basePetit ≈ 262204.85720076 rtol=0.001
 
     molNaSolo = CEG.ChangePositionSystem(na, [SVector{3}([-4.728415488310421, 32.03533696753957, 2.943765448968882]u"Å")]);
-    mcNaSolo, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaSolo]);
+    mcNaSolo, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molNaSolo]);
     @test mcNaSolo.tailcorrection[] ≈ -70.44772635984882u"K" # account for supercell
     baseSolo = Float64(CEG.baseline_energy(mcNaSolo))
     @test baseSolo ≈ -21375.116833457894 rtol=0.001
     posSoloNext = [SVector{3}([-5.036,31.876,3.117]u"Å")]
     molNaSoloNext = CEG.ChangePositionSystem(na, posSoloNext);
-    mcNaSoloNext, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaSoloNext]);
+    mcNaSoloNext, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molNaSoloNext]);
     @test mcNaSolo.tailcorrection[] == mcNaSoloNext.tailcorrection[]
     baseSoloNext = Float64(CEG.baseline_energy(mcNaSoloNext))
     @test baseSoloNext ≈ -21795.8765195143 rtol=0.001
@@ -235,7 +242,7 @@ end
 
     molNaDuo1 = CEG.ChangePositionSystem(na, [SVector{3}([1.001641978413878, 8.638263743446769, 17.23737576131632]u"Å")]);
     molNaDuo2 = CEG.ChangePositionSystem(na, [SVector{3}([4.163424680441308, 16.12704796355876, 17.20994387427006]u"Å")]);
-    mcNaDuo, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaDuo1, molNaDuo2]);
+    mcNaDuo, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molNaDuo1, molNaDuo2]);
     @test Float64(CEG.baseline_energy(mcNaDuo)) ≈ -25957.746610866408 rtol=0.001
 
     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
@@ -246,17 +253,17 @@ end
     molCO2_2 = CEG.ChangePositionSystem(co2, SVector{3}.([[5.491645446274333, 8.057854365959964, 8.669190836544463]u"Å",
                                                          [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
-    mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
+    mcTrio, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
     baseTrio = Float64(CEG.baseline_energy(mcTrio))
     @test baseTrio ≈ -28329.113561030445 rtol=0.001
     newposNaTrio = [SVector{3}([0.9, 0.1, 1.5]u"Å")]
     diffNa = Float64(CEG.movement_energy(mcTrio, (1,1), newposNaTrio) - CEG.movement_energy(mcTrio, (1,1)))
     @test diffNa ≈ 5440.529635958557 rtol=0.001
-    mcTrio_diffNa, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, newposNaTrio), molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
+    mcTrio_diffNa, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, newposNaTrio), molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
     @test baseTrio + diffNa ≈ Float64(CEG.baseline_energy(mcTrio_diffNa))
     newposCO2_2 = SVector{3}.([[1.3, 2.9, 1.149]u"Å", [1.3, 2.9, 0.0]u"Å", [1.3, 2.9, -1.149]u"Å"])
     diffCO2 = Float64(CEG.movement_energy(mcTrio, (2,2), newposCO2_2) - CEG.movement_energy(mcTrio, (2,2)))
-    mcTrio_diffCO2, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, CEG.ChangePositionSystem(molCO2_1, newposCO2_2)]; blockfiles=[false, false, false]);
+    mcTrio_diffCO2, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, CEG.ChangePositionSystem(molCO2_1, newposCO2_2)]; blockfiles=[false, false, false]);
     @test baseTrio + diffCO2 ≈ Float64(CEG.baseline_energy(mcTrio_diffCO2)) rtol=0.0001
 
     # blocking sphere straddling a periodic boundary
@@ -268,7 +275,7 @@ end
 @testset "TailCorrection" begin
     co2 = CEG.load_molecule_RASPA("CO2", "TraPPE", "BoulfelfelSholl2021");
     na = CEG.load_molecule_RASPA("Na", "TraPPE", "BoulfelfelSholl2021");
-    mc, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [(na, 2), (co2, 3)]; blockfiles=[false,false]);
+    mc, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [(na, 2), (co2, 3)]; blockfiles=[false,false]);
 
     ff = mc.step.ff
     ffidx = mc.step.ffidx
@@ -354,9 +361,9 @@ end
     molCO2_2 = CEG.ChangePositionSystem(co2, SVector{3}.([[5.491645446274333, 8.057854365959964, 8.669190836544463]u"Å",
                                                          [6.335120278303245, 7.462084936052019, 9.172986424179925]u"Å",
                                                          [7.178595110332157, 6.866315506144074, 9.676782011815387]u"Å"]));
-    mcTrio, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
+    mcTrio, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [molNaTrio, molCO2_1, molCO2_2]; blockfiles=[false, false, false]);
     reportsTrio = run_montecarlo!(mcTrio, SimulationSetup(300u"K", 4000))
-    shadow, _ = setup_montecarlo("CIT7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, [mcTrio.step.positions[1]]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[2:4]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[5:7])]; blockfiles=[false,false,false]);
+    shadow, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(na, [mcTrio.step.positions[1]]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[2:4]), CEG.ChangePositionSystem(co2, mcTrio.step.positions[5:7])]; blockfiles=[false,false,false]);
     baseTrio = Float64(baseline_energy(mcTrio))
     @test baseTrio ≈ Float64(baseline_energy(shadow))
     @test baseTrio ≈ Float64(reportsTrio[end])
