@@ -549,10 +549,16 @@ end
 
 
 """
-    energy_point_mc!(mc::MonteCarloSetup, positions, current)
+    energy_point_mc!(mc::MonteCarloSetup, positions, current, before)
 
 Compute the energy associated with the last molecule of kind 1 in `mc` at the given
-`positions`. `current` is the energy of `mc` in its current state.
+`positions`.
+
+`current` is the energy of `mc` in its current state. `before` is the contribution to the
+energy of the moving molecule.
+
+Return the energy and new values for `current` and `before`, up to date with the new
+version of `mc`. In many cases, neither `mc`, `current` nor `before` are modified.
 
 If `current` is above `1e50u"K"`, the energy will be computed with [`baseline_energy`](@ref).
 
@@ -560,46 +566,43 @@ If `current` is above `1e50u"K"`, the energy will be computed with [`baseline_en
     This function modifies `mc`. In particular, it is assumed that `mc` is task-local, i.e.
     `mc` must not be modified concurrently.
 """
-function energy_point_mc!(mc::MonteCarloSetup, positions)
+function energy_point_mc!(mc::MonteCarloSetup, positions, current, before)
     if inblockpocket(mc.speciesblocks[1], mc.atomblocks, first(mc.step.ffidx), positions)
-        return 1e100u"K"
+        return 1e100u"K", current, before
     end
-    current::TK = get!(task_local_storage(), :CEG_mc_energy_grid_current) do
-        Inf*u"K"
-    end
-    if mc.ewald.last[] == -1 || current == Inf*u"K"
-        @label compute_baseline
-        mc.step.positions[last(mc.step.posidx[1])] = positions
-        ret = Number(baseline_energy(mc))
-        ret < current && task_local_storage(:CEG_mc_energy_grid_current, ret)
-        delete!(task_local_storage(), :CEG_mc_energy_grid_before)
-        return ret
-    end
+    # current = Inf*u"K" # FIXME: remove this and uncomment the previous lines after understanding and fixing why the results differ
     j = length(mc.flatidx[1])
     ij = mc.flatidx[1][j]
-    before::TK = get!(task_local_storage(), :CEG_mc_energy_grid_before) do
+    if mc.ewald.last[] == -1 || current ≥ 1e50*u"K"
+        @label compute_baseline
         molpos = mc.step.posidx[1][j]
-        oldpos = @view mc.step.positions[molpos]
-        fer_before = framework_interactions(mc, 1, oldpos)
-        singlevdw_before = single_contribution_vdw(mc.step, (1,j), oldpos)
-        singlereciprocal_before = single_contribution_ewald(mc.ewald, ij, nothing)
-        fer_before + singlevdw_before + singlereciprocal_before
+        mc.step.positions[molpos] = positions
+        iszero(mc.ewald.ctx.eframework.α) || move_one_system!(mc.ewald.ctx, ij, positions)
+        ret = Number(baseline_energy(mc))
+        if ret < Inf*u"K"
+            oldpos = @view mc.step.positions[molpos]
+            fer_before = framework_interactions(mc, 1, oldpos)
+            singlevdw_before = single_contribution_vdw(mc.step, (1,j), oldpos)
+            singlereciprocal_before = single_contribution_ewald(mc.ewald, ij, nothing)
+            newbefore = Number(MCEnergyReport(fer_before, singlevdw_before, singlereciprocal_before))
+            return ret, ret, newbefore
+        end
+        return ret, Inf*u"K", NaN*u"K"
     end
+    @assert !isnan(before)
     fer = framework_interactions(mc, 1, positions)
     singlereciprocal = single_contribution_ewald(mc.ewald, ij, positions)
     singlevdw = single_contribution_vdw(mc.step, (1,j), positions)
-    after = fer + singlevdw + singlereciprocal
+    after = Number(MCEnergyReport(fer, singlevdw, singlereciprocal))
     result = current + after - before
     if result < current && (abs(result) < max(abs(current), abs(before))/10)
         @goto compute_baseline
-    elseif result < (current < 0 ? 2*current : current/2)
-        molpos = mc.step.posidx[1][j]
-        oldpos = @view mc.step.positions[molpos]
-        update_mc!(mc, (1,j), positions)
-        task_local_storage(:CEG_mc_energy_grid_before, after)
     end
-    task_local_storage(:CEG_mc_energy_grid_current, result)
-    return result
+    if result < (current < 0.0u"K" ? 2*current : current/2)
+        update_mc!(mc, (1,j), positions)
+        return result, result, after
+    end
+    return result, current, before
 end
 
 

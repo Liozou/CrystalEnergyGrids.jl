@@ -49,7 +49,7 @@ function lebedev_num(size::Integer, islinearsymmetric::Bool)
 end
 
 function lebedev_num(mol, num::Integer)
-    length(mol) == 1 && return 1
+    length(mol) == 1 || num ≤ 1 && return 1
     islin = is_zaxis_linear(mol)
     issym = is_zaxis_linear_symmetric(mol, islin)
     lebedev_num(islin ? num : div(num, 5), issym)
