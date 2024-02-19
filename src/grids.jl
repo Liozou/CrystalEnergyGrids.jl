@@ -351,15 +351,16 @@ function energy_grid(setup, step, num_rotate=40)
     end
 
     __pos = position(molecule) / u"Å"
-    if setup isa MonteCarloSetup
+    per_task = if setup isa MonteCarloSetup
         mc0 = MonteCarloSetup(setup; parallel=false) # use a copy
         add_one_system!(mc0, 1) # the newly added molecule will be the probe
         @assert mc0.ewald.last[] ≤ 0 # 0 for neutral species, -1 otherwise
         mc_tasks = [(MonteCarloSetup(mc0), Inf*u"K", NaN*u"K") for _ in 1:(nthreads()-1)]
         push!(mc_tasks, (mc0, Inf*u"K", NaN*u"K"))
+        mc_tasks
     else
         ctx0 = EwaldContext(setup.ewald, ((molecule,),))
-        ctxs = [deepcopy(ctx0) for _ in 1:(nthreads()-1)]
+        ctxs = EwaldContext[deepcopy(ctx0) for _ in 1:(nthreads()-1)]
         push!(ctxs, ctx0)
         pre_printwarn = PRINT_CHARGE_WARNING[]
         # do one empty computation to trigger the warnings if need be
@@ -367,6 +368,7 @@ function energy_grid(setup, step, num_rotate=40)
             energy_point(setup, [SVector{3}(p)*u"Å" for p in __pos])
             PRINT_CHARGE_WARNING[] = false
         end
+        ctxs
     end
 
     printstyled("Creating energy grid at ", path, " ... "; color=:yellow)
@@ -386,14 +388,13 @@ function energy_grid(setup, step, num_rotate=40)
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
     allvals .= NaN
 
-    lb = LoadBalancer{CartesianIndex{3}}() do iABC, taskid
-        iA, iB, iC = Tuple(iABC)
+    lb = LoadBalancer{Int}() do iC, taskid; for iA in 1:numA, iB in 1:numB
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         bufferpos = Vector{SVector{3,TÅ}}(undef, length(__pos))
         if setup isa MonteCarloSetup
-            mc, current, before = mc_tasks[taskid]
+            mc, current, before = per_task[taskid]
         else
-            ctx = ctxs[taskid]
+            ctx = per_task[taskid]
         end
         for (k, pos) in enumerate(rotpos)
             ofs = if num_rotate < 0
@@ -403,18 +404,19 @@ function energy_grid(setup, step, num_rotate=40)
             end
             bufferpos .= SVector{3,TÅ}.((ofs,) .+ pos.*u"Å")
             newval = ustrip(u"K", if setup isa MonteCarloSetup
-                _newval, newcurrent, newbefore = energy_point_mc!(mc, bufferpos, current, before)
-                mc_tasks[taskid] = (mc, newcurrent, newbefore)
+                _newval, current, before = energy_point_mc!(mc, bufferpos, current, before)
+                per_task[taskid] = (mc, current, before)
                 _newval
             else
                 sum(energy_point(setup, bufferpos, ctx))
             end)
             allvals[k,iA,iB,iC] = newval
         end
+    end end
+    for iC in 1:numC
+        put!(lb, iC)
     end
-    for iABC in CartesianIndices((numA, numB, numC))
-        put!(lb, iABC)
-    end
+    wait(lb)
     setup isa CrystalEnergySetup && pre_printwarn && (PRINT_CHARGE_WARNING[] = pre_printwarn)
     serialize(path, allvals)
     printstyled("Done.\n"; color=:cyan)
