@@ -342,6 +342,20 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
                     mcmoves, rng)
 end
 
+
+struct NanoSystem # pseudo-AbstractSystem with only positions and atom symbols
+    position::Vector{SVector{3,TÅ}}
+    atomic_symbols::Vector{Symbol}
+end
+AtomsBase.position(x::NanoSystem) = x.position
+AtomsBase.atomic_symbol(x::NanoSystem, i) = x.atomic_symbols[i]
+Base.length(x::NanoSystem) = length(x.position)
+function NanoSystem(mc::MonteCarloSetup, i::Int)
+    position = mc.models[i]
+    atomic_symbols = [mc.step.ff.symbols[x] for x in mc.step.ffidx[i]]
+    NanoSystem(position, atomic_symbols)
+end
+
 #=
 function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
     molpos = mc.step.posidx[i][j]

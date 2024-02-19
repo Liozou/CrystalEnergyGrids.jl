@@ -306,7 +306,7 @@ end
 
 function is_zaxis_linear_symmetric(system, islin)
     islin || return false
-    poss = position(system) / u"Å"
+    poss = map.(Base.Fix1(ustrip, u"Å"), position(system))
     n = length(poss)
     zpos = Vector{Float64}(undef, n)
     for (i, pos) in enumerate(poss)
@@ -317,7 +317,7 @@ function is_zaxis_linear_symmetric(system, islin)
         fwd = I[i]
         bwd = I[end-i+1]
         zpos[fwd] ≈ -zpos[bwd] || return false
-        AtomsBase.atomic_number(system, fwd) == AtomsBase.atomic_number(system, bwd) || return false
+        AtomsBase.atomic_symbol(system, fwd) == AtomsBase.atomic_symbol(system, bwd) || return false
     end
     return true
 end

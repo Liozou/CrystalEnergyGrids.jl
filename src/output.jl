@@ -329,7 +329,7 @@ function output_cif(path, step::SimulationStep)
         for (i, posidxi) in enumerate(step.posidx)
             ffidxi = step.ffidx[i]
             for (j, posidxij) in enumerate(posidxi), (k, l) in enumerate(posidxij)
-                counter += 1 
+                counter += 1
                 step.atoms[l] == (i,j,k) || continue
                 ix = ffidxi[k]
                 name = names[ix]

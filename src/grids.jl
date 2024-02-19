@@ -325,7 +325,7 @@ end
 
 
 """
-    energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
+    energy_grid(setup::Union{CrystalEnergySetup,MonteCarloSetup}, step, num_rotate=40)
 
 Compute the energy on the the system given by `setup` on a regular grid with the given
 `step` (with its unit).
@@ -336,50 +336,51 @@ Otherwise (or if `num_rotate == 0`), the first axe can be dropped through`dropdi
 
 A value of 1e100 in the grid indicates an inaccessible point due to blocking spheres.
 
-If `mc` is set to a [`MonteCarloSetup`](@ref), it will be used to compute the energies
-instead of the empty framework. The framework of `setup` and `mc` must be identical and the
-molecule of `setup` must be the first species kind in `mc`.
+If `setup` is not a [`CrystalEnergyGris`](@ref) but a [`MonteCarloSetup`](@ref), the guest
+molecule will be given by the first species kind of `setup`. Existing molecules will be
+retained while building the grid.
 """
-function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
-    mc_store = mc isa Nothing ? "" : string('_', hash_string(mc::MonteCarloSetup))
-    store = string(hash_string(setup), mc_store, '-', ustrip(u"Å", step), '-', lebedev_num(setup.molecule, num_rotate))
+function energy_grid(setup, step, num_rotate=40)
+    setup::Union{CrystalEnergySetup,MonteCarloSetup}
+    molecule = setup isa CrystalEnergySetup ? setup.molecule : NanoSystem(setup, 1)
+    store = string(hash_string(setup), '-', ustrip(u"Å", step), '-', lebedev_num(molecule, num_rotate))
     path = joinpath(scratchspace, store)
     if isfile(path)
         printstyled("Retrieved energy grid at ", path, ".\n"; color=:cyan)
         return deserialize(path)::Array{Float64,4}
     end
-    if mc isa MonteCarloSetup
-        if setup.ewald != mc.ewald.ctx.eframework
-            error("Input setup and mc mismatch in framework")
-        elseif setup.charges != ustrip.(u"e_au", mc.step.charges[mc.step.ffidx[1]])
-            error("Input setup and mc mismatch in molecule")
-        end
-        mc = MonteCarloSetup(mc; parallel=false) # use a copy
-        add_one_system!(mc, 1) # the newly added molecule will be the probe
-        @assert mc.ewald.last[] ≤ 0 # 0 for neutral species, -1 otherwise
-        mc_tasks = [(MonteCarloSetup(mc), Inf*u"K", NaN*u"K") for _ in 1:nthreads()]
-    end
 
-    pre_printwarn = PRINT_CHARGE_WARNING[]
-    # do one empty computation to trigger the warnings if need be
-    __pos = position(setup.molecule) / u"Å"
-    if pre_printwarn
-        energy_point(setup, [SVector{3}(p)*u"Å" for p in __pos])
-        PRINT_CHARGE_WARNING[] = false
+    __pos = position(molecule) / u"Å"
+    if setup isa MonteCarloSetup
+        mc0 = MonteCarloSetup(setup; parallel=false) # use a copy
+        add_one_system!(mc0, 1) # the newly added molecule will be the probe
+        @assert mc0.ewald.last[] ≤ 0 # 0 for neutral species, -1 otherwise
+        mc_tasks = [(MonteCarloSetup(mc0), Inf*u"K", NaN*u"K") for _ in 1:(nthreads()-1)]
+        push!(mc_tasks, (mc0, Inf*u"K", NaN*u"K"))
+    else
+        ctx0 = EwaldContext(setup.ewald, ((molecule,),))
+        ctxs = [deepcopy(ctx0) for _ in 1:(nthreads()-1)]
+        push!(ctxs, ctx0)
+        pre_printwarn = PRINT_CHARGE_WARNING[]
+        # do one empty computation to trigger the warnings if need be
+        if pre_printwarn
+            energy_point(setup, [SVector{3}(p)*u"Å" for p in __pos])
+            PRINT_CHARGE_WARNING[] = false
+        end
     end
 
     printstyled("Creating energy grid at ", path, " ... "; color=:yellow)
-    axeA, axeB, axeC = bounding_box(setup.framework)
+    axeA, axeB, axeC = setup isa CrystalEnergySetup ? bounding_box(setup.framework) : eachcol(setup.speciesblocks[1].csetup.cell.mat)
     numA = floor(Int, norm(axeA) / step) + 1
     numB = floor(Int, norm(axeB) / step) + 1
     numC = floor(Int, norm(axeC) / step) + 1
     stepA = axeA / numA
     stepB = axeB / numB
     stepC = axeC / numC
-    rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == 0 || length(setup.molecule) == 1
+    rotpos::Vector{Vector{SVector{3,Float64}}} = if num_rotate == 0 || length(molecule) == 1
         [[SVector{3}(p) for p in __pos]]
     else
-        rots, _ = get_rotation_matrices(setup.molecule, num_rotate)
+        rots, _ = get_rotation_matrices(molecule, num_rotate)
         [[SVector{3}(r*p) for p in __pos] for r in rots]
     end
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
@@ -389,10 +390,10 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
         iA, iB, iC = Tuple(iABC)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         bufferpos = Vector{SVector{3,TÅ}}(undef, length(__pos))
-        if mc isa MonteCarloSetup
-            tmc, current, before = mc_tasks[taskid]
-        elseif length(rotpos) > 1
-            ctx = EwaldContext(setup.ewald, ((setup.molecule,),))
+        if setup isa MonteCarloSetup
+            mc, current, before = mc_tasks[taskid]
+        else
+            ctx = ctxs[taskid]
         end
         for (k, pos) in enumerate(rotpos)
             ofs = if num_rotate < 0
@@ -401,22 +402,20 @@ function energy_grid(setup::CrystalEnergySetup, step, num_rotate=40; mc=nothing)
                 thisofs
             end
             bufferpos .= SVector{3,TÅ}.((ofs,) .+ pos.*u"Å")
-            newval = ustrip(u"K", sum(if @isdefined ctx
-                energy_point(setup, bufferpos, ctx)
-            elseif mc isa MonteCarloSetup
-                _newval, newcurrent, newbefore = energy_point_mc!(tmc, bufferpos, current, before)
-                mc_tasks[taskid] = (tmc, newcurrent, newbefore)
-                (_newval, 0.0u"K") # for type stability
+            newval = ustrip(u"K", if setup isa MonteCarloSetup
+                _newval, newcurrent, newbefore = energy_point_mc!(mc, bufferpos, current, before)
+                mc_tasks[taskid] = (mc, newcurrent, newbefore)
+                _newval
             else
-                energy_point(setup, bufferpos)
-            end))
+                sum(energy_point(setup, bufferpos, ctx))
+            end)
             allvals[k,iA,iB,iC] = newval
         end
     end
     for iABC in CartesianIndices((numA, numB, numC))
         put!(lb, iABC)
     end
-    pre_printwarn && (PRINT_CHARGE_WARNING[] = pre_printwarn)
+    setup isa CrystalEnergySetup && pre_printwarn && (PRINT_CHARGE_WARNING[] = pre_printwarn)
     serialize(path, allvals)
     printstyled("Done.\n"; color=:cyan)
     return allvals
