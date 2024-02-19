@@ -469,13 +469,9 @@ Build an [`EwaldContext`](@ref) for a fixed framework and any number of rigid mo
 `systems`.
 `eframework` can be obtained from [`initialize_ewald`](@ref).
 """
-function EwaldContext(eframework::EwaldFramework, systems, emptysystems=(); givencharges=nothing)
+function EwaldContext(eframework::EwaldFramework, systems, emptysystems=())
     iszero(eframework.α) && return EwaldContext(eframework, ntuple(Returns(ElasticMatrix{ComplexF64}(undef, 0, 0)), 3), Tuple{Int,Int}[], Int[], Vector{Int}[], Int[], Ref(0.0u"K"), Vector{Vector{Te_au}}[], TK[], 0.0u"K")
-    allcharges::Vector{Vector{Te_au}} = if givencharges isa Nothing
-        [first(kind)[:,:atomic_charge] for kind in systems]
-    else
-        givencharges
-    end
+    allcharges::Vector{Vector{Te_au}} = [first(kind)[:,:atomic_charge] for kind in systems]
     numspecies::Vector{Int} = [length(kind) for kind in systems]
     for i_empty in emptysystems
         @assert numspecies[i_empty] == 1

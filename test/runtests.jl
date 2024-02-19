@@ -154,7 +154,7 @@ end
 
     # Handling of empty systems
     mcCO2_1, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [(co2, 0)]; blockfiles=[false]);
-    @test iszero(Float64(CEG.baseline_energy(mcCO2_1)))
+    @test iszero(Float64(CEG.baseline_energy(CEG.MonteCarloSetup(mcCO2_1))))
     mcCO2_2, _ = setup_montecarlo("CIT-7", "BoulfelfelSholl2021", [CEG.ChangePositionSystem(co2, mcCO2_1.models[1])]; blockfiles=[false]);
     CEG.add_one_system!(mcCO2_1, 1)
     @test CEG.baseline_energy(mcCO2_1) ≈ CEG.baseline_energy(mcCO2_2)
