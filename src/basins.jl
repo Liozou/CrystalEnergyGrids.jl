@@ -42,7 +42,9 @@ function local_minima(grid::Array{<:Any,3}, tolerance=1e-2; lt=(<))
     # for i3 in 1:a3
     N = nthreads()
     localmins_t = [CartesianIndex{3}[] for _ in 1:N]
-    lb = LoadBalancer{Int}(N) do i3, taskid
+    # @loadbalance 0.1 for I in CartesianIndices((a1, a2, a3))
+    #     i1, i2, i3 = Tuple(I)
+    @loadbalance 0.5 for i3 in 1:a3
         for i2 in 1:a2, i1 in 1:a1
             val = grid[i1,i2,i3]
             if lt(val, grid[mod1(i1-1,a1),i2,i3]) &&
@@ -56,10 +58,6 @@ function local_minima(grid::Array{<:Any,3}, tolerance=1e-2; lt=(<))
             end
         end
     end
-    for i3 in 1:a3
-        put!(lb, i3)
-    end
-    wait(lb)
     # close(lb) # this causes spurious errors to be printed from the `take!`ing tasks
     localmins = reduce(vcat, localmins_t)
     min_energy = minimum(Base.Fix1(getindex, grid), localmins)

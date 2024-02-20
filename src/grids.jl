@@ -388,7 +388,8 @@ function energy_grid(setup, step, num_rotate=40)
     allvals = Array{Float64}(undef, length(rotpos), numA, numB, numC)
     allvals .= NaN
 
-    lb = LoadBalancer{Int}() do iC, taskid; for iA in 1:numA, iB in 1:numB
+    @loadbalance 0.4 for iABC in CartesianIndices((numA, numB, numC))
+        iA, iB, iC = Tuple(iABC)
         thisofs = (iA-1)*stepA + (iB-1)*stepB + (iC-1)*stepC
         bufferpos = Vector{SVector{3,TÅ}}(undef, length(__pos))
         if setup isa MonteCarloSetup
@@ -412,11 +413,7 @@ function energy_grid(setup, step, num_rotate=40)
             end)
             allvals[k,iA,iB,iC] = newval
         end
-    end end
-    for iC in 1:numC
-        put!(lb, iC)
     end
-    wait(lb)
     setup isa CrystalEnergySetup && pre_printwarn && (PRINT_CHARGE_WARNING[] = pre_printwarn)
     serialize(path, allvals)
     printstyled("Done.\n"; color=:cyan)
