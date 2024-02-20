@@ -597,6 +597,10 @@ macro spawnif(dospawn, expr)
 end
 
 
+mutable struct SubAtomic{T}
+    @atomic x::T
+end
+
 """
     LoadBalancer{T}
 
@@ -606,7 +610,7 @@ See [`LoadBalancer{T}(f, n::Integer)`](@ref) to create an instance.
 struct LoadBalancer{T}
     channel::Channel{T}
     tasks::Vector{Task}
-    busy::Atomic{Int}
+    busy::SubAtomic{Int}
     event::Event
 end
 
@@ -639,32 +643,112 @@ do_something_else()
 
 wait(lb)
 ```
+
+See also [`@loadbalance`](@ref)
 """
 function LoadBalancer{T}(f, n::Integer=nthreads()) where T
-    busy::Atomic{Int} = Atomic{Int}(0)
+    busy::SubAtomic{Int} = SubAtomic{Int}(0)
     event::Event = Event(true)
     channel::Channel{T} = Channel{T}(n)
-    tasks = [(@spawn while true
-        x = take!($channel)
-        atomic_add!($busy, 1)
-        $f(x, $i)
-        atomic_sub!($busy, 1)
-        notify($event)
+    tasks = [(@spawn begin
+        _busy = $busy
+        while true
+            x = take!($channel)
+            $f(x, $i)
+            nbusy = @atomic :acquire_release _busy.x -= 1
+            nbusy == 0 && notify($event)
+        end
     end) for i in 1:n]
     foreach(errormonitor, tasks)
     LoadBalancer{T}(channel, tasks, busy, event)
 end
-Base.put!(lb::LoadBalancer, x) = put!(lb.channel, x)
+function Base.put!(lb::LoadBalancer, x)
+    @atomic :acquire_release lb.busy.x += 1
+    put!(lb.channel, x)
+end
 function Base.wait(lb::LoadBalancer)
-    while !isempty(lb.channel) || lb.busy[] > 0
+    while (@atomic :acquire lb.busy.x) > 0
         wait(lb.event)
     end
 end
 function Base.close(lb::LoadBalancer)
-    if lb.busy[] != 0
+    if (@atomic :acquire lb.busy.x) != 0
         @error "Forcibly closing the LoadBalancer may yield errors from the still-working tasks"
     end
     close(lb.channel)
-    lb.busy[] = -max(0, lb.busy[]) # make lb.busy zero or negative to signal the close
+    val = -max(0, @atomic :monotonic lb.busy.x)
+    @atomic lb.busy.x = val # make lb.busy zero or negative to signal the close
     notify(lb.event)
+end
+
+function loadbalance_body(expr::Expr; balance=0.5)
+    Meta.isexpr(expr, :for) || error("@loadbalance requires a `for` loop expression")
+    @assert Meta.isexpr(expr.args[1], :(=)) # TODO: handle multi-loops
+    @assert length(expr.args[1].args) == 2
+    lhs, rhs = expr.args[1].args
+    body = expr.args[2]
+    quote
+        balance = $(esc(balance))
+        0 ≤ balance ≤ 1 || error("The number between @loadbalance and the `for` loop must be between 0 and 1.")
+        balance /= Base.Threads.nthreads()
+        rhs = $(esc(rhs))
+        itsize = Base.IteratorSize(rhs)
+        len = (itsize isa Base.HasLength || itsize isa Base.HasShape) ? length(rhs) : nothing
+        el = Base.IteratorEltype(rhs) isa Base.HasEltype ? eltype(rhs) : Any
+        lb = if rhs isa AbstractArray
+            i = firstindex(rhs)
+            stop = lastindex(rhs)
+            lb1 = LoadBalancer{UnitRange{Int}}() do rnge, $(esc(:taskid))
+                for $(esc(lhs)) in view(rhs, rnge)
+                    $(esc(body))
+                end
+            end
+            count = 0
+            while i ≤ stop
+                count += 1
+                j = i + round(Int, balance*(stop - i))
+                put!(lb1.channel, i:j)
+                i = j + 1
+            end
+            i == stop && put!(lb1, i:i)
+            @atomic :acquire_release lb1.busy.x += count
+            lb1
+        else
+            lb0 = LoadBalancer{el}() do $(esc(lhs)), $(esc(:taskid))
+                $(esc(body))
+            end
+            # The following sequence is equivalent to doing `put!(lb0, x)` for all x in rhs,
+            # but it avoids doing as many @atomic operations
+            count = 0
+            for x in rhs
+                count += 1
+                put!(lb0.channel, x)
+            end
+            @atomic :acquire_release lb0.busy.x += count
+            lb0
+        end
+        wait(lb)
+    end
+end
+
+"""
+    @loadbalance [0.5] for ...
+
+Similar to `Base.Threads.@threads` but using [`LoadBalancer`](@ref) underneath. This allows
+using the special variable `taskid` inside the body of the `for` loop, where `taskid` is a
+number between 1 and `Base.Threads.nthreads()` that uniquely identifies the current thread.
+As a consequence, `taskid` may be used as an index in an array where each thread can write
+concurrently without risking race condition.
+
+Scheduling can be tweaked by putting a number between 0 and 1 before the `for` loop. A
+value of 0 means that each element of the loop will be sent individually to a thread, while
+higher values mean that groups of contiguous elements will be sent together.
+This scheduling is only possible when the `for` loop iterates over an `AbstractArray`, such
+as a range or an array for example.
+"""
+macro loadbalance(balance, expr)
+    loadbalance_body(expr; balance)
+end
+macro loadbalance(expr)
+    loadbalance_body(expr)
 end
