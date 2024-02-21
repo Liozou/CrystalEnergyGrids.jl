@@ -17,10 +17,8 @@ using Unitful, UnitfulAtomic
 # const DielectricConstantOfTheMedium = 1.0
 # const COULOMBIC_CONVERSION_FACTOR = ELECTRONIC_CHARGE_UNIT^2/(4π*ELECTRIC_CONSTANT*ANGSTROM*ENERGY_CONVERSION_FACTOR*DielectricConstantOfTheMedium)
 
-const ENERGY_CONVERSION_FACTOR = 1u"u * Å^2 / ps^2"
-const ENERGY_TO_KELVIN = NoUnits(ENERGY_CONVERSION_FACTOR/u"k_au*K")*u"K"
-const VACUUM_PERMITTIVITY = 8.85418781762039e-12u"F/m"
-const COULOMBIC_CONVERSION_FACTOR = NoUnits(1u"e_au^2"/(4π*VACUUM_PERMITTIVITY*u"Å"*ENERGY_CONVERSION_FACTOR))
+const GRID_TO_KELVIN = NoUnits(true*u"u * Å^2 / ps^2 / k_au / K")
+const COULOMBIC_CONVERSION_FACTOR = NoUnits(inv(4π*Unitful.ε0)*u"e_au^2/Å/k_au/K")*u"K*Å/e_au^2"
 
 # used for grid interpolation
 const COEFF = Float64[ # Use Float64 here to force the promotion upon multiplication

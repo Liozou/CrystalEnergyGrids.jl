@@ -67,7 +67,7 @@ function parse_grid(file, iscoulomb, mat=nothing)
         ewald_precision = iscoulomb ? read(io, Cdouble) : Inf
         grid = Array{Cfloat, 4}(undef, dims[3]+1, dims[2]+1, dims[1]+1, 8)
         read!(io, grid)
-        grid .*= NoUnits(ENERGY_TO_KELVIN/u"K")
+        grid .*= GRID_TO_KELVIN
         newmat = if mat isa CellMatrix
             mat
         elseif mat isa AbstractMatrix
@@ -138,7 +138,7 @@ function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceFi
     grid = Array{Cfloat,4}(undef, cset.dims[3]+1, cset.dims[2]+1, cset.dims[1]+1, 8)
     probe_vdw = ProbeSystem(framework, forcefield, atom)
     Δ = NoUnits.(cset.Δ/u"Å")
-    λ⁻¹ = NoUnits(ENERGY_TO_KELVIN/u"K")
+    λ⁻¹ = GRID_TO_KELVIN
     λ = inv(λ⁻¹)
     @threads for i in 0:cset.dims[1]
         for j in 0:cset.dims[2], k in 0:cset.dims[3]
@@ -164,7 +164,7 @@ function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::For
     grid = Array{Cfloat,4}(undef, cset.dims[3]+1, cset.dims[2]+1, cset.dims[1]+1, 8)
     probe_coulomb = ProbeSystem(framework, forcefield)
     Δ = NoUnits.(cset.Δ/u"Å")
-    λ = COULOMBIC_CONVERSION_FACTOR
+    λ = ustrip(u"K*Å/e_au^2", COULOMBIC_CONVERSION_FACTOR)/GRID_TO_KELVIN
     λ⁻¹e7 = inv(λ)*1e7
     @threads for i in 0:cset.dims[1]
         for j in 0:cset.dims[2], k in 0:cset.dims[3]
