@@ -234,7 +234,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst
 
     invmat::SMatrix{3,3,Float64,9} = inv(mat)
     il_ax, il_ay, il_az, il_bx, il_by, il_bz, il_cx, il_cy, il_cz = invmat
-    volume_factor = COULOMBIC_CONVERSION_FACTOR*2π/(det(mat))
+    volume_factor = COULOMBIC_CONVERSION_FACTOR*ustrip(ENERGY_TO_KELVIN)*2π/(det(mat))
     @assert volume_factor > 0
     α_factor = -0.25/(α*u"Å")^2
 
@@ -255,7 +255,7 @@ function initialize_ewald(syst::AbstractSystem{3}, supercell=find_supercell(syst
         end
     end
 
-    UIon = (COULOMBIC_CONVERSION_FACTOR*α*u"Å"/sqrt(π) - sum(kfactors; init=0.0))*u"K/e_au^2"
+    UIon = (COULOMBIC_CONVERSION_FACTOR*ustrip(ENERGY_TO_KELVIN)*α*u"Å"/sqrt(π) - sum(kfactors; init=0.0))*u"K/e_au^2"
 
     Π = prod(supercell)
     charges::Vector{Te_au} = repeat(syst[:,:atomic_charge]; inner=Π)
@@ -478,7 +478,7 @@ function EwaldContext(eframework::EwaldFramework, systems, emptysystems=())
         numspecies[i_empty] = 0
     end
 
-    chargefactor = (COULOMBIC_CONVERSION_FACTOR/sqrt(π))*eframework.α*u"K*Å/e_au^2"
+    chargefactor = (COULOMBIC_CONVERSION_FACTOR*ustrip(ENERGY_TO_KELVIN)/sqrt(π))*eframework.α*u"K*Å/e_au^2"
     energies = [sum(abs2, charges; init=0.0u"e_au^2")*chargefactor for charges in allcharges]
     energy_adsorbate_self = sum(eas*num for (num, eas) in zip(numspecies, energies); init=0.0u"K")
     net_charges = sum.(allcharges; init=0.0u"e_au")
@@ -520,8 +520,8 @@ function EwaldContext(eframework::EwaldFramework, systems, emptysystems=())
                 this_energy += erf(eframework.α*r)*chargeA*chargeB/r
             end
         end
-        energies[i] += this_energy*COULOMBIC_CONVERSION_FACTOR*u"K*Å/e_au^2"
-        energy_adsorbate_excluded += num*this_energy*COULOMBIC_CONVERSION_FACTOR*u"K*Å/e_au^2"
+        energies[i] += this_energy*COULOMBIC_CONVERSION_FACTOR*ustrip(ENERGY_TO_KELVIN)*u"K*Å/e_au^2"
+        energy_adsorbate_excluded += num*this_energy*COULOMBIC_CONVERSION_FACTOR*ustrip(ENERGY_TO_KELVIN)*u"K*Å/e_au^2"
     end
     @assert !any(iszero, speciesof)
 
@@ -564,11 +564,11 @@ function compute_ewald(ctx::EwaldContext, skipcontribution=0)
         adsorbate_adsorbate += temp*(_re_a*_re_a + _im_a*_im_a)
     end
 
-    UHostAdsorbateChargeChargeFourier = 2*(framework_adsorbate + ustrip(u"K", ctx.energy_net_charges))
+    UHostAdsorbateChargeChargeFourier = 2*(framework_adsorbate*u"K" + ctx.energy_net_charges)
 
-    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate + ustrip(u"K", ctx.static_contribution[])
+    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate*u"K" + ctx.static_contribution[]
 
-    return (UHostAdsorbateChargeChargeFourier + UAdsorbateAdsorbateChargeChargeFourier)*ENERGY_TO_KELVIN
+    return UHostAdsorbateChargeChargeFourier + UAdsorbateAdsorbateChargeChargeFourier
 end
 
 function compute_ewald(eframework::EwaldFramework, systems, skipcontribution=0)
@@ -619,13 +619,13 @@ function compute_ewald(ewald::IncrementalEwaldContext)
         adsorbate_adsorbate += temp*(_re_a*_re_a + _im_a*_im_a)
     end
 
-    UHostAdsorbateChargeChargeFourier = 2*(framework_adsorbate + ustrip(u"K", ewald.ctx.energy_net_charges))
+    UHostAdsorbateChargeChargeFourier = 2*(framework_adsorbate*u"K" + ewald.ctx.energy_net_charges)
 
-    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate + ustrip(u"K", ewald.ctx.static_contribution[])
+    UAdsorbateAdsorbateChargeChargeFourier = adsorbate_adsorbate*u"K" + ewald.ctx.static_contribution[]
 
     ewald.last[] = 0 # signal for single_contribution_ewald
 
-    (UHostAdsorbateChargeChargeFourier + UAdsorbateAdsorbateChargeChargeFourier)*ENERGY_TO_KELVIN
+    UHostAdsorbateChargeChargeFourier + UAdsorbateAdsorbateChargeChargeFourier
 end
 
 
@@ -715,7 +715,7 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
         single_single += temp*(_re_a*_re_a + _im_a*_im_a)
     end
 
-    (2*rest_single + single_single)*ENERGY_TO_KELVIN
+    (2*rest_single + single_single)*u"K"
 end
 
 """
