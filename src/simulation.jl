@@ -314,6 +314,17 @@ function risk_of_underflow(current::MCEnergyReport, diff::MCEnergyReport)
     return false
 end
 
+function underflow_averted_warning(energy::MCEnergyReport, newenergy::MCEnergyReport, diff::MCEnergyReport)
+    ve = (energy.framework.direct, energy.framework.vdw, energy.inter, energy.reciprocal)
+    vn = (newenergy.framework.direct, newenergy.framework.vdw, newenergy.inter, newenergy.reciprocal)
+    vd = (diff.framework.direct, diff.framework.vdw, diff.inter, diff.reciprocal)
+    for i in 1:4
+        xe, xn, xd = ve[i], vn[i], vd[i]
+        !isapprox(xe + xd, xn; rtol=1e-8) && !isapprox(xn - xd, xe; rtol=1e-8) && ((@show i, xe, xn, xd); return true)
+    end
+    return false
+end
+
 function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature, oldpos, move::Symbol, statistics::MoveStatistics, running_update, energy)
     accepted = compute_accept_move(before, after, temperature, move, mc)
     if accepted
@@ -330,7 +341,11 @@ function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature
         accept!(statistics, ifelse(isswap, :swap, move))
         if risk_of_underflow(energy.er, diff)
             parallel && wait(running_update)
-            baseline_energy(mc) # reset computation to avoid underflows
+            newenergy = baseline_energy(mc) # reset computation to avoid underflows
+            if underflow_averted_warning(energy.er, newenergy.er, diff)
+                @error "Underflow mitigation stems from incorrect energy computation:" energy diff newenergy
+            end
+            newenergy
         elseif isswap # update the tail correction as well
             modify_species!(mc.tailcorrection, idx[1], ifelse(move === :swap_deletion, -1, 1))
             BaselineEnergyReport(energy.er + diff, mc.tailcorrection[])
@@ -449,6 +464,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             for _ in 1:4
                 energy = try_swap!(mc, i_swap, statistics, randomdmax, temperature, energy)
             end
+            old_idx = (0,0)
         end
 
         numsteps = max(20, length(mc.revflatidx))
