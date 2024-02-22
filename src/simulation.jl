@@ -295,7 +295,7 @@ function try_swap!(mc::MonteCarloSetup, i::Int, statistics::MoveStatistics, rand
     idx = (i, j)
 
     contrib = movement_energy(mc, idx, newpos)
-    ediff = isdefined_ewald(mc) ? -mc.ewald.ctx.energies[i] : 0.0u"K"
+    ediff = isdefined_ewald(mc) ? mc.ewald.ctx.energies[i] : 0.0u"K"
     if is_deletion
         contrib = -contrib
         ediff = -ediff
@@ -484,9 +484,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 end
                 if move === :swap_deletion
                     after = -after
-                    before = MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", isdefined_ewald(mc) ? mc.ewald.ctx.energies[idx[1]] : 0.0u"K")
-                elseif move === :swap_insertion
                     before = MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", isdefined_ewald(mc) ? -mc.ewald.ctx.energies[idx[1]] : 0.0u"K")
+                elseif move === :swap_insertion
+                    before = MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", isdefined_ewald(mc) ? mc.ewald.ctx.energies[idx[1]] : 0.0u"K")
                 end
             else
                 before, after = combined_movement_energy(mc, idx, newpos)
