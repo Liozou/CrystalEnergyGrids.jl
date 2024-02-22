@@ -537,6 +537,8 @@ function EwaldContext(eframework::EwaldFramework, systems, emptysystems=())
     return EwaldContext(eframework, Eiks, atoms, speciesof, indexof, numspecies, Ref(static_contribution), allcharges, energies, energy_net_charges)
 end
 
+isdefined_ewald(ctx::EwaldContext) = !iszero(ctx.eframework.α)
+
 """
     compute_ewald(eframework::EwaldFramework, systems, skipcontribution=0)
     compute_ewald(ctx::EwaldContext, skipcontribution=0)
@@ -548,7 +550,7 @@ If `skipcontribution` is set to `ij`, the contributions of the charges of the `i
 are not taken into account.
 """
 function compute_ewald(ctx::EwaldContext, skipcontribution=0)
-    iszero(ctx.eframework.α) && return 0.0u"K"
+    isdefined_ewald(ctx) || return 0.0u"K"
     newcharges::Vector{ComplexF64} = get!(task_local_storage(), :CEG_buffer_ewald_context) do
         Vector{ComplexF64}(undef, ctx.eframework.kspace.num_kvecs)
     end
@@ -592,8 +594,10 @@ function IncrementalEwaldContext(ctx::EwaldContext)
     Eiky = ElasticMatrix{ComplexF64}(undef, tkyp, 1)
     Eikz = ElasticMatrix{ComplexF64}(undef, tkzp, 1)
     tmpsums = Vector{ComplexF64}(undef, m)
-    IncrementalEwaldContext(ctx, ElasticMatrix{ComplexF64}(undef, m, (m!=0)*(n+1)), (Eikx, Eiky, Eikz), tmpsums, Ref(-!iszero(ctx.eframework.α)))
+    IncrementalEwaldContext(ctx, ElasticMatrix{ComplexF64}(undef, m, (m!=0)*(n+1)), (Eikx, Eiky, Eikz), tmpsums, Ref(-isdefined_ewald(ctx)))
 end
+
+isdefined_ewald(ewald::IncrementalEwaldContext) = isdefined_ewald(ewald.ctx)
 
 """
     compute_ewald(ewald::IncrementalEwaldContext)
@@ -606,7 +610,7 @@ See [`compute_ewald(ctx::EwaldContext)`](@ref).
     same input.
 """
 function compute_ewald(ewald::IncrementalEwaldContext)
-    iszero(ewald.ctx.eframework.α) && return 0.0u"K"
+    isdefined_ewald(ewald) || return 0.0u"K"
     ewald_main_loop!(ewald.sums, ewald.ctx, ewald.ctx.eframework.kspace, 0)
     framework_adsorbate = 0.0
     adsorbate_adsorbate = 0.0
@@ -631,7 +635,7 @@ end
 
 function update_sums!(sums, ewald::IncrementalEwaldContext, ij::Int, (Eikx, Eiky, Eikz), signal)
     sums .= zero(ComplexF64)
-    charges = ewald.ctx.charges[ewald.ctx.speciesof[ij]]
+    charges = ewald.ctx.charges[ij < 0 ? -ij : ewald.ctx.speciesof[ij]]
     kindices = ewald.ctx.eframework.kspace.kindices
     _, ky, kz = ewald.ctx.eframework.kspace.ks
     for (chargecounter, c) in enumerate(charges)
@@ -662,6 +666,9 @@ is the reciprocal Ewald sum energy difference between species `ij` at positions 
 If `positions == nothing`, use the position for the species currently stored in `ewald`
 (note that this particular computation is substantially faster).
 
+If `ij < 0`, compute the contribution of a new species of kind `-ij` at the given
+`positions` (which cannot be `nothing`) to the reciprocal Ewald sum.
+
 !!! info
     This function can only be called if `compute_ewald(ewald)` has been called prior.
     Otherwise it will error.
@@ -688,7 +695,7 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
                                    tmpEiks::NTuple{3,<:AbstractMatrix{ComplexF64}}=ewald.tmpEiks,
                                    tmpsums::AbstractVector{ComplexF64}=ewald.tmpsums
                                   )
-    iszero(ewald.ctx.eframework.α) && return 0.0u"K"
+    isdefined_ewald(ewald) || return 0.0u"K"
     ewald.last[] == -1 && error("Please call `compute_ewald(ewald)` before calling `single_contribution_ewald(ewald, ...)`")
     if positions isa Nothing
         contribution = @view ewald.sums[:,ij+1]
@@ -700,14 +707,18 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
         resize!(Eikx, kxp, m); resize!(Eiky, tkyp, m); resize!(Eikz, tkzp, m)
         move_one_system!(tmpEiks, ewald.ctx, nothing, positions) # this only modifies tmpEiks, not ewald
         contribution = tmpsums
-        update_sums!(contribution, ewald, ij, tmpEiks, (tmpEiks===ewald.tmpEiks) & (tmpsums===ewald.tmpsums))
+        update_sums!(contribution, ewald, ij, tmpEiks, (ij > 0) & (tmpEiks===ewald.tmpEiks) & (tmpsums===ewald.tmpsums))
     end
 
     rest_single = 0.0
     single_single = 0.0
     @inbounds for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
         rest = ewald.ctx.eframework.StoreRigidChargeFramework[idxkvec]
-        rest += ewald.sums[idxkvec,1] - ewald.sums[idxkvec,ij+1]
+        if ij < 0
+            rest += ewald.sums[idxkvec,1]
+        else
+            rest += ewald.sums[idxkvec,1] - ewald.sums[idxkvec,ij+1]
+        end
         _re_f, _im_f = reim(rest)
         _re_a, _im_a = reim(contribution[idxkvec])
         temp = ewald.ctx.eframework.kfactors[idxkvec]
@@ -755,7 +766,7 @@ function add_one_system!(ewald::IncrementalEwaldContext, i::Int, positions)
         resize!(Eikx, kxp, m); resize!(Eiky, tkyp, m); resize!(Eikz, tkzp, m)
         newsums = @view(ewald.sums[:,b+1])
         update_sums!(newsums, ewald, ij, (Eikx, Eiky, Eikz), false)
-        ewald.sums[:,1] .+= newsums
+        @views ewald.sums[:,1] .+= newsums
         ewald.last[] = 0 # system is still initialized but tmpEiks were modified
     end
     return ij
@@ -768,9 +779,9 @@ function remove_one_system!(ewald::IncrementalEwaldContext, ij::Int)
     a, b = size(ewald.sums)
     if initialized
         ijp1 = ij + 1
-        ewald.sums[:,1] .-= ewald.sums[:,ijp1]
+        @views ewald.sums[:,1] .-= ewald.sums[:,ijp1]
         if ijp1 != b
-            ewald.sums[:,ijp1] .= ewald.sums[:,b]
+            ewald.sums[:,ijp1] .= @view ewald.sums[:,b]
         end
         ewald.last[] = 0 # system is still initialized
     end

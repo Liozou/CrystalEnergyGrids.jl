@@ -243,10 +243,12 @@ Choose an MC move for the molecule at positions given by `pos` and return a pair
 translations for instance).
 """
 function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
-                        pos::AbstractVector{SVector{3,TÅ}}, randomdmax::TÅ, i::Int, ffidxi)
-    r = rand(mc.rng)
-    movekind = mc.mcmoves[i](r)
+                        pos::AbstractVector{SVector{3,TÅ}}, randomdmax::TÅ, i::Int, ffidxi,
+                        movekind=mc.mcmoves[i](rand(mc.rng)))
     attempt!(statistics, movekind)
+    if movekind === :swap
+        movekind = ifelse(rand(mc.rng, Bool), :swap_deletion, :swap_insertion)
+    end
     speciesblock = mc.speciesblocks[i]
     for _ in 1:100
         newpos = if movekind === :translation
@@ -257,8 +259,10 @@ function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
             random_translation(mc.rng, pos, randomdmax)
         elseif movekind === :random_rotation
             random_rotation(mc.rng, pos, 180u"°", mc.bead[i])
-        elseif movekind === :random_reinsertion
+        elseif movekind === :random_reinsertion || movekind === :swap_insertion
             random_rotation(mc.rng, random_translation(mc.rng, pos, randomdmax), 180u"°", mc.bead[i])
+        elseif movekind === :swap_deletion
+            return Vector(pos), :swap_deletion, false
         else
             error(lazy"Unknown move kind: $movekind")
         end
@@ -266,12 +270,69 @@ function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
             return newpos, movekind, false
         end
     end
-    @warn "Trapped species did not manage to move out of a blocked situation. This could be caused by an impossible initial configuration."
-    return pos, movekind, true # signal that the move was blocked
+    movekind === :swap_insertion || @warn "Trapped species did not manage to move out of a blocked situation. This could be caused by an impossible initial configuration."
+    return Vector(pos), movekind, true # signal that the move was blocked
 end
 
 
-function print_report(simulation::SimulationSetup, time_begin, time_end, statistics)
+function try_swap!(mc::MonteCarloSetup, i::Int, statistics::MoveStatistics, randomdmax, temperature, energy)
+    ffidxi = mc.step.ffidx[i]
+    pos, move, blocked = choose_newpos!(statistics, mc, mc.models[i], randomdmax, i, ffidxi, :swap)
+    blocked && return energy # insertion failed due to blocking spheres
+
+    is_deletion = move === :swap_deletion
+    j = 0
+    posidxi = mc.step.posidx[i]
+    newpos = if is_deletion
+        isempty(posidxi) && return energy # deletion failed because there is no molecule to delete
+        j = rand(1:length(posidxi))
+        molpos = posidxi[j]
+        mc.step.positions[molpos]
+    else
+        j = length(posidxi) + 1
+        pos
+    end
+    idx = (i, j)
+
+    contrib = movement_energy(mc, idx, newpos)
+    ediff = isdefined_ewald(mc) ? -mc.ewald.ctx.energies[i] : 0.0u"K"
+    if is_deletion
+        contrib = -contrib
+        ediff = -ediff
+    end
+
+    return first(handle_acceptation(mc, (i,j), MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", ediff), contrib, temperature, newpos, move, statistics, nothing, energy))
+end
+
+function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature, oldpos, move::Symbol, statistics::MoveStatistics, running_update, energy)
+    accepted = compute_accept_move(before, after, temperature, move, mc)
+    if accepted
+        parallel = !(running_update isa Nothing) && mc.step.parallel
+        isswap = (move === :swap_deletion) | (move === :swap_insertion)
+        if parallel && !isswap
+            # swap moves need to be updated before choosing the next idx
+            # do not use newpos since it can be changed in the next iteration before the Task is run
+            running_update = @spawn update_mc!($mc, $idx, $oldpos, $move)
+        else
+            update_mc!(mc, idx, oldpos, move)
+        end
+        diff = after - before
+        accept!(statistics, ifelse(isswap, :swap, move))
+        if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
+            parallel && wait(running_update)
+            baseline_energy(mc) # to avoid underflows
+        elseif isswap # update the tail correction as well
+            modify_species!(mc.tailcorrection, idx[1], ifelse(move === :swap_deletion, -1, 1))
+            BaselineEnergyReport(energy.er + diff, mc.tailcorrection[])
+        else
+            energy + diff
+        end
+    else
+        energy
+    end, accepted, running_update
+end
+
+function print_report(simulation::SimulationSetup, time_begin, time_end, statistics::MoveStatistics)
     open(joinpath(simulation.outdir, "report.txt"), "a") do io
         if position(io) > 0
             println(io, "\n\n\n### NEW REPORT STARTING HERE ###\n")
@@ -360,6 +421,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         push!(initial_energies, energy)
     end
 
+    # swap handling
+    has_swap = [i for (i, mcmoves) in enumerate(mc.mcmoves) if mcmoves[:swap] > 0]
+
     # idle initialisations
     running_update = @spawn nothing
     local oldpos::Vector{SVector{3,TÅ}}
@@ -370,8 +434,17 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
         temperature = simu.temperatures[counter_cycle]
 
+        for i_swap in has_swap
+            accepted && parallel && wait(running_update)
+            for _ in 1:4
+                energy = try_swap!(mc, i_swap, statistics, randomdmax, temperature, energy)
+            end
+        end
+
         numsteps = max(20, length(mc.revflatidx))
         for idx_step in 1:numsteps
+            isempty(mc.revflatidx) && break
+
             # choose the species on which to attempt a move
             idx = choose_random_species(mc)
             ffidxi = mc.step.ffidx[idx[1]]
@@ -389,61 +462,40 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             # The refused move is still taken into account in the statistics.
             blocked && continue
 
+            isswap = move === :swap_insertion || move === :swap_deletion
+            if move === :swap_insertion
+                idx = (idx[1], length(mc.step.posidx[idx[1]]) + 1)
+            end
 
             # if the previous move was accepted, wait for mc to be completely up to date
             # before computing
             accepted && parallel && wait(running_update)
 
-            i, j = idx
-            ij = mc.flatidx[i][j]
 
-            if old_idx == idx
+            # Core computation: energy difference between after and before the move
+            if old_idx == idx || isswap
                 if accepted
                     before = after
                 # else
                 #     before = fetch(before_task) # simply keep its previous value
                 end
-                @spawnif parallel begin
-                    singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
-                    fer = @spawn framework_interactions($mc, $i, $newpos)
-                    singlevdw = single_contribution_vdw(mc.step, idx, newpos)
-                    after = MCEnergyReport(fetch(fer)::FrameworkEnergyReport, singlevdw, fetch(singlereciprocal)::TK)
+                if !(old_idx == idx && ((move === :swap_deletion) & accepted)) # no need to compute it again in that specific case
+                    after = movement_energy(mc, idx, newpos)
+                end
+                if move === :swap_deletion
+                    after = -after
+                    before = MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", isdefined_ewald(mc) ? mc.ewald.ctx.energies[idx[1]] : 0.0u"K")
+                elseif move === :swap_insertion
+                    before = MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", isdefined_ewald(mc) ? -mc.ewald.ctx.energies[idx[1]] : 0.0u"K")
                 end
             else
-                molpos = mc.step.posidx[i][j]
-                positions = @view mc.step.positions[molpos]
-                @spawnif parallel begin
-                    singlevdw_before_task = @spawn single_contribution_vdw($mc.step, $(i,j), $positions)
-                    singlereciprocal_after = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
-                    singlereciprocal_before = @spawn single_contribution_ewald($mc.ewald, $ij, nothing)
-                    fer_before = @spawn framework_interactions($mc, $i, $positions)
-                    fer_after = @spawn framework_interactions($mc, $i, $newpos)
-                    singlevdw_before = fetch(singlevdw_before_task)::TK
-                    singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
-                    before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, singlevdw_before, fetch(singlereciprocal_before)::TK)
-                    after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, fetch(singlevdw_after)::TK, fetch(singlereciprocal_after)::TK)
-                end
+                before, after = combined_movement_energy(mc, idx, newpos)
             end
 
-            old_idx = idx
-            accepted = compute_accept_move(before, after, temperature, mc.rng)
+
             oldpos = newpos
-            if accepted
-                if parallel
-                    # do not use newpos since it can be changed in the next iteration before the Task is run
-                    running_update = @spawn update_mc!($mc, $idx, $oldpos)
-                else
-                    update_mc!(mc, idx, oldpos)
-                end
-                diff = after - before
-                accept!(statistics, move)
-                if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
-                    parallel && wait(running_update)
-                    energy = baseline_energy(mc) # to avoid underflows
-                else
-                    energy += diff
-                end
-            end
+            energy, accepted, running_update = handle_acceptation(mc, idx, before, after, temperature, oldpos, move, statistics, running_update, energy)
+            old_idx = ifelse(accepted & (move === :swap_deletion), 0, idx)
         end
 
         # end of cycle

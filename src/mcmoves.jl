@@ -4,6 +4,7 @@ const mcmovenames = (
     :random_translation,
     :random_rotation,
     :random_reinsertion,
+    :swap,
 )
 
 """
@@ -23,6 +24,9 @@ The possible moves are:
   chosen at random between 0° and 180° along each axis.
 - `:random_reinsertion`: combination of `:random_translation` and `:random_rotation`,
   effectively equivalent to removing the molecule and trying to insert it again somewhere.
+- `:swap`: either deletion of the molecule or insertion of a similar molecule at a random
+  placement in the system. Swap moves will also occur even if there are no molecule of that
+  kind in the system, to allow insertion of molecules from an empty starting point.
 
 An `MCMoves` object can be defined by giving the name of the MC moves and their
 corresponding probabilities as keyword arguments (the probabilities) will be normalized.
@@ -57,9 +61,9 @@ struct MCMoves
 end
 function MCMoves(monoatomic::Bool)
     MCMoves(if monoatomic
-        (0.98, 0.98, 1.0, 1.0) # 98% translation, 2% random translation
+        (0.98, 0.98, 1.0, 1.0, 1.0) # 98% translation, 2% random translation
     else
-        (0.49, 0.98, 0.98, 0.98) # 49% translation, 49% rotation, 2% random reinsertion
+        (0.49, 0.98, 0.98, 0.98, 1.0) # 49% translation, 49% rotation, 2% random reinsertion
     end)
 end
 
@@ -105,11 +109,27 @@ function Base.show(io::IO, m::MCMoves)
     print(io, ')')
 end
 
+# Sample a move at random
 function (m::MCMoves)(r::Float64)
     for (i, c) in enumerate(m.cumulatives)
         r < c && return mcmovenames[i]
     end
     return last(mcmovenames)
+end
+
+@inline function Base.getindex(m::MCMoves, s::Symbol)
+    @inbounds if s === first(mcmovenames)
+        first(m.cumulatives)
+    elseif s === last(mcmovenames)
+        1.0 - last(m.cumulatives)
+    else
+        i = findfirst(==(s), mcmovenames)
+        if i isa Nothing
+            error(lazy"No MC move corresponding to name $s")
+        else
+            m.cumulatives[i] - m.cumulatives[i-1]
+        end
+    end
 end
 
 Base.:(==)(m1::MCMoves, m2::MCMoves) = m1.cumulatives == m2.cumulatives

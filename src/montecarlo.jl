@@ -29,6 +29,7 @@ function Base.show(io::IO, mc::MonteCarloSetup)
     m > 1 && print(io, 's')
 end
 
+isdefined_ewald(mc::MonteCarloSetup) = isdefined_ewald(mc.ewald)
 
 struct EwaldSystem # pseudo-AbstractSystem with only positions and charges
     position::Vector{SVector{3,TÅ}}
@@ -397,6 +398,7 @@ end
 function Base.isapprox(f::FrameworkEnergyReport, x::Number; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
     isapprox(Float64(f), x; atol, rtol)
 end
+Base.:(-)(f::FrameworkEnergyReport) = FrameworkEnergyReport(-f.vdw, -f.direct)
 
 struct MCEnergyReport
     framework::FrameworkEnergyReport
@@ -419,6 +421,7 @@ end
 function Base.isapprox(e::MCEnergyReport, x::Number; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
     isapprox(Float64(e), x; atol, rtol)
 end
+Base.:(-)(e::MCEnergyReport) = MCEnergyReport(-e.framework, -e.inter, -e.reciprocal)
 
 struct BaselineEnergyReport
     er::MCEnergyReport
@@ -514,7 +517,12 @@ Compute the energy contribution of the `j`-th molecule of kind `i` when placed a
 `positions`. If not provided, `positions` is the current position for that molecule.
 
 The energy difference between the new position for the molecule and the current one is
-`movement_energy(mc, (i,j), positions) - movement_energy(mc, (i,j))`.
+`movement_energy(mc, (i,j), positions) - movement_energy(mc, (i,j))`. See also
+[`combined_movement_energy`](@ref) for a slightly more optimized version of that
+computation.
+
+If `j` is a non-attributed molecule number for kind `i`, `positions` must be provided. Note
+that, in that case, the tail correction contribution will not be included.
 
 !!! warning
     `baseline_energy(mc)` must have been called at least once before, otherwise the
@@ -523,29 +531,65 @@ The energy difference between the new position for the molecule and the current 
 """
 function movement_energy(mc::MonteCarloSetup, idx, positions=nothing)
     i, j = idx
-    ij = mc.flatidx[i][j]
+    flatidxi = mc.flatidx[i]
+    ij = j == length(flatidxi) + 1 ? -i : mc.flatidx[i][j]
     poss = if positions isa Nothing
         molpos = mc.step.posidx[i][j]
         @view mc.step.positions[molpos]
     else
         positions
     end
-    singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $ij, $positions)
-    fer = @spawn framework_interactions($mc, $i, $poss)
-    singlevdw = single_contribution_vdw(mc.step, (i,j), poss)
-    MCEnergyReport(fetch(fer), singlevdw, fetch(singlereciprocal))
+    @spawnif mc.step.parallel begin
+        singlereciprocal = @spawn single_contribution_ewald($mc.ewald, $ij, $positions)
+        fer = @spawn framework_interactions($mc, $i, $poss)
+        singlevdw = single_contribution_vdw(mc.step, idx, poss)
+        MCEnergyReport(fetch(fer)::FrameworkEnergyReport, singlevdw, fetch(singlereciprocal)::TK)
+    end
 end
 
 """
-    update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}})
+    combined_movement_energy(mc, idx, newpos)
+
+Equivalent to `(movement_energy(mc, idx, nothing), movement_energy(mc, idx, newpos))` but
+slightly more parallel-efficient.
+
+See also [`movement_energy`](@ref) for more information.
+"""
+function combined_movement_energy(mc, idx, newpos)
+    i, j = idx
+    ij = mc.flatidx[i][j]
+    molpos = mc.step.posidx[i][j]
+    positions = @view mc.step.positions[molpos]
+    @spawnif mc.step.parallel begin
+        singlevdw_before_task = @spawn single_contribution_vdw($mc.step, $(i,j), $positions)
+        singlereciprocal_after = @spawn single_contribution_ewald($mc.ewald, $ij, $newpos)
+        singlereciprocal_before = @spawn single_contribution_ewald($mc.ewald, $ij, nothing)
+        fer_before = @spawn framework_interactions($mc, $i, $positions)
+        fer_after = @spawn framework_interactions($mc, $i, $newpos)
+        singlevdw_before = fetch(singlevdw_before_task)::TK
+        singlevdw_after = single_contribution_vdw(mc.step, (i,j), newpos)
+        before = MCEnergyReport(fetch(fer_before)::FrameworkEnergyReport, singlevdw_before, fetch(singlereciprocal_before)::TK)
+        after = MCEnergyReport(fetch(fer_after)::FrameworkEnergyReport, fetch(singlevdw_after)::TK, fetch(singlereciprocal_after)::TK)
+    end
+    before, after
+end
+
+"""
+    update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}}, [move::Symbol])
 
 Following a call to [`movement_energy(mc, idx, positions)`](@ref), update the internal
 state of `mc` so that the species of index `idx` is now at `positions`.
 """
-function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}})
-    update_ewald_context!(mc.ewald)
-    L = mc.step.posidx[i][j]
-    mc.step.positions[L] .= positions
+function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}}, move::Symbol=:unspecified)
+    if move === :swap_deletion
+        remove_one_system!(mc, i, j)  # TODO: optimize by making mc aware that the energy computation has already been done
+    elseif move === :swap_insertion
+        add_one_system!(mc, i, positions) # TODO: same optimization as for deletion
+    else
+        update_ewald_context!(mc.ewald)
+        L = mc.step.posidx[i][j]
+        mc.step.positions[L] .= positions
+    end
     nothing
 end
 
@@ -591,7 +635,7 @@ function energy_point_mc!(mc::MonteCarloSetup, positions, current, before)
         @label compute_baseline
         molpos = mc.step.posidx[1][j]
         mc.step.positions[molpos] = positions
-        iszero(mc.ewald.ctx.eframework.α) || move_one_system!(mc.ewald.ctx, ij, positions)
+        isdefined_ewald(mc) && move_one_system!(mc.ewald.ctx, ij, positions)
         ret = Number(baseline_energy(mc))
         if ret < Inf*u"K"
             oldpos = @view mc.step.positions[molpos]
@@ -621,12 +665,15 @@ end
 
 
 choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.revflatidx)
-function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T, rng)
+function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T, move::Symbol, mc::MonteCarloSetup)
+    if (move === :swap_insertion) | (move === :swap_deletion)
+        error("swap not implemented yet")
+    end
     b = Float64(before)
     a = Float64(after)
     a < b && return true
     e = exp((b-a)*u"K"/T)
-    return rand(rng) < e
+    return rand(mc.rng) < e
 end
 
 

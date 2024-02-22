@@ -76,8 +76,7 @@ function Base.copy(tc::TailCorrection)
     TailCorrection(Ref(tc.value[]), tc.framework, tc.cross, copy(tc.numspecies))
 end
 
-
-function modify_species!(tc::TailCorrection, i, num)
+function modify_species_dryrun(tc::TailCorrection, i, num)
     diff = tc.framework[i]
     for (j, other) in enumerate(tc.numspecies)
         if j == i
@@ -86,6 +85,11 @@ function modify_species!(tc::TailCorrection, i, num)
             diff += 2other*tc.cross[j,i]
         end
     end
+    diff * num
+end
+
+function modify_species!(tc::TailCorrection, i, num)
+    diffnum = modify_species_dryrun(tc, i, num)
     tc.numspecies[i] += num
-    tc.value[] += diff*num
+    tc.value[] += diffnum
 end
