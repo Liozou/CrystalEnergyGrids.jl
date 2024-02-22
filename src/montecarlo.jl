@@ -455,6 +455,9 @@ for op in (:+, :-)
         function Base.$(op)(b1::BaselineEnergyReport, e2::MCEnergyReport)
             BaselineEnergyReport($op(b1.er, e2), b1.tailcorrection)
         end
+        function Base.$(op)(b1::BaselineEnergyReport, b2::BaselineEnergyReport)
+            BaselineEnergyReport($op(b1.er, b2.er), $op(b1.tailcorrection[], b2.tailcorrection[]))
+        end
     end
 end
 

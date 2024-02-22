@@ -304,6 +304,16 @@ function try_swap!(mc::MonteCarloSetup, i::Int, statistics::MoveStatistics, rand
     return first(handle_acceptation(mc, (i,j), MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", ediff), contrib, temperature, newpos, move, statistics, nothing, energy))
 end
 
+function risk_of_underflow(current::MCEnergyReport, diff::MCEnergyReport)
+    vc = (current.framework.direct, current.framework.vdw, current.inter, current.reciprocal)
+    vd = (diff.framework.direct, diff.framework.vdw, diff.inter, diff.reciprocal)
+    for i in 1:4
+        xc, xd = vc[i], vd[i]
+        abs(xc) + abs(xd) > 1e-15u"K" && isapprox(xc, -xd; rtol=0.01) && return true
+    end
+    return false
+end
+
 function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature, oldpos, move::Symbol, statistics::MoveStatistics, running_update, energy)
     accepted = compute_accept_move(before, after, temperature, move, mc)
     if accepted
@@ -318,9 +328,9 @@ function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature
         end
         diff = after - before
         accept!(statistics, ifelse(isswap, :swap, move))
-        if abs(Float64(diff.framework)) > 1e50 # an atom left a blocked pocket
+        if risk_of_underflow(energy.er, diff)
             parallel && wait(running_update)
-            baseline_energy(mc) # to avoid underflows
+            baseline_energy(mc) # reset computation to avoid underflows
         elseif isswap # update the tail correction as well
             modify_species!(mc.tailcorrection, idx[1], ifelse(move === :swap_deletion, -1, 1))
             BaselineEnergyReport(energy.er + diff, mc.tailcorrection[])
@@ -562,7 +572,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     if !(simu.ninit == 0 && simu.ncycles == 0) # not a single-point computation
         lastenergy = baseline_energy(mc)
         if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
-            @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!"
+            @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!" actual=lastenergy recorded=energy
         end
     end
     parallel && (wait(output_task[]); wait(initial_output_task[]))
