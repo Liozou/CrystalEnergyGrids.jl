@@ -361,32 +361,20 @@ function NanoSystem(mc::MonteCarloSetup, i::Int)
     NanoSystem(position, atomic_symbols)
 end
 
-#=
-function set_position!(mc::MonteCarloSetup, (i, j), newpositions, newEiks=nothing)
-    molpos = mc.step.posidx[i][j]
-    for (k, newpos) in enumerate(newpositions)
-        mc.step.positions[molpos[k]] = if eltype(newpositions) <: AbstractVector{<:AbstractFloat}
-            newpos*u"Å"
-        else
-            newpos
-        end
-    end
+"""
+    move_one_system!(mc::MonteCarloSetup, idx, positions)
 
-    oldEikx, oldEiky, oldEikz = mc.ewald.tmpEiks
-    if newEiks isa Nothing
-        move_one_system!(mc.ewald, mc.offsets[i] + j, newpositions)
-    else
-        newEikx, newEiky, newEikz = newEiks
-        kx, ky, kz = mc.ewald.eframework.kspace.ks
-        kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
-        jofs = 1 + mc.ewald.offsets[mc.offsets[i] + j]
-        copyto!(oldEikx, 1 + jofs*kxp, newEikx, 1, length(newEikx))
-        copyto!(oldEiky, 1 + jofs*tkyp, newEiky, 1, length(newEikx))
-        copyto!(oldEikz, 1 + jofs*tkzp, newEikz, 1, length(newEikx))
+Move the species given by its index `idx` in `mc` to `positions`.
+"""
+function move_one_system!(mc::MonteCarloSetup, idx, positions)
+    if isdefined_ewald(mc) && mc.ewald.last[] != -1
+        i, j = idx
+        flatidxi = mc.flatidx[i]
+        ij = j == length(flatidxi) + 1 ? -i : mc.flatidx[i][j]
+        single_contribution_ewald(mc.ewald, ij, positions)
     end
-    nothing
+    update_mc!(mc, idx, positions)
 end
-=#
 
 struct FrameworkEnergyReport
     vdw::TK
