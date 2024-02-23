@@ -171,7 +171,7 @@ end
 export run_gcmc!
 
 struct GCMCRecorder{T}
-    Ns::Vector{Int}
+    Ns::Vector{Float64}
     subrecord::T
 
     function GCMCRecorder(simu::SimulationSetup{T}) where {T}
@@ -182,7 +182,7 @@ end
 
 function (rec::GCMCRecorder{T})(o, e, k, mc, simu) where T
     if k > 0
-        rec.Ns[k] = length(o.posidx[1])
+        rec.Ns[k] = length(o.posidx[1])/mc.gcmcdata.Π
     end
     if !(T <: Returns{Nothing})
         rec.subrecord(o, e, k, mc, simu)

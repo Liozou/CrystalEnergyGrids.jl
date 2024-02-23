@@ -195,7 +195,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems, emptysystems))
 
-    gcmc = GCMCData(ff, ffidx, speciesblocks, cellvolume)
+    gcmc = GCMCData(ff, ffidx, speciesblocks, eframework.mat)
 
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     ewald, flatidx, revflatidx, tailcorrection, coulomb, grids,

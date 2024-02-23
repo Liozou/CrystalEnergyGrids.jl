@@ -6,11 +6,14 @@ struct GCMCData
     # i.e. the volume of the framework minus that of the blocking spheres
     model::Vector{_TGERG}
     model0::Vector{_TPR}
+    Π::Int # number of unit cells in the supercell
 end
 
 
-function GCMCData(ff::ForceField, ffidx, speciesblocks::Vector{BlockFile}, cellvolume)
+function GCMCData(ff::ForceField, ffidx, speciesblocks::Vector{BlockFile}, unitcell)
     n = length(ffidx)
+    Π = prod(find_supercell(unitcell, ff.cutoff))
+    cellvolume = det(unitcell)*Π
     volumes = Vector{typeof(1.0u"Å^3")}(undef, n)
     model = Vector{_TGERG}(undef, n)
     model0 = Vector{_TPR}(undef, n)
@@ -24,7 +27,7 @@ function GCMCData(ff::ForceField, ffidx, speciesblocks::Vector{BlockFile}, cellv
         model[i] = Clapeyron.GERG2008([gaskey])
         model0[i] = Clapeyron.PR([gaskey])
     end
-    GCMCData(volumes, model, model0)
+    GCMCData(volumes, model, model0, Π)
 end
 
 const GAS_NAMES = Dict{String,String}(
