@@ -141,6 +141,7 @@ function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}}, dmax
     [poss + r for poss in positions]
 end
 function random_rotation(rng, positions::AbstractVector{SVector{3,TÅ}}, θmax, bead, _r=nothing)
+    bead == 0 && return positions
     θ = θmax*(2*rand(rng)-1)
     s, c = sincos(θ)
     r = _r isa Nothing ? rand(rng, 1:3) : _r

@@ -429,10 +429,11 @@ function identify_atom(symb)
 end
 
 """
-    identify_molecule(atomsymbols)
+    identify_molecule(atomsymbols::Union{AbstractVector,Tuple})
+    identify_molecule(system::AbstractSystem)
 
-Given `atomsymbols`, a list of `Symbol`s corresponding to atoms of a molecule, attempts to
-retrieve the name of the molecule.
+Given `atomsymbols`, a list of `Symbol`s corresponding to atoms of a molecule, or `system`
+an `AbstractSystem` obeying `AtomsBase` API, attempts to retrieve the name of the molecule.
 
 Examples:
 ```jldoctest
@@ -443,7 +444,7 @@ julia> CrystalEnergyGris.identify_molecule([:Hw, :O5, :Hz])
 "H2O"
 ```
 """
-function identify_molecule(atomsymbols)
+function identify_molecule(atomsymbols::Union{AbstractVector,Tuple})
     symbs = unique!(sort(atomsymbols))
     atoms = identify_atom.(symbs)
     I = sortperm(atoms)
@@ -474,6 +475,7 @@ function identify_molecule(atomsymbols)
     end
     join(parts)
 end
+identify_molecule(system) = identify_molecule(atomic_symbol(system))
 
 
 function get_atom_name(atom)

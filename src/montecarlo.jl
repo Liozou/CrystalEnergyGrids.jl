@@ -19,6 +19,7 @@ struct MonteCarloSetup{T,Trng}
     models::Vector{Vector{SVector{3,TÅ}}}
     # models[i] is a list of atom positions compatible with a species of kind i
     mcmoves::Vector{MCMoves} # mcmoves[i] is the set of MC moves for kind i
+    gcmcdata::GCMCData
     rng::Trng
 end
 
@@ -123,7 +124,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         restartpositions isa Nothing && splice!(poss[kind′], (i_possk′+1):i_possk′, copy(position(system′)::Vector{SVector{3,TÅ}}) for _ in 1:n′)
     end
 
-    λ = ustrip(u"Å^-3", 2π/det(cell.mat))
+    cellvolume = det(cell.mat)
+    λ = ustrip(u"Å^-3", 2π/cellvolume)
     tailcorrection = TailCorrection(ff, ffidx, num_framework_atoms, λ, length.(poss))
 
     n = length(poss)
@@ -193,9 +195,11 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     ewald = IncrementalEwaldContext(EwaldContext(eframework, ewaldsystems, emptysystems))
 
+    gcmc = GCMCData(ff, ffidx, speciesblocks, cellvolume)
+
     MonteCarloSetup(SimulationStep(ff, charges, poss, trues(length(ffidx)), ffidx, cell; parallel),
                     ewald, flatidx, revflatidx, tailcorrection, coulomb, grids,
-                    speciesblocks, atomblocks, beads, models, newmcmoves, rng), indices
+                    speciesblocks, atomblocks, beads, models, newmcmoves, gcmc, rng), indices
 end
 
 """
@@ -340,7 +344,7 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     ewald, map(copy, mc.flatidx), copy(mc.revflatidx), copy(mc.tailcorrection),
                     mc.coulomb, mc.grids, mc.speciesblocks, mc.atomblocks, mc.bead, mc.models,
-                    mcmoves, rng)
+                    mcmoves, mc.gcmcdata, rng)
 end
 
 
@@ -399,6 +403,7 @@ function Base.isapprox(f::FrameworkEnergyReport, x::Number; atol::Real=0, rtol::
     isapprox(Float64(f), x; atol, rtol)
 end
 Base.:(-)(f::FrameworkEnergyReport) = FrameworkEnergyReport(-f.vdw, -f.direct)
+Base.:(/)(f::FrameworkEnergyReport, n::Int) = FrameworkEnergyReport(f.vdw/n, f.direct/n)
 
 struct MCEnergyReport
     framework::FrameworkEnergyReport
@@ -422,6 +427,7 @@ function Base.isapprox(e::MCEnergyReport, x::Number; atol::Real=0, rtol::Real=(a
     isapprox(Float64(e), x; atol, rtol)
 end
 Base.:(-)(e::MCEnergyReport) = MCEnergyReport(-e.framework, -e.inter, -e.reciprocal)
+Base.:(/)(e::MCEnergyReport, n::Int) = MCEnergyReport(e.framework/n, e.inter/n, e.reciprocal/n)
 
 struct BaselineEnergyReport
     er::MCEnergyReport
@@ -443,6 +449,8 @@ end
 function Base.isapprox(b::BaselineEnergyReport, x::Number; atol::Real=0, rtol::Real=(atol>0 ? 0 : sqrt(eps())))
     isapprox(Float64(b), x; atol, rtol)
 end
+Base.:(-)(b::BaselineEnergyReport) = BaselineEnergyReport(-b.er, -b.tailcorrection)
+Base.:(/)(b::BaselineEnergyReport, n::Int) = BaselineEnergyReport(b.er/n, b.tailcorrection/n)
 
 for op in (:+, :-)
     @eval begin
@@ -456,7 +464,7 @@ for op in (:+, :-)
             BaselineEnergyReport($op(b1.er, e2), b1.tailcorrection)
         end
         function Base.$(op)(b1::BaselineEnergyReport, b2::BaselineEnergyReport)
-            BaselineEnergyReport($op(b1.er, b2.er), $op(b1.tailcorrection[], b2.tailcorrection[]))
+            BaselineEnergyReport($op(b1.er, b2.er), $op(b1.tailcorrection, b2.tailcorrection))
         end
     end
 end
@@ -577,17 +585,20 @@ function combined_movement_energy(mc, idx, newpos)
     before, after
 end
 
+
 """
-    update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}}, [move::Symbol])
+    update_mc!(mc::MonteCarloSetup, idx::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}}, [swapinfo::SwapInformation])
 
 Following a call to [`movement_energy(mc, idx, positions)`](@ref), update the internal
 state of `mc` so that the species of index `idx` is now at `positions`.
 """
-function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}}, move::Symbol=:unspecified)
-    if move === :swap_deletion
-        remove_one_system!(mc, i, j)  # TODO: optimize by making mc aware that the energy computation has already been done
-    elseif move === :swap_insertion
-        add_one_system!(mc, i, positions) # TODO: same optimization as for deletion
+function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vector{SVector{3,TÅ}}, swapinfo::SwapInformation=SwapInformation(0.0u"K", 0, false, false))
+    if swapinfo.isswap
+        if swapinfo.isinsertion
+            add_one_system!(mc, i, positions) # TODO: optimize by making mc aware that the energy computation has already been done
+        else
+            remove_one_system!(mc, i, j) # TODO: same optimization as for insertion
+        end
     else
         update_ewald_context!(mc.ewald)
         L = mc.step.posidx[i][j]
@@ -668,14 +679,14 @@ end
 
 
 choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.revflatidx)
-function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T, move::Symbol, mc::MonteCarloSetup)
-    if (move === :swap_insertion) | (move === :swap_deletion)
-        error("swap not implemented yet")
+function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T, mc::MonteCarloSetup, swapinfo::SwapInformation)
+    b = Number(before)
+    a = Number(after)
+    if swapinfo.isswap
+        return compute_accept_move_swap(a-b, T, mc, swapinfo)
     end
-    b = Float64(before)
-    a = Float64(after)
     a < b && return true
-    e = exp((b-a)*u"K"/T)
+    e = exp((b-a)/T)
     return rand(mc.rng) < e
 end
 
@@ -757,19 +768,18 @@ function remove_one_system!(mc::MonteCarloSetup, i::Int, j::Int)
     resize!(mc.step.atoms, length(mc.step.atoms) - n)
 
     # 2. Ewald
-    if hasewald
-        ewij = mc.flatidx[i][j]
-        oldewij = remove_one_system!(mc.ewald, ewij)
-        oldewi, oldewj = mc.revflatidx[oldewij]
-        mc.flatidx[oldewi][oldewj] = ewij
-        mc.revflatidx[ewij] = (oldewi, oldewj)
-    end
+    ewij = mc.flatidx[i][j]
+    oldewij = hasewald ? remove_one_system!(mc.ewald, ewij) : length(mc.revflatidx)
+    oldewi, oldewj = mc.revflatidx[oldewij]
+    mc.flatidx[oldewi][oldewj] = ewij
+    mc.revflatidx[ewij] = (oldewi, oldewj)
 
     # 3. Swap the j-th and lastj-th molecules and shrink the vectors
     lastj = length(mc.step.posidx[i])
     @assert lastj == length(mc.flatidx[i])
     if j != lastj
-        lastij = mc.flatidx[i][j] = mc.flatidx[i][lastj]
+        lastij = mc.flatidx[i][lastj]
+        mc.flatidx[i][j] = lastij
         mc.revflatidx[lastij] = (i,j)
         mc.step.posidx[i][j] = mc.step.posidx[i][lastj]
         for (k, l) in enumerate(mc.step.posidx[i][j])

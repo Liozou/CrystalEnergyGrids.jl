@@ -7,6 +7,7 @@ using Random: rand, default_rng, TaskLocalRNG, randexp
 
 using StaticArrays
 using AtomsBase
+using Clapeyron: Clapeyron
 
 export EnergyGrid, parse_grid, interpolate_grid
 export CrystalEnergySetup
@@ -36,6 +37,7 @@ include("ewald.jl")
 include("grids.jl")
 include("mcmoves.jl")
 include("tailcorrection.jl")
+include("gcmc.jl")
 include("montecarlo.jl")
 include("hash.jl")
 include("save.jl")

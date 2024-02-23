@@ -145,7 +145,6 @@ end
 Base.fetch(x::ShootingStarMinimizer) = wait(x.lb)
 
 
-
 function reconstitute_trace(path::AbstractString, skip, keep)
     numdirs = length(readdir(path)) - 1
     energies = [deserialize(joinpath(path, string(i), "energies.serial")) for i in 1:numdirs if begin
@@ -164,4 +163,68 @@ function reconstitute_trace(path::AbstractString, skip, keep)
         trace[i] = Float64.(@view energy[start:stop])
     end
     trace
+end
+
+
+## GCMC
+
+export run_gcmc!
+
+struct GCMCRecorder{T}
+    Ns::Vector{Int}
+    subrecord::T
+
+    function GCMCRecorder(simu::SimulationSetup{T}) where {T}
+        new{T}(Int[], simu.record)
+    end
+    GCMCRecorder() = new{Returns{Nothing}}(Int[], Returns(nothing))
+end
+
+function (rec::GCMCRecorder{T})(o, e, k, mc, simu) where T
+    if k > 0
+        rec.Ns[k] = length(o.posidx[1])
+    end
+    if !(T <: Returns{Nothing})
+        rec.subrecord(o, e, k, mc, simu)
+    end
+end
+function initialize_record!(rec::T, simu::SimulationSetup{T}) where {T <: GCMCRecorder}
+    resize!(rec.Ns, simu.ncycles)
+    fill!(rec.Ns, -1)
+    # no need to initialize_record!(rec.subrecord) since that was already done before creating GCMCRecorder
+    nothing
+end
+
+function run_gcmc!(mc::MonteCarloSetup, simu::SimulationSetup)
+    rec = GCMCRecorder(simu)
+    mcmoves1 = mc.mcmoves[1]
+    if iszero(mcmoves1[:swap])
+        newmcmoves1 = MCMoves(mcmoves1.cumulatives.*(2/3)) # make swap probability 1/3
+        mc = MonteCarloSetup(mc; mcmoves=[newmcmoves1; mc.mcmoves[2:end]])
+    end
+    printstyled("Running GCMC on species ", identify_molecule(mc.step.ff.symbols[mc.step.ffidx[1]]), '\n'; color=:green)
+    newsimu = SimulationSetup(simu.temperatures, simu.pressure, simu.ncycles, simu.ninit, simu.outdir, simu.printevery, simu.outtype, rec)
+    ret = run_montecarlo!(mc, newsimu)
+    ret, rec.Ns
+end
+
+function make_isotherm(mc::MonteCarloSetup, simu::SimulationSetup, pressures)
+    n = length(pressures)
+    isotherm = Vector{Float64}(undef, n)
+    energies = Vector{BaselineEnergyReport}(undef, n)
+    @assert allequal(simu.temperatures)
+    @info "The number of cycles is multiplied by 1 + 1e3/sqrt(ustrip(u\"Pa\", pressure))"
+    @threads for i in 1:n
+        newmc = MonteCarloSetup(mc; parallel=false)
+        pressure = pressures[i]
+        P = pressure isa Quantity ? uconvert(u"Pa", pressure) : pressure*u"Pa"
+        ncycles = ceil(Int, simu.ncycles*(1+1e3/sqrt(ustrip(u"Pa", P))))
+        temperatures = fill(simu.temperatures[1], ncycles+simu.ninit)
+        newsimu = SimulationSetup(temperatures, P, ncycles, simu.ninit, simu.outdir, simu.printevery, simu.outtype, simu.record)
+        es, Ns = run_gcmc!(newmc, newsimu)
+        isotherm[i] = mean(Ns)
+        energies[i] = mean(es)
+        println("Finished $pressure Pa")
+    end
+    isotherm, energies
 end

@@ -9,6 +9,8 @@ Definition of the simulation setup, which must provide the following information
   cycle and `n` the total number of cycles, and return a temperature (in K).
   Internally, the list of temperatures is stored as a field `temperatures` indexed by `j`,
   which varies between `1` and `n`.
+- `pressure` the pressure (in Pa). Only used for GCMC, for which the Monte-Carlo moves must
+  include a non-zero swap probability.
 - `ncycles` the number of cycles of the simulation. Each cycle consists in `N` steps, where
   a step is a Monte-Carlo movement attempt on a random species, and `N` is the number of
   species.
@@ -63,6 +65,7 @@ of `mc.step` which is thread-safe to read and modify (except for the `ff`, `char
 If the `record` function is guaranteed to only ever read or modify the `positions` and
 `atoms` fields of `o`, then it can specify it by defining a method for
 `needcomplete(::Trecord)` that returns `false` (the default is `true`).
+If it reads any other fields, like `posidx`, no `needcomplete` method should be defined.
 
 !!! warning
     If the value returned by `needcomplete` is `false` when it should be `true`, this may
@@ -120,6 +123,7 @@ temperatures, no trajectory stored but a record the average weighted distance to
 """
 Base.@kwdef struct SimulationSetup{Trecord}
     temperatures::Vector{TK}
+    pressure::typeof(1.0u"Pa")=-Inf*u"Pa"
     ncycles::Int
     ninit::Int=0
     outdir::String=""
@@ -127,7 +131,7 @@ Base.@kwdef struct SimulationSetup{Trecord}
     outtype::Vector{Symbol}=[:energies, :zst]
     record::Trecord=Returns(nothing)
 
-    function SimulationSetup(T, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
+    function SimulationSetup(T, P::Unitful.Pressure, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
         @assert ncycles ≥ 0 && ninit ≥ 0
         n = ncycles + ninit
         temperatures = if T isa Number
@@ -141,12 +145,15 @@ Base.@kwdef struct SimulationSetup{Trecord}
         union!(known_outtype, [Symbol(:initial_, x) for x in known_outtype])
         unknown_outtype = setdiff(outtype, known_outtype)
         isempty(unknown_outtype) || error(lazy"Unknown outtype: $(join(unknown_outtype, \", \", \" and \"))")
-        ret = new{typeof(record)}(temperatures, ncycles, ninit, outdir, printevery, outtype, record)
+        ret = new{typeof(record)}(temperatures, P, ncycles, ninit, outdir, printevery, outtype, record)
         initialize_record!(record, ret)
         ret
     end
 end
-function SimulationSetup(T, ncycles; kwargs...)
+function SimulationSetup(T, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
+    SimulationSetup(T, -Inf*u"Pa", ncycles, ninit, outdir, printevery, outtype, record)
+end
+function SimulationSetup(T, ncycles::Integer; kwargs...)
     SimulationSetup(; temperatures=T, ncycles, kwargs...)
 end
 
@@ -266,7 +273,16 @@ function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
         else
             error(lazy"Unknown move kind: $movekind")
         end
-        if !inblockpocket(speciesblock, mc.atomblocks, ffidxi, newpos)
+        blocked = inblockpocket(speciesblock, mc.atomblocks, ffidxi, newpos)
+        if movekind === :swap_insertion
+            # to be consistent with the excluded volume, only refuse insertion where the
+            # bead is in the species blockpocket
+            bead = mc.bead[i]
+            bead += bead==0
+            if !speciesblock[newpos[bead]]
+                return newpos, movekind, blocked
+            end
+        elseif !blocked
             return newpos, movekind, false
         end
     end
@@ -275,33 +291,35 @@ function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
 end
 
 
-function try_swap!(mc::MonteCarloSetup, i::Int, statistics::MoveStatistics, randomdmax, temperature, energy)
+function try_swap!(mc::MonteCarloSetup, i::Int, statistics::MoveStatistics, randomdmax, temperature, energy, φPV_div_k::TK)
     ffidxi = mc.step.ffidx[i]
     pos, move, blocked = choose_newpos!(statistics, mc, mc.models[i], randomdmax, i, ffidxi, :swap)
     blocked && return energy # insertion failed due to blocking spheres
 
-    is_deletion = move === :swap_deletion
+    isinsertion = move === :swap_insertion
     j = 0
     posidxi = mc.step.posidx[i]
-    newpos = if is_deletion
+    newpos = if isinsertion
+        j = length(posidxi) + 1
+        pos
+    else
         isempty(posidxi) && return energy # deletion failed because there is no molecule to delete
         j = rand(1:length(posidxi))
         molpos = posidxi[j]
         mc.step.positions[molpos]
-    else
-        j = length(posidxi) + 1
-        pos
     end
     idx = (i, j)
 
     contrib = movement_energy(mc, idx, newpos)
     ediff = isdefined_ewald(mc) ? mc.ewald.ctx.energies[i] : 0.0u"K"
-    if is_deletion
+    if !isinsertion
         contrib = -contrib
         ediff = -ediff
     end
 
-    return first(handle_acceptation(mc, (i,j), MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", ediff), contrib, temperature, newpos, move, statistics, nothing, energy))
+    swapinfo = SwapInformation(φPV_div_k, i, true, isinsertion)
+
+    return first(handle_acceptation(mc, (i,j), MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", ediff), contrib, temperature, newpos, move, statistics, nothing, energy, swapinfo))
 end
 
 function risk_of_underflow(current::MCEnergyReport, diff::MCEnergyReport)
@@ -325,20 +343,18 @@ function underflow_averted_warning(energy::MCEnergyReport, newenergy::MCEnergyRe
     return false
 end
 
-function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature, oldpos, move::Symbol, statistics::MoveStatistics, running_update, energy)
-    accepted = compute_accept_move(before, after, temperature, move, mc)
+function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature, oldpos, move::Symbol, statistics::MoveStatistics, running_update, energy, swapinfo::SwapInformation)
+    accepted = compute_accept_move(before, after, temperature, mc, swapinfo)
     if accepted
         parallel = !(running_update isa Nothing) && mc.step.parallel
-        isswap = (move === :swap_deletion) | (move === :swap_insertion)
-        if parallel && !isswap
-            # swap moves need to be updated before choosing the next idx
+        if parallel && !swapinfo.isswap # swap moves need to be updated before choosing the next idx
             # do not use newpos since it can be changed in the next iteration before the Task is run
-            running_update = @spawn update_mc!($mc, $idx, $oldpos, $move)
+            running_update = @spawn update_mc!($mc, $idx, $oldpos, $swapinfo)
         else
-            update_mc!(mc, idx, oldpos, move)
+            update_mc!(mc, idx, oldpos, swapinfo)
         end
         diff = after - before
-        accept!(statistics, ifelse(isswap, :swap, move))
+        accept!(statistics, ifelse(swapinfo.isswap, :swap, move))
         if risk_of_underflow(energy.er, diff)
             parallel && wait(running_update)
             newenergy = baseline_energy(mc) # reset computation to avoid underflows
@@ -346,8 +362,8 @@ function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature
                 @error "Underflow mitigation stems from incorrect energy computation:" energy diff newenergy
             end
             newenergy
-        elseif isswap # update the tail correction as well
-            modify_species!(mc.tailcorrection, idx[1], ifelse(move === :swap_deletion, -1, 1))
+        elseif swapinfo.isswap # update the tail correction as well
+            modify_species!(mc.tailcorrection, idx[1], ifelse(swapinfo.isinsertion, 1, -1))
             BaselineEnergyReport(energy.er + diff, mc.tailcorrection[])
         else
             energy + diff
@@ -446,8 +462,21 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         push!(initial_energies, energy)
     end
 
-    # swap handling
+    # GCMC handling
     has_swap = [i for (i, mcmoves) in enumerate(mc.mcmoves) if mcmoves[:swap] > 0]
+    if !isempty(has_swap)
+        allequal(simu.temperatures) || error("Cannot currently run GCMC with variation of temperature")
+        simu.pressure == -Inf*u"Pa" && error("Cannot perform GCMC with unspecified pressure")
+    end
+    φPV_div_k = Vector{typeof(1.0u"K")}(undef, length(mc.mcmoves))
+    for i_swap in has_swap
+        T0 = first(simu.temperatures)
+        P = simu.pressure
+        φ = only(Clapeyron.fugacity_coefficient(mc.gcmcdata.model[i_swap], P, T0; phase=:stable, vol0=Clapeyron.volume(mc.gcmcdata.model0[i_swap], P, T0)))
+        isnan(φ) && error("Specified gas not in gas form at the required temperature ($T0) and pressure ($P)!")
+        PV_div_k = uconvert(u"K", P*mc.gcmcdata.volumes[i_swap]/u"k")
+        φPV_div_k[i_swap] = φ*PV_div_k
+    end
 
     # idle initialisations
     running_update = @spawn nothing
@@ -462,7 +491,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         for i_swap in has_swap
             accepted && parallel && wait(running_update)
             for _ in 1:4
-                energy = try_swap!(mc, i_swap, statistics, randomdmax, temperature, energy)
+                energy = try_swap!(mc, i_swap, statistics, randomdmax, temperature, energy, φPV_div_k[i_swap])
             end
             old_idx = (0,0)
         end
@@ -518,9 +547,10 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 before, after = combined_movement_energy(mc, idx, newpos)
             end
 
+            swapinfo = SwapInformation(φPV_div_k[idx[1]], idx[1], isswap, move === :swap_insertion)
 
             oldpos = newpos
-            energy, accepted, running_update = handle_acceptation(mc, idx, before, after, temperature, oldpos, move, statistics, running_update, energy)
+            energy, accepted, running_update = handle_acceptation(mc, idx, before, after, temperature, oldpos, move, statistics, running_update, energy, swapinfo)
             old_idx = ifelse(accepted & (move === :swap_deletion), 0, idx)
         end
 
