@@ -319,7 +319,9 @@ function try_swap!(mc::MonteCarloSetup, i::Int, statistics::MoveStatistics, rand
 
     swapinfo = SwapInformation(φPV_div_k, i, true, isinsertion)
 
-    return first(handle_acceptation(mc, (i,j), MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", ediff), contrib, temperature, newpos, move, statistics, nothing, energy, swapinfo))
+    newenergy = first(handle_acceptation(mc, (i,j), MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", ediff), contrib, temperature, newpos, move, statistics, nothing, energy, swapinfo))
+
+    return newenergy
 end
 
 function risk_of_underflow(current::MCEnergyReport, diff::MCEnergyReport)
@@ -338,7 +340,7 @@ function underflow_averted_warning(energy::MCEnergyReport, newenergy::MCEnergyRe
     vd = (diff.framework.direct, diff.framework.vdw, diff.inter, diff.reciprocal)
     for i in 1:4
         xe, xn, xd = ve[i], vn[i], vd[i]
-        !isapprox(xe + xd, xn; rtol=1e-8) && !isapprox(xn - xd, xe; rtol=1e-8) && ((@show i, xe, xn, xd); return true)
+        abs(xe) + abs(xn) > 1e-15u"K" && !isapprox(xe + xd, xn; rtol=1e-8) && !isapprox(xn - xd, xe; rtol=1e-8) && (#=(@show i, xe, xn, xd);=# return true)
     end
     return false
 end
@@ -551,7 +553,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
             oldpos = newpos
             energy, accepted, running_update = handle_acceptation(mc, idx, before, after, temperature, oldpos, move, statistics, running_update, energy, swapinfo)
-            old_idx = ifelse(accepted & (move === :swap_deletion), 0, idx)
+            old_idx = ifelse(move === :swap_deletion, 0, idx)
         end
 
         # end of cycle
