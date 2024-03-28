@@ -286,7 +286,28 @@ function output_density(path, density, mat; mode=:vtf, factor=1000)
     end
 end
 
-function output_cif(path, step::SimulationStep)
+struct MismatchedUnitCells <: Exception
+    c1::SMatrix{3,3,TÅ,9}
+    c2::SMatrix{3,3,TÅ,9}
+end
+function Base.show(io::IO, e::MismatchedUnitCells)
+    print(io, "Cannot jointly export cif of a simulation step and a framework with different unit cells: ", ustrip.(u"Å", e.c1), " ≠ ", ustrip.(u"Å", e.c2))
+end
+
+"""
+    output_cif(path, step::SimulationStep[, framework])
+
+Output `step` as a CIF file at the given `path`.
+
+Only the content of the `SimulationStep` is exported, not the underlying framework.
+The optional argument `framework` can be set to an `AtomsBase`-compliant system to export
+its content along that of the `step`.
+"""
+function output_cif(path, step::SimulationStep, framework=RASPASystem(SA[SA[0.,0.,0.]u"Å",SA[0.,0.,0.]u"Å",SA[0.,0.,0.]u"Å"],SVector{3,TÅ}[],Symbol[],Int[],typeof(1.0u"u")[],Te_au[],false))
+    if !all(iszero, bounding_box(framework))
+        step.mat ≈ stack(bounding_box(framework)) || throw(MismatchedUnitCells(step.mat, SMatrix{3,3,TÅ,9}(stack(bounding_box(framework)))))
+    end
+
     name = basename(path)
     if splitext(path)[2] != ".cif"
         path = path*".cif"
@@ -297,14 +318,15 @@ function output_cif(path, step::SimulationStep)
     for (s, idx) in step.ff.sdict
         names[idx] = s
     end
-    invmat = inv(NoUnits.(step.mat./u"Å"))
+    invmat = inv(ustrip.(u"Å", step.mat))
+
 
     open(path, "w") do io
         println(io, "data_", name)
         println(io)
         lengths, angles = cell_parameters(step.mat)
         for (symb, val) in zip((:a, :b, :c), lengths)
-            @printf io "_cell_length_%s   %.8g\n" symb NoUnits(val/u"Å")
+            @printf io "_cell_length_%s   %.8g\n" symb ustrip(u"Å", val)
         end
         for (symb, val) in zip((:alpha, :beta, :gamma), angles)
             @printf io "_cell_angle_%s   %.8g\n" symb val
@@ -313,7 +335,7 @@ function output_cif(path, step::SimulationStep)
         _symmetry_space_group_name_H-M	'P 1'
         _symmetry_Int_Tables_number	1
         _symmetry_cell_setting	triclinic
-        
+
         loop_
         _symmetry_equiv_pos_as_xyz
         x,y,z
@@ -326,6 +348,12 @@ function output_cif(path, step::SimulationStep)
         _atom_site_fract_z
         """)
         counter = 0
+        for (ppos, name, num) in zip(position(framework), atomic_symbol(framework), atomic_number(framework))
+            counter += 1
+            pos = invmat*ustrip.(u"Å", ppos)
+            pos -= floor.(pos)
+            @printf io "%s\t%s\t%12g\t%12g\t%12g\n" name ATOMS_PER_NUM[num] pos[1] pos[2] pos[3]
+        end
         for (i, posidxi) in enumerate(step.posidx)
             ffidxi = step.ffidx[i]
             for (j, posidxij) in enumerate(posidxi), (k, l) in enumerate(posidxij)
@@ -333,7 +361,7 @@ function output_cif(path, step::SimulationStep)
                 step.atoms[l] == (i,j,k) || continue
                 ix = ffidxi[k]
                 name = names[ix]
-                pos = invmat*NoUnits.(step.positions[l] ./ u"Å")
+                pos = invmat*ustrip.(u"Å", step.positions[l])
                 pos -= floor.(pos)
                 symb = step.ff.symbols[ix]
                 @printf io "%s_%i\t%s\t%12g\t%12g\t%12g\n" name counter symb pos[1] pos[2] pos[3]
