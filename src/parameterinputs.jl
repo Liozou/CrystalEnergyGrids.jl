@@ -102,16 +102,18 @@ end
 
 
 struct ShootingStarMinimizer{T} <: RecordFunction
+    temperature::TK
     every::Int
     length::Int
     positions::Vector{SimulationStep{T}}
     energies::Vector{BaselineEnergyReport}
+    ninit::Int
     outdir::String
     printevery::Int
     outtype::Vector{Symbol}
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}
 end
-function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, outtype::AbstractVector{Symbol}=[:energies, :zst])
+function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000)
     T = typeof_psystem(Val(3))
     positions = Vector{SimulationStep{T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
@@ -122,7 +124,7 @@ function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", print
             energies[ik] = newsimu.record.mine
         end
     end
-    ShootingStarMinimizer(every, length, positions, energies, outdir, printevery, outtype, lb)
+    ShootingStarMinimizer(temperature, every, length, positions, energies, ninit, outdir, printevery, outtype, lb)
 end
 function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
     n = simu.ncycles ÷ star.every
@@ -137,7 +139,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     newmc = MonteCarloSetup(mc, o; parallel=false, mcmoves=fill(MCMoves(; translation=1), length(mc.mcmoves)))
     recordminimum = RMinimumEnergy(e, o)
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
-    newsimu = SimulationSetup(300u"K", star.length; outdir, star.printevery, star.outtype, ninit=20_000, record=recordminimum)
+    newsimu = SimulationSetup(star.temperature, star.length; outdir, star.printevery, star.outtype, star.ninit, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end
