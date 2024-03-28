@@ -113,11 +113,11 @@ struct ShootingStarMinimizer{T} <: RecordFunction
     outtype::Vector{Symbol}
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}
 end
-function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000)
+function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads())
     T = typeof_psystem(Val(3))
     positions = Vector{SimulationStep{T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
-    lb = LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}(nthreads()) do (ik, newmc, newsimu), _
+    lb = LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}(numthreads) do (ik, newmc, newsimu), _
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
             run_montecarlo!(newmc, newsimu)
             positions[ik] = newsimu.record.minpos
