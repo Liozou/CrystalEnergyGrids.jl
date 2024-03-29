@@ -87,31 +87,24 @@ end
 
 macro write_no_unit(x)
     return esc(quote
-        write(f, NoUnits(($x)[1]/u"Å"), NoUnits(($x)[2]/u"Å"), NoUnits(($x)[3]/u"Å"))
+        write(io, NoUnits(($x)[1]/u"Å"), NoUnits(($x)[2]/u"Å"), NoUnits(($x)[3]/u"Å"))
     end)
 end
 
-function _create_grid_common(file, framework::AbstractSystem{3}, spacing::TÅ, cutoff::TÅ)
-    # isfile(file) && error(lazy"File $file already exists, please remove it if you want to overwrite it.")
-
+function _setup_grid_common(framework::AbstractSystem{3}, spacing::TÅ, cutoff::TÅ)
     csetup = GridCoordinatesSetup(framework, spacing)
     num_unitcell = Cint.(find_supercell(framework, cutoff))
+    csetup, num_unitcell
+end
 
-    # @printf "ShiftGrid: %g %g %g\n" shift[1] shift[2] shift[3]
-    # @printf "SizeGrid: %g %g %g\n" size[1] size[2] size[3]
-    # @printf "Number of grid points: %d %d %d\n" dims[1] dims[2] dims[3]
-
-    open(file, "w") do f
-        write(f, Cdouble(NoUnits(spacing/u"Å")))
-        write(f, csetup.dims[1], csetup.dims[2], csetup.dims[3])
-        @write_no_unit csetup.size
-        @write_no_unit csetup.shift
-        @write_no_unit csetup.Δ
-        @write_no_unit csetup.unitcell
-        write(f, num_unitcell[1], num_unitcell[2], num_unitcell[3])
-    end
-
-    return csetup, num_unitcell
+function _create_grid_common(io::IO, csetup::GridCoordinatesSetup, num_unitcell)
+    write(io, Cdouble(ustrip(u"Å", csetup.spacing)))
+    write(io, csetup.dims[1], csetup.dims[2], csetup.dims[3])
+    @write_no_unit csetup.size
+    @write_no_unit csetup.shift
+    @write_no_unit csetup.Δ
+    @write_no_unit csetup.unitcell
+    write(io, Cint(num_unitcell[1]), Cint(num_unitcell[2]), Cint(num_unitcell[3]))
 end
 
 function _set_gridpoint!(grid, i, j, k, Δ, λ, λ⁻¹e7, derivatives)
@@ -134,7 +127,7 @@ function _set_gridpoint!(grid, i, j, k, Δ, λ, λ⁻¹e7, derivatives)
 end
 
 function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::TÅ, atom::Symbol)
-    cset, num_unitcell = _create_grid_common(file, framework, spacing, forcefield.cutoff)
+    cset, num_unitcell = _setup_grid_common(framework, spacing, forcefield.cutoff)
     grid = Array{Cfloat,4}(undef, cset.dims[3]+1, cset.dims[2]+1, cset.dims[1]+1, 8)
     probe_vdw = ProbeSystem(framework, forcefield, atom)
     Δ = NoUnits.(cset.Δ/u"Å")
@@ -147,7 +140,8 @@ function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceFi
             _set_gridpoint!(grid, i, j, k, Δ, λ, λ⁻¹*1e7, derivatives)
         end
     end
-    open(file, "a") do f
+    open(file, "w") do f
+        _create_grid_common(f, cset, num_unitcell)
         write(f, grid)
         write(f, NoUnits.(cset.cell.mat./u"Å")) # not part of RASPA grids
     end
@@ -155,7 +149,7 @@ function create_grid_vdw(file, framework::AbstractSystem{3}, forcefield::ForceFi
 end
 
 function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::ForceField, spacing::TÅ, _ewald=nothing)
-    cset, num_unitcell = _create_grid_common(file, framework, spacing, 12.0u"Å")
+    cset, num_unitcell = _setup_grid_common(framework, spacing, 12.0u"Å")
     ewald = if _ewald isa EwaldFramework
         _ewald
     else
@@ -173,7 +167,8 @@ function create_grid_coulomb(file, framework::AbstractSystem{3}, forcefield::For
             _set_gridpoint!(grid, i, j, k, Δ, λ, λ⁻¹e7, derivatives)
         end
     end
-    open(file, "a") do f
+    open(file, "w") do f
+        _create_grid_common(f, cset, num_unitcell)
         write(f, ewald.precision)
         write(f, grid)
         write(f, NoUnits.(cset.cell.mat./u"Å")) # not part of RASPA grids
