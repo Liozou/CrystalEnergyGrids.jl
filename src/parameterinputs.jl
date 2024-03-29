@@ -79,21 +79,24 @@ end
 abstract type RecordFunction <: Function end
 
 mutable struct RMinimumEnergy{T} <: RecordFunction
+    mink::Int
     mine::BaselineEnergyReport
     minpos::SimulationStep{T}
 
-    RMinimumEnergy{T}() where {T} = new{T}(BaselineEnergyReport(Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
-    function RMinimumEnergy(mine::BaselineEnergyReport, minpos::SimulationStep{T}) where T
-        new{T}(mine, minpos)
+    RMinimumEnergy{T}() where {T} = new{T}(BaselineEnergyReport(0, Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
+    function RMinimumEnergy(mink::Int, mine::BaselineEnergyReport, minpos::SimulationStep{T}) where T
+        new{T}(mink, mine, minpos)
     end
 end
 function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k::Int,
                                   mc::MonteCarloSetup, simu::SimulationSetup)
     if Float64(e) < Float64(record.mine)
+        record.mink = k
         record.mine = e
         record.minpos = o
     end
     if k == simu.ncycles && !isempty(simu.outdir)
+        open(Base.Fix2(println, record.mink), joinpath(simu.outdir, "min_k"), "w")
         output_pdb(joinpath(simu.outdir, "min_energy.pdb"), mc, record.minpos)
         output_restart(joinpath(simu.outdir, "min_energy.restart"), record.minpos)
     end
@@ -110,10 +113,11 @@ struct ShootingStarMinimizer{T} <: RecordFunction
     ninit::Int
     outdir::String
     printevery::Int
+    printeveryinit::Int
     outtype::Vector{Symbol}
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}
 end
-function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads())
+function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printeveryinit::Integer=0, printevery::Integer=0, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads())
     T = typeof_psystem(Val(3))
     positions = Vector{SimulationStep{T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
@@ -124,7 +128,7 @@ function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", print
             energies[ik] = newsimu.record.mine
         end
     end
-    ShootingStarMinimizer(temperature, every, length, positions, energies, ninit, outdir, printevery, outtype, lb)
+    ShootingStarMinimizer(temperature, every, length, positions, energies, ninit, outdir, printeveryinit, printevery, outtype, lb)
 end
 function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
     n = simu.ncycles ÷ star.every
@@ -137,9 +141,9 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     ik, r = divrem(k, star.every)
     r == 0 || return
     newmc = MonteCarloSetup(mc, o; parallel=false, mcmoves=fill(MCMoves(; translation=1), length(mc.mcmoves)))
-    recordminimum = RMinimumEnergy(e, o)
+    recordminimum = RMinimumEnergy(0, e, o)
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
-    newsimu = SimulationSetup(star.temperature, star.length; outdir, star.printevery, star.outtype, star.ninit, record=recordminimum)
+    newsimu = SimulationSetup(star.temperature, star.length; outdir, star.printevery, star.printeveryinit, star.outtype, star.ninit, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
     nothing
 end
@@ -205,7 +209,7 @@ function run_gcmc!(mc::MonteCarloSetup, simu::SimulationSetup)
         mc = MonteCarloSetup(mc; mcmoves=[newmcmoves1; mc.mcmoves[2:end]])
     end
     printstyled("Running GCMC on species ", identify_molecule(mc.step.ff.symbols[mc.step.ffidx[1]]), '\n'; color=:green)
-    newsimu = SimulationSetup(simu.temperatures, simu.pressure, simu.ncycles, simu.ninit, simu.outdir, simu.printevery, simu.outtype, rec)
+    newsimu = SimulationSetup(simu.temperatures, simu.pressure, simu.ncycles, simu.ninit, simu.outdir, simu.printevery, simu.printeveryinit, simu.outtype, rec)
     ret = run_montecarlo!(mc, newsimu)
     ret, rec.Ns
 end
@@ -222,7 +226,7 @@ function make_isotherm(mc::MonteCarloSetup, simu::SimulationSetup, pressures)
         P = pressure isa Quantity ? uconvert(u"Pa", pressure) : pressure*u"Pa"
         ncycles = ceil(Int, simu.ncycles*(1+1e3/sqrt(ustrip(u"Pa", P))))
         temperatures = fill(simu.temperatures[1], ncycles+simu.ninit)
-        newsimu = SimulationSetup(temperatures, P, ncycles, simu.ninit, simu.outdir, simu.printevery, simu.outtype, simu.record)
+        newsimu = SimulationSetup(temperatures, P, ncycles, simu.ninit, simu.outdir, simu.printevery, simu.printeveryinit, simu.outtype, simu.record)
         es, Ns = run_gcmc!(newmc, newsimu)
         isotherm[i] = mean(Ns)
         energies[i] = mean(es)

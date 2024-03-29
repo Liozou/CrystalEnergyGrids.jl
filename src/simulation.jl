@@ -23,8 +23,10 @@ Definition of the simulation setup, which must provide the following information
 - `printevery`: one output of the positions is stored at the end of every `printevery`
   cycles. The first recorded position is that at the end of initialization. Using a value
   of 0 (the default) will record only that, as well as the last positions if `ncycles != 0`.
-  It is also possible to output positions during the initialization (see `outtype` below):
-  the only difference is that a value of `0` for `printevery` is then equivalent to `1`
+- `printeveryinit`: similar to `printevery` but for the initialization phase.
+  A value of `0` means that no initialization output is produced.
+  The default value is equal to `printevery`, but note that initialization output is not
+  produced unless one of the `initial_*` options in `outtype` hereafter is set.
 - `outtype`: a `Vector{Symbol}` whose elements represent the different outputs that
   should be produced in `outdir`. The elements can be:
   + `:energies` to have the list of energies output as a serialized
@@ -34,8 +36,8 @@ Definition of the simulation setup, which must provide the following information
     in a "steps.stream" file.
   + `:zst` to have the positions of the atoms output as a compressed
     [`StreamSimulationStep`](@ref) in a "steps.zst" file.
-  + `:initial_pdb`, `:initial_stream`, `:initial_zst` to have the corresponding output even
-    during initialization. The corresponding files have an "initial_" prefix.
+  + `:initial_*` where `*` is one of the above to have the corresponding output during
+    initialization. The corresponding files have an "initial_" prefix.
   The default is `[:energies, :zst]`. See [`stream_to_pdb`] to convert a "steps.stream"
   or "steps.zst" file into the corresponding "trajectory.pdb" output.
 - `record::Trecord` a function which can be used to record extra information at the end of
@@ -128,10 +130,11 @@ Base.@kwdef struct SimulationSetup{Trecord}
     ninit::Int=0
     outdir::String=""
     printevery::Int=0
+    printeveryinit::Int=printevery
     outtype::Vector{Symbol}=[:energies, :zst]
     record::Trecord=Returns(nothing)
 
-    function SimulationSetup(T, P::Unitful.Pressure, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
+    function SimulationSetup(T, P::Unitful.Pressure, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, printeveryinit::Int=0, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
         @assert ncycles ≥ 0 && ninit ≥ 0
         n = ncycles + ninit
         temperatures = if T isa Number
@@ -145,13 +148,13 @@ Base.@kwdef struct SimulationSetup{Trecord}
         union!(known_outtype, [Symbol(:initial_, x) for x in known_outtype])
         unknown_outtype = setdiff(outtype, known_outtype)
         isempty(unknown_outtype) || error(lazy"Unknown outtype: $(join(unknown_outtype, \", \", \" and \"))")
-        ret = new{typeof(record)}(temperatures, P, ncycles, ninit, outdir, printevery, outtype, record)
+        ret = new{typeof(record)}(temperatures, P, ncycles, ninit, outdir, printevery, printeveryinit, outtype, record)
         initialize_record!(record, ret)
         ret
     end
 end
-function SimulationSetup(T, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
-    SimulationSetup(T, -Inf*u"Pa", ncycles, ninit, outdir, printevery, outtype, record)
+function SimulationSetup(T, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, printeveryinit::Int=printevery, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
+    SimulationSetup(T, -Inf*u"Pa", ncycles, ninit, outdir, printevery, printeveryinit, outtype, record)
 end
 function SimulationSetup(T, ncycles::Integer; kwargs...)
     SimulationSetup(; temperatures=T, ncycles, kwargs...)
@@ -558,7 +561,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
         # end of cycle
         report_now = (idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))) ||
-                     (idx_cycle < 0 && has_initial_output && (simu.printevery == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0)))
+                     (idx_cycle < 0 && has_initial_output && (simu.printeveryinit > 0 && idx_cycle%simu.printeveryinit == 0))
         if !(simu.record isa Returns) || report_now
             accepted && parallel && wait(running_update)
             if idx_cycle == 0 # start production with a precise energy
