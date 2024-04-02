@@ -83,6 +83,47 @@ end
     stack(x) = reduce(hcat, x)
 end
 
+function make_supercell(s::AbstractSystem{3}, (ΠA, ΠB, ΠC))
+    AtomsBase.boundary_conditions(s) == SA[Periodic(), Periodic(), Periodic()] || error("Cannot make a supercell of a non 3D-periodic system.")
+    Π = ΠA*ΠB*ΠC
+    symbols = atomic_symbol(s)
+    n = length(symbols)
+    for i in 1:n
+        spls = rsplit(String(symbols[i]), '_'; limit=2)
+        if length(spls) == 2 && all(isdigit, spls[2])
+            symbols[i] = Symbol(spls[1])
+        end
+    end
+    refpositions = position(s)
+    @assert length(refpositions) == n
+    newpositions = Vector{SVector{3,TÅ}}(undef, n*Π)
+    newsymbols = Vector{Symbol}(undef, n*Π)
+    A, B, C = bounding_box(s)
+    k = 0
+    for iA in 0:(ΠA-1)
+        vA = iA * A
+        for iB in 0:(ΠB-1)
+            vB = iB * B + vA
+            for iC in 0:(ΠC-1)
+                vC = iC * C + vB
+                for (i, (p, s)) in enumerate(zip(refpositions, symbols))
+                    newpositions[k+i] = p + vC
+                    newsymbols[k+i] = Symbol(s, :_, k+i)
+                end
+                k += n
+            end
+        end
+    end
+    FastSystem(
+        bounding_box(s) .* (ΠA, ΠB, ΠC),
+        (Periodic(), Periodic(), Periodic()),
+        newpositions,
+        newsymbols,
+        repeat(atomic_number(s), Π),
+        repeat(atomic_mass(s), Π),
+    )
+end
+
 # The following are copied from PeriodicGraphEmbeddings.jl
 
 function cell_parameters(mat::AbstractMatrix)
