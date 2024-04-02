@@ -117,7 +117,7 @@ struct ShootingStarMinimizer{T} <: RecordFunction
     outtype::Vector{Symbol}
     lb::LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}
 end
-function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printeveryinit::Integer=0, printevery::Integer=0, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads())
+function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, printeveryinit::Integer=printevery, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads())
     T = typeof_psystem(Val(3))
     positions = Vector{SimulationStep{T}}(undef, 0)
     energies = Vector{BaselineEnergyReport}(undef, 0)
@@ -128,7 +128,7 @@ function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", print
             energies[ik] = newsimu.record.mine
         end
     end
-    ShootingStarMinimizer(temperature, every, length, positions, energies, ninit, outdir, printeveryinit, printevery, outtype, lb)
+    ShootingStarMinimizer(temperature, every, length, positions, energies, ninit, outdir, printevery, printeveryinit, outtype, lb)
 end
 function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
     n = simu.ncycles ÷ star.every

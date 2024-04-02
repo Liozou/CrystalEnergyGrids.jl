@@ -561,7 +561,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
         # end of cycle
         report_now = (idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))) ||
-                     (idx_cycle < 0 && has_initial_output && (simu.printeveryinit > 0 && idx_cycle%simu.printeveryinit == 0))
+                     (idx_cycle < 0 && has_initial_output && simu.printeveryinit > 0 && idx_cycle%simu.printeveryinit == 0)
         if !(simu.record isa Returns) || report_now
             accepted && parallel && wait(running_update)
             if idx_cycle == 0 # start production with a precise energy
