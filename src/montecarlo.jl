@@ -252,6 +252,7 @@ function setup_montecarlo(framework, forcefield_framework::String, systems;
                           supercell=nothing, new=false, restart=nothing, parallel=true,
                           mcmoves=fill(nothing, length(systems)), rng=default_rng(),
                           cutoff=12.0u"Å")
+    framework = endswith(framework, ".cif") ? String(framework[1:prevind(framework, end-3)]) : String(framework)
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     ff = parse_forcefield_RASPA(forcefield_framework; cutoff)
     mat = stack3(bounding_box(syst_framework))

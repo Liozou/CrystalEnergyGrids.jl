@@ -201,16 +201,16 @@ end
 
 
 """
-    average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
+    average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, skip=0, count=typemax(Int))
 
 Given the path to a folder `dir` containing the outputs of a simulation, group atomic
 densities into sites.
 
-See [`bin_trajectory`](@ref) for the meaning of `step` and `symmetries`.
+See [`bin_trajectory`](@ref) for the meaning of `step`, `symmetries`, `skip` and `count`.
 See [`average_clusters`](@ref) for the return type and the meaning of the other arguments.
 """
-function average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
-    bins, counter = bin_trajectory(dir; step, symmetries)
+function average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, skip=0, count=typemax(Int))
+    bins, counter = bin_trajectory(dir; step, symmetries, skip, count)
     mat = mat_from_output(dir)
     average_clusters(bins./counter, dist, mat; smooth, crop, atol, rtol, ntol)
 end
@@ -336,8 +336,15 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
     nothing
 end
 
-function output_sites(path::AbstractString, framework_path::AbstractString, atomsymbol::Union{AbstractString,Symbol}; dist=1.0u"Å", step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf)
-    sites = average_clusters(dir, dist; step, symmetries, smooth, crop, atol, rtol, ntol)
+function output_sites(path::AbstractString, framework_path::AbstractString, atomsymbol::Union{AbstractString,Symbol}; dist=1.0u"Å", step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, except=(), skip=0, count=typemax(Int))
+    isdir(path) || error("Expected a directory, given $path")
+    sites = if isdir(joinpath(path, "1"))
+        bins, counter = bin_trajectories(path; symmetries, step, except, skip, count)
+        mat = mat_from_output(joinpath(path, "1"))
+        average_clusters(bins./counter, dist, mat; smooth, crop, atol, rtol, ntol)
+    else
+        average_clusters(path, dist; step, symmetries, smooth, crop, atol, rtol, ntol, skip, count)
+    end
     output_sites(joinpath(path, "sites.cif"), framework_path, sites, atomsymbol)
     sites
 end
