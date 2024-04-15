@@ -176,7 +176,10 @@ function ewald_main_loop!(sums::T, ctx, kspace::EwaldKspace, skipcontribution) w
         # end
     end
     if T !== Vector{ComplexF64}
-        sums[:,1] .= sum(sums; dims=2)
+        _n = size(sums, 1)
+        @simd for _i in 1:_n
+            sums[_i,1] = sum(@view sums[_i,:])
+        end
     end
     nothing
 end
@@ -697,30 +700,28 @@ function single_contribution_ewald(ewald::IncrementalEwaldContext, ij, positions
                                   )
     isdefined_ewald(ewald) || return 0.0u"K"
     ewald.last[] == -1 && error("Please call `compute_ewald(ewald)` before calling `single_contribution_ewald(ewald, ...)`")
-    if positions isa Nothing
-        contribution = @view ewald.sums[:,ij+1]
-    else
+    if !(positions isa Nothing)
         kx, ky, kz = ewald.ctx.eframework.kspace.ks
         kxp = kx+1; tkyp = ky+ky+1; tkzp = kz+kz+1
         Eikx, Eiky, Eikz = tmpEiks
         m = length(positions)
         resize!(Eikx, kxp, m); resize!(Eiky, tkyp, m); resize!(Eikz, tkzp, m)
         move_one_system!(tmpEiks, ewald.ctx, nothing, positions) # this only modifies tmpEiks, not ewald
-        contribution = tmpsums
-        update_sums!(contribution, ewald, ij, tmpEiks, (ij > 0) & (tmpEiks===ewald.tmpEiks) & (tmpsums===ewald.tmpsums))
+        update_sums!(tmpsums, ewald, ij, tmpEiks, (ij > 0) & (tmpEiks===ewald.tmpEiks) & (tmpsums===ewald.tmpsums))
     end
 
     rest_single = 0.0
     single_single = 0.0
+    ijp1 = ij + 1
     @inbounds for idxkvec in 1:ewald.ctx.eframework.kspace.num_kvecs
         rest = ewald.ctx.eframework.StoreRigidChargeFramework[idxkvec]
         if ij < 0
             rest += ewald.sums[idxkvec,1]
         else
-            rest += ewald.sums[idxkvec,1] - ewald.sums[idxkvec,ij+1]
+            rest += ewald.sums[idxkvec,1] - ewald.sums[idxkvec,ijp1]
         end
         _re_f, _im_f = reim(rest)
-        _re_a, _im_a = reim(contribution[idxkvec])
+        _re_a, _im_a = reim(positions isa Nothing ? ewald.sums[idxkvec,ijp1] : tmpsums[idxkvec])
         temp = ewald.ctx.eframework.kfactors[idxkvec]
         rest_single += temp*(_re_f*_re_a + _im_f*_im_a)
         single_single += temp*(_re_a*_re_a + _im_a*_im_a)
@@ -740,7 +741,11 @@ Note that this modifies the underlying [`EwaldContext`](@ref) `ewald.ctx`.
 function update_ewald_context!(ewald::IncrementalEwaldContext)
     ij = ewald.last[]
     ij ≤ 0 && return # last moved molecule bears no charge TODO: check
-    ewald.sums[:,1] .+= ewald.tmpsums .- @view(ewald.sums[:,ij+1])
+    _n = length(ewald.tmpsums)
+    ijp1 = ij + 1
+    @simd ivdep for _i in 1:_n # manually writing it avoids allocation?
+        ewald.sums[_i,1] += ewald.tmpsums[_i] - ewald.sums[_i,ijp1]
+    end
     ewald.sums[:,ij+1] .= ewald.tmpsums
     Eikx, Eiky, Eikz = ewald.ctx.Eiks
     newEikx, newEiky, newEikz = ewald.tmpEiks

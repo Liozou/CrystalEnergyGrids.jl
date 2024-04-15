@@ -103,6 +103,7 @@ function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k:
     nothing
 end
 
+_empty_elastic_matrix!(x::ElasticMatrix) = resize!(x, size(x, 1), 0)
 
 struct ShootingStarMinimizer{T} <: RecordFunction
     temperature::TK
@@ -126,6 +127,12 @@ function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", print
             run_montecarlo!(newmc, newsimu)
             positions[ik] = newsimu.record.minpos
             energies[ik] = newsimu.record.mine
+
+            # GC maintenance: force freeing the buffers to avoid memory leak
+            _empty_elastic_matrix!(newmc.ewald.sums)
+            foreach(_empty_elastic_matrix!, newmc.ewald.tmpEiks)
+            empty!(newmc.ewald.tmpsums)
+            GC.gc()
         end
     end
     ShootingStarMinimizer(temperature, every, length, positions, energies, ninit, outdir, printevery, printeveryinit, outtype, lb)
