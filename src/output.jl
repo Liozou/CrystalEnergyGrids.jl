@@ -370,3 +370,11 @@ function output_cif(path, step::SimulationStep, framework=RASPASystem(SA[SA[0.,0
     end
     nothing
 end
+
+function output_cif(path, framework::AbstractSystem{3})
+    mat = stack3(bounding_box(framework))*u"Å"
+    a, b, c = perpendicular_lengths(mat)
+    zeroff = ForceField(Matrix{Union{InteractionRule,InteractionRuleSum}}(undef, 0, 0), IdDict{Symbol,Int}(), Symbol[], min(a, b, c)/3, "")
+    zerostep = SimulationStep(ProtoSimulationStep(zeroff, Te_au[], mat,SVector{3,TÅ}[], false, NTuple{3,Int}[], falses(0), Vector{Int}[]))
+    output_cif(path, zerostep, framework)
+end
