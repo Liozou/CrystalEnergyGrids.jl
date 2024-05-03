@@ -286,7 +286,15 @@ function local_components(grid::Array{T,3}; atol=0.0, rtol=1.0, ntol=Inf) where 
     ret
 end
 
+"""
+    closest_to_sites(grid::Array{T,3}, sites::Union{Vector{SVector{3,Float64}},Vector{NTuple{3,Float64}}}, mat) where T
 
+Return `(Qs, weights, deleted_sites)` where:
+- `Qs[i]` is the list of points closest to site `i`.
+- `weights[i]` is the list of corresponding `grid` values.
+- `deleted_sites` is the list of sites that were deleted compared to the input `sites`. The
+  index `i` before refers to the kept sites.
+"""
 function closest_to_sites(grid::Array{T,3}, sites::Union{Vector{SVector{3,Float64}},Vector{NTuple{3,Float64}}}, mat) where T
     a, b, c = dims = size(grid)
     _, ortho, safemin = prepare_periodic_distance_computations(mat)
@@ -399,12 +407,36 @@ function closest_to_sites(grid::Array{T,3}, sites::Union{Vector{SVector{3,Float6
         push!(Qs[jsite], Tuple(visit) .+ Tuple(alldists[jvisit,jsite][2]))
     end
 
+    Qs, weights, deletesite
+end
+
+"""
+    updated_sites_with_closest(Qs, weights, dims)
+
+Takes arguments `Qs` and `weights` from [`closest_to_sites`](@ref) and return the new list
+of sites along with their updated weight.
+
+`dims` is `size(grid)` with `grid` the first argument to `closest_to_sites`.
+"""
+function updated_sites_with_closest(Qs, weights, dims)
     # Finally, return the list of pairs (p, center) where p is the sum of all values
     # closest to the site whose position is given by center (in fractional coordinates),
     # the barycenter of the positions of the belonging points weighted by their value.
-    [(s, sum((SVector{3,Int}(ijk).-1)./dims.*w for (ijk, w) in zip(Q, ws))/s) for (Q, ws, s) in zip(Qs, weights, sumweights)]
+    [begin
+        s = sum(ws)
+        iszero(s) && error("Encountered empty weight: please use a non-zero atol value.")
+        (s, sum((SVector{3,Int}(ijk).-1)./dims.*w for (ijk, w) in zip(Q, ws))/s)
+    end for (Q, ws) in zip(Qs, weights)]
 end
 
+"""
+    site_proximity_map!(sites::AbstractVector, dims, mat::AbstractMatrix, maxdist=2.0*oneunit(eltype(mat)))
+
+Return a `map` of the dimension `dims` such that `map[i,j,k] == (s, ofs)` where `s` is the
+index of the site closest to point `(i,j,k)` if the distance is lower than `maxdist` or
+`s == 0` otherwise, and `ofs` is the cell offset of the site with respect to point
+`(i,j,k)`.
+"""
 function site_proximity_map!(sites::AbstractVector, dims, mat::AbstractMatrix, maxdist=2.0*oneunit(eltype(mat)))
     a, b, c = dims
     _, ortho, safemin = prepare_periodic_distance_computations(mat)
@@ -496,7 +528,9 @@ function site_proximity_map!(sites::AbstractVector, dims, mat::AbstractMatrix, m
     for (s, Q) in enumerate(Qs)
         for pos in Q
             (oi, i), (oj, j), (ok, k) = fldmod1.(pos, dims)
-            @assert ret[i,j,k][1] == 0
+            if ret[i,j,k][1] != 0
+                @error "Assertion failure: point $((i,j,k)) seen in $(ret[i,j,k][1]) and $s"
+            end
             ret[i,j,k] = (s, (oi-1, oj-1, ok-1))
             dist2s[i,j,k] = zero(safemin2) # do not overwrite this in the next loop
         end
@@ -518,10 +552,10 @@ function site_proximity_map!(sites::AbstractVector, dims, mat::AbstractMatrix, m
 end
 
 function closest_from_proximity(grid, proximity, numsites)
-    ret = Vector{Tuple{Float64, SVector{3,Float64}}}(undef, numsites)
+    ret = Vector{Tuple{Float64, SVector{3,Float64}}}(undef, numsites+1)
     a, b, c = size(grid)
     @assert (a, b, c) == size(proximity)
-    @threads for isite in 1:numsites
+    @threads for isite in 0:numsites
         ρ = 0.0
         pos = zero(SVector{3,Int})
         for k in 1:c, j in 1:b, i in 1:a
@@ -531,9 +565,22 @@ function closest_from_proximity(grid, proximity, numsites)
             ρ += val
             pos += val.*(o .+ SVector{3}((i-1)/a, (j-1)/b, (k-1)/c))
         end
-        ret[isite] = (ρ, pos./ρ)
+        ret[ifelse(iszero(isite), numsites+1, isite)] = (ρ, pos./ρ)
     end
     ret
+end
+
+"""
+    proximal_map(grid, sites, mat, maxdist=2.0u"Å")
+
+Return a list `l` such that `l[i]` is the total density closest to `sites[i]` and no
+further than `maxdist`.
+
+`l[end]` is the remaining non-attributed density.
+"""
+function proximal_map(grid, sites, mat, maxdist=2*oneunit(eltype(mat)))
+    proximity = site_proximity_map!(sites, size(grid), mat, maxdist);
+    first.(closest_from_proximity(grid, proximity, length(sites)))
 end
 
 
@@ -551,7 +598,12 @@ function cluster_closer_than!(ret::Vector{Tuple{Float64,SVector{3,Float64}}}, ma
             ρ = ρ1 + ρ2
             ρ > 1 && continue
             buffer .= pos1 .- pos2
-            d = periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
+            d = try
+                periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
+            catch
+                @show pos1, pos2
+                rethrow()
+            end
             d ≥ maxdist && continue
             todelete[i2] = true
             pos1 = (ρ1.*pos1 .+ ρ2.*(pos2.+ofs))./ρ
@@ -642,7 +694,8 @@ function coalescing_basins(grid::Array{<:Any,3}, maxdist, mat; smooth=nothing, a
     n1 = -1
     while length(ret) != n1
         n1 = length(ret)
-        ret = closest_to_sites(grid, last.(ret), mat)
+        Qs, weights, _ = closest_to_sites(grid, last.(ret), mat)
+        ret = updated_sites_with_closest(Qs, weights, size(grid))
         cluster_closer_than!(ret, mat, maxdist)
         filter!(≥(atol)∘first, ret)
     end
