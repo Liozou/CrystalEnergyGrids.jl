@@ -36,12 +36,15 @@ function Base.iterate(stream::PDBModelIterator, _=nothing)
 end
 
 """
-    mat_from_output(path::AbstractString, ::Val{EXT}) where EXT
+    mat_from_output(path::AbstractString, ::Val{EXT}, supercell=(1,1,1)) where EXT
 
 Given the `path` to an output file, return the unit cell extracted from it.
 `EXT` is either `:pdb` for .pdb files, or `:stream` for `.stream` or `.zst` output.
+
+`supercell` is triplet of factors representing the extracted matrix. The lengths will be
+divided by these values to retrieve the actual unit cell.
 """
-function mat_from_output(path::AbstractString, ::Val{EXT}) where EXT
+function mat_from_output(path::AbstractString, ::Val{EXT}, supercell=(1,1,1)) where EXT
     if EXT === :pdb
         open(path) do io
             l = readline(io)
@@ -49,21 +52,21 @@ function mat_from_output(path::AbstractString, ::Val{EXT}) where EXT
                 l = readline(io)
             end
             a, b, c, α, β, γ = parse.(Float64, l[rge] for rge in (7:15, 16:24, 25:33, 34:40, 41:47, 48:54))::Vector{Float64}
-            mat_from_parameters((a, b, c), (α, β, γ)).*u"Å"
+            mat_from_parameters((a, b, c)./supercell, (α, β, γ)).*u"Å"
         end
     else
         @assert EXT === :stream
         stream = StreamSimulationStep(path)
         mat = first(stream).mat
         close(stream)
-        mat
+        hcat((SVector{3,TÅ}.(eachcol(mat))./supercell)...)::SMatrix{3,3,TÅ,9}
     end
 end
 
-function mat_from_output(path)
+function mat_from_output(path; supercell=(1,1,1))
     output, kind, valkind = find_output_file(path)
     kind === :none && error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $path")
-    mat_from_output(output, valkind)
+    mat_from_output(output, valkind, supercell)
 end
 
 function find_output_file(path)
@@ -85,7 +88,7 @@ function find_output_file(path)
 end
 
 """
-    bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing, symmetries=[])
+    bin_trajectory(path::AbstractString; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing, symmetries=[], supercell=(1,1,1))
 
 Given the `path` to a directory containing the outputs of a simulation, or directly to the
 output file, return a pair `(bins, total)` such that `bins` is a grid of specified `step`
@@ -99,19 +102,31 @@ The first `skip` frames are discarded. Up to `count` frames are kept.
 A preallocated `bins` array can be given if it has the correct size. The bins corresponding
 to `path` will be added on the values existing in the preallocated array. Calling
 `bin_trajectory` without a preallocated `bins` or with one filled with zeros is equivalent.
+
+`symmetries` can be given as a list of `EquivalentPositions`: these operations will be
+applied to each encountered atom position before binning.
+`total` is multiplied by `1 + length(symmetries)` so that `bins ./ total` still represents
+the density map.
+
+Similarly, `supercell` can be provided to signify that the actual unit cell is smaller than
+the one from the file, and binning should be done on the unit cell. Each position will then
+be mapped to its image in the unit cell before binning. This operation happens before
+applying the `symmetries` (which are taken with respect to the unit cell).
+`total` is multiplied by `prod(supercell)`  so that `bins ./ total` still represents the
+density map.
 """
-function bin_trajectory(path; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing, symmetries=[])
+function bin_trajectory(path::AbstractString; step=0.15u"Å", skip=0, count=typemax(Int), bins=nothing, symmetries=[], supercell=(1,1,1))
     output, kind, valkind = find_output_file(path)
     kind === :none && error(lazy"No available output among \"steps.stream\", \"steps.zst\" or \"trajectory.pdb\" at $path.")
-    _bin_trajectory(output, valkind; step, skip, count, _bins=bins, symmetries)
+    _bin_trajectory(output, bins, valkind; step, skip, count, symmetries, supercell)
 end
 
-function _bin_trajectory(path, ::Val{EXT}; step, skip, count, _bins, symmetries) where EXT
+function _bin_trajectory(path, _bins, ::Val{EXT}; step, skip, count, symmetries, supercell) where EXT
     @assert EXT === :pdb || EXT === :stream
     @assert skip ≥ 0 && count ≥ 0
     steps = (EXT === :pdb ? PDBModelIterator : StreamSimulationStep)(path)
-    mat = mat_from_output(path, Val(EXT))
-    invmat = inv(NoUnits.(mat./u"Å"))
+    mat = mat_from_output(path, Val(EXT), supercell)
+    invmat = inv(ustrip.(u"Å", mat))
     if _bins isa Nothing
         na, nb, nc = floor.(Int, NoUnits.(cell_lengths(mat) ./ step))
         bins = zeros(Int, na, nb, nc)
@@ -140,25 +155,53 @@ function _bin_trajectory(path, ::Val{EXT}; step, skip, count, _bins, symmetries)
             break
         end
     end
-    bins, (stepcounter > skip)*(1 + length(symmetries))*(stepcounter - skip)
+    bins, (stepcounter > skip)*(1 + length(symmetries))*prod(supercell)*(stepcounter - skip)
 end
 
-function bin_trajectories(path; step=0.15u"Å", skip=0, count=typemax(Int), except=(), symmetries=[])
-    dirs = filter(x -> isdir(x) && basename(x) ∉ except && length(readdir(x)) > 1, readdir(path; join=true))
-    isempty(dirs) && error(lazy"Directory $path does not contain any valid folder")
-    output, kind, valkind = find_output_file(first(dirs))
-    kind === :none && error(lazy"Could not find any suitable output at $(joinpath(path, first(dirs)))")
-    mat = mat_from_output(output, valkind)
-    na, nb, nc = floor.(Int, NoUnits.(cell_lengths(mat) ./ step))
-    bins = zeros(Int, na, nb, nc)
-    counter = 0
+"""
+    bin_trajectories(dirs; except=(), step=0.15u"Å", skip=0, count=typemax(Int), symmetries=[], supercell=(1,1,1))
+
+Recursively call `bin_trajectory` on the hierarchy of folder starting with those in `dirs`.
+Return the global `(bins, total)` where each value is the sum of those obtained on each
+subdirectoy.
+
+Directories whose names are in `except` are skipped, as well as all their subfolders.
+For the other keyword arguments, see [`bin_trajectory`](@ref).
+"""
+function bin_trajectories(dirs; except=(), step=0.15u"Å", skip=0, count=typemax(Int), symmetries=[], supercell=(1,1,1))
+    bins = nothing
+    total = 0
     for dir in dirs
-        counter += last(bin_trajectory(dir; step, skip, count, bins, symmetries))
+        basename(dir) in except && continue
+        bins, total = _bin_trajectories(bins, total, dir; except, step, skip, count, symmetries, supercell)
+    end
+    bins, total
+end
+
+function _bin_trajectories(bins, total, dir; except, kwargs...)
+    for x in readdir(dir; join=true)
+        basename(x) in except && continue
+        isdir(x) || continue
+        output, kind, valkind = find_output_file(x)
+        if kind === :none
+            bins, total = _bin_trajectories(bins, total, x; except, kwargs...)
+        else
+            bins, addtototal = _bin_trajectory(output, bins, valkind; kwargs...)
+            total += addtototal
+        end
         yield()
     end
-    bins, counter
+    bins, total
 end
 
+"""
+    bin_trajectories(path::AbstractString; except=(), step=0.15u"Å", skip=0, count=typemax(Int), symmetries=[], supercell=(1,1,1))
+
+Call [`bin_trajectories`](@ref) on all subfolders of `path`.
+"""
+function bin_trajectories(path::AbstractString; step=0.15u"Å", skip=0, count=typemax(Int), except=(), symmetries=[], supercell=(1,1,1))
+    bin_trajectories((path,); except, step, skip, count, symmetries, supercell)
+end
 
 """
     average_clusters(bins::Array{Float64,3}, dist, mat; smooth=0, crop=sum(bins)/(1000length(bins)), atol=0.0, rtol=1.0, ntol=Inf)
@@ -201,18 +244,44 @@ end
 
 
 """
-    average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, skip=0, count=typemax(Int))
+    average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, skip=0, count=typemax(Int), supercell=(1,1,1))
 
 Given the path to a folder `dir` containing the outputs of a simulation, group atomic
 densities into sites.
 
-See [`bin_trajectory`](@ref) for the meaning of `step`, `symmetries`, `skip` and `count`.
+See [`bin_trajectory`](@ref) for the meaning of `step`, `symmetries`, `skip`, `count` and
+`supercell`.
 See [`average_clusters`](@ref) for the return type and the meaning of the other arguments.
 """
-function average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, skip=0, count=typemax(Int))
-    bins, counter = bin_trajectory(dir; step, symmetries, skip, count)
-    mat = mat_from_output(dir)
+function average_clusters(dir, dist; step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, skip=0, count=typemax(Int), supercell=(1,1,1))
+    bins, counter = bin_trajectory(dir; step, symmetries, skip, count, supercell)
+    mat = mat_from_output(dir; supercell)
     average_clusters(bins./counter, dist, mat; smooth, crop, atol, rtol, ntol)
+end
+
+function _print_sites(io, counter, sites, order, atomsymbol)
+    for (p, (x, y, z)) in sites
+        counter += 1
+        for o in order
+            if o === :?
+                print(io, "? ")
+            elseif o === :label
+                print(io, atomsymbol, '_', counter, '\t')
+            elseif o === :symbol
+                print(io, atomsymbol, '\t')
+            elseif o === :x
+                @printf io "%12g" x
+            elseif o === :y
+                @printf io "%12g" y
+            elseif o === :z
+                @printf io "%12g" z
+            elseif o === :occ
+                @printf io "%12g" min(p, 1.0)
+            end
+        end
+        println(io)
+    end
+    counter
 end
 
 
@@ -247,31 +316,13 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
         write_symmetries = false
         symmetries_written = false
         skiploop = false
+        writtensites = false
         for l in eachline(input)
             if isempty(l)
                 skiploop = false
-                if inloop && inatomloop && loopstarted
-                    for (p, (x, y, z)) in sites
-                        counter += 1
-                        for o in order
-                            if o === :?
-                                print(output, "? ")
-                            elseif o === :label
-                                print(output, atomsymbol, '_', counter, '\t')
-                            elseif o === :symbol
-                                print(output, atomsymbol, '\t')
-                            elseif o === :x
-                                @printf output "%12g" x
-                            elseif o === :y
-                                @printf output "%12g" y
-                            elseif o === :z
-                                @printf output "%12g" z
-                            elseif o === :occ
-                                @printf output "%12g" min(p, 1.0)
-                            end
-                        end
-                        println(output)
-                    end
+                if inloop && inatomloop && loopstarted && !writtensites
+                    writtensites = true
+                    counter = _print_sites(output, counter, sites, order, atomsymbol)
                 elseif write_symmetries && !symmetries_written
                     symmetries_written = true
                     write_symmetries = false
@@ -283,6 +334,10 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
                 inloop = false
                 inatomloop = loopstarted = false
             elseif l == "loop_"
+                if inloop && inatomloop && loopstarted && !writtensites
+                    writtensites = true
+                    counter = _print_sites(output, counter, sites, order, atomsymbol)
+                end
                 inloop = true
                 empty!(order)
                 inatomloop = loopstarted = false
@@ -332,18 +387,19 @@ function output_sites(path::AbstractString, framework_path::AbstractString, site
             end
             println(output, l)
         end
+        inloop && inatomloop && loopstarted && !writtensites && _print_sites(output, counter, sites, order, atomsymbol)
     end end # open(input) and open(output)
     nothing
 end
 
-function output_sites(path::AbstractString, framework_path::AbstractString, atomsymbol::Union{AbstractString,Symbol}; dist=1.0u"Å", step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, except=(), skip=0, count=typemax(Int))
+function output_sites(path::AbstractString, framework_path::AbstractString, atomsymbol::Union{AbstractString,Symbol}; dist=1.0u"Å", step=0.15u"Å", symmetries=[], smooth=nothing, crop=nothing, atol=0.0, rtol=1, ntol=Inf, except=(), skip=0, count=typemax(Int), supercell=(1,1,1))
     isdir(path) || error("Expected a directory, given $path")
     sites = if isdir(joinpath(path, "1"))
-        bins, counter = bin_trajectories(path; symmetries, step, except, skip, count)
-        mat = mat_from_output(joinpath(path, "1"))
+        bins, counter = bin_trajectories(path; symmetries, step, except, skip, count, supercell)
+        mat = mat_from_output(joinpath(path, "1"); supercell)
         average_clusters(bins./counter, dist, mat; smooth, crop, atol, rtol, ntol)
     else
-        average_clusters(path, dist; step, symmetries, smooth, crop, atol, rtol, ntol, skip, count)
+        average_clusters(path, dist; step, symmetries, smooth, crop, atol, rtol, ntol, skip, count, supercell)
     end
     output_sites(joinpath(path, "sites.cif"), framework_path, sites, atomsymbol)
     sites
