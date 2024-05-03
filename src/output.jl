@@ -345,8 +345,7 @@ function output_cif(path, step::SimulationStep, framework=RASPASystem(SA[SA[0.,0
         _atom_site_type_symbol
         _atom_site_fract_x
         _atom_site_fract_y
-        _atom_site_fract_z
-        """)
+        _atom_site_fract_z""")
         counter = 0
         for (ppos, name, num) in zip(position(framework), atomic_symbol(framework), atomic_number(framework))
             counter += 1

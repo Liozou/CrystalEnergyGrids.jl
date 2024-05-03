@@ -269,7 +269,6 @@ function periodic_distance_with_ofs!(buffer, ofs, mat, ortho, safemin)
             return newnorm # in a reduced lattice, there should be at most one
         end
         buffer[i] -= 2
-        ofs[i] += 2
         newnorm = norm(mat*buffer)
         if newnorm < ref
             ofs[i] += 1
