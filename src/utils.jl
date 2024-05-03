@@ -540,7 +540,7 @@ end
 
 
 Base.@assume_effects :foldable function typeof_psystem(::Val{N}) where N
-    typeof(PeriodicSystem(;
+    typeof(ParticleSystem(;
         xpositions=SVector{N,typeof(1.0u"Å")}[],
         ypositions=SVector{N,typeof(1.0u"Å")}[],
         unitcell=SMatrix{3,3,Float64,9}(LinearAlgebra.I)*30.0u"Å",

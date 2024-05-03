@@ -112,7 +112,7 @@ function SimulationStep(x::ProtoSimulationStep)
         push!(not_in_freespecies[i], j)
     end
     freespecies = [setdiff(1:length(posidxi), not_in_i) for (posidxi, not_in_i) in zip(posidx, not_in_freespecies)]
-    psystem = PeriodicSystem(; xpositions=x.positions,
+    psystem = ParticleSystem(; xpositions=x.positions,
                             ypositions=SVector{3,TÅ}[],
                             unitcell=x.mat,
                             parallel=x.parallel,

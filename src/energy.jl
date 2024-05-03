@@ -1,7 +1,7 @@
 # Computation of energy resulting from a system with a given force field
 
 export SimulationStep, make_step, update_position, update_position!
-using CellListMap.PeriodicSystems
+using CellListMap
 import LinearAlgebra
 
 """
@@ -119,7 +119,7 @@ function SimulationStep(ff::ForceField, charges::Vector{Te_au},
         end
     end
     freespecies = [Int[] for _ in inputpos]
-    psystem = PeriodicSystem(; xpositions=positions,
+    psystem = ParticleSystem(; xpositions=positions,
                                ypositions=SVector{3,TÅ}[],
                                unitcell=cell.mat,
                                cutoff=ff.cutoff,
@@ -228,7 +228,7 @@ The `parallel` field is passed on to the created copy (except with `mode === :ze
 """
 function SimulationStep(step::SimulationStep{T}, mode=:all; parallel=step.parallel) where T
     if mode === :all
-        psystem = PeriodicSystem(; xpositions=copy(step.positions),
+        psystem = ParticleSystem(; xpositions=copy(step.positions),
                                    ypositions=SVector{3,TÅ}[],
                                    unitcell=step.mat,
                                    parallel,
@@ -237,7 +237,7 @@ function SimulationStep(step::SimulationStep{T}, mode=:all; parallel=step.parall
                        [[copy(js) for js in is] for is in step.posidx],
                        [copy(x) for x in step.freespecies], step.isrigid, step.ffidx)
     elseif mode === :output
-        psystem = PeriodicSystem(; xpositions=copy(step.positions),
+        psystem = ParticleSystem(; xpositions=copy(step.positions),
                                    ypositions=SVector{3,TÅ}[],
                                    unitcell=copy(step.mat),
                                    parallel,
@@ -283,7 +283,7 @@ the `j`-th system of kind `i` in `step`.
 See also [`update_position!`](@ref) to modify `step` in-place.
 """
 function update_position(step::SimulationStep{T}, (i,j), newpos) where T
-    psystem = PeriodicSystem(; xpositions=copy(step.positions),
+    psystem = ParticleSystem(; xpositions=copy(step.positions),
                                ypositions=SVector{3,TÅ}[],
                                unitcell=step.mat,
                                parallel=step.parallel,
@@ -326,7 +326,7 @@ end
 
 function compute_vdw(step::SimulationStep)
     (step.parallel*nthreads() + !step.parallel)*length(step.atoms) < 1200 && return compute_vdw_noneighbour(step)
-    system = PeriodicSystem(;
+    system = ParticleSystem(;
         xpositions=step.positions,
         unitcell=step.mat,
         cutoff=step.psystem.cutoff,
