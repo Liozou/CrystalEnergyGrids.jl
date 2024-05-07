@@ -239,93 +239,76 @@ end
 #     ...
 # end
 
-
 """
-    choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup, pos::Vector{SVector{3,TÅ}}, randomdmax::TÅ, i::Int)
+    choose_step!(statistics::MoveStatistics, mc::MonteCarloSetup, i::Int, movekind::Symbol, randomdmax::TÅ)
 
-Choose an MC move for the molecule at positions given by `pos` and return a pair
-`(newpos, movekind)` where `newpos` is the list of atom positions after the move, and
-`movekind` is the kind of move that was chosen, as a `Symbol`.
-
-`i` is the kind of the molecule
-
-`randomdmax` is the maximum distance between two points in the unit cell (used in random
-translations for instance).
+Choose an MC move for the species kind `i` and return:
+- `j` the molecule number (if relevant)
+- `newpos` its trial position (if relevant)
+- `move` the initial `movekind` or either `swap_deletion` or `swap_insertion` if
+  `movekind === :swap`
+- `blocked` a boolean specifying if the trial move must be rejected.
+  This can occur if the molecule goes to a blocked sphere, or if the move is impossible
+  (if there is no molecule for species kind `i` for instance).
 """
-function choose_newpos!(statistics::MoveStatistics, mc::MonteCarloSetup,
-                        pos::AbstractVector{SVector{3,TÅ}}, randomdmax::TÅ, i::Int, ffidxi,
-                        movekind=mc.mcmoves[i](rand(mc.rng)))
-    attempt!(statistics, movekind)
+function choose_step!(statistics::MoveStatistics, mc::MonteCarloSetup, i::Int, movekind::Symbol, randomdmax::TÅ)
+    flatidxi = mc.flatidx[i]
+
+    # handle properly the case where there is no molecule
+    j = isempty(flatidxi) ? 0 : rand(mc.rng, flatidxi)
+    pos = j == 0 ? @view(mc.step.positions[Int[]]) : @view(mc.step.positions[mc.step.posidx[i][j]])
     if movekind === :swap
         movekind = ifelse(rand(mc.rng, Bool), :swap_deletion, :swap_insertion)
     end
-    speciesblock = mc.speciesblocks[i]
-    for _ in 1:100
-        newpos = if movekind === :translation
-            random_translation(mc.rng, pos, statistics.dmax)
-        elseif movekind === :rotation
-            random_rotation(mc.rng, pos, statistics.θmax, mc.bead[i])
-        elseif movekind === :random_translation
-            random_translation(mc.rng, pos, randomdmax)
-        elseif movekind === :random_rotation
-            random_rotation(mc.rng, pos, 180u"°", mc.bead[i])
-        elseif movekind === :random_reinsertion || movekind === :swap_insertion
-            random_rotation(mc.rng, random_translation(mc.rng, pos, randomdmax), 180u"°", mc.bead[i])
-        elseif movekind === :swap_deletion
-            return Vector(pos), :swap_deletion, false
-        else
-            error(lazy"Unknown move kind: $movekind")
-        end
-        blocked = inblockpocket(speciesblock, mc.atomblocks, ffidxi, newpos)
-        if movekind === :swap_insertion
-            # to be consistent with the excluded volume, only refuse insertion where the
-            # bead is in the species blockpocket
-            bead = mc.bead[i]
-            bead += bead==0
-            if !speciesblock[newpos[bead]]
-                return newpos, movekind, blocked
-            end
-        elseif !blocked
-            return newpos, movekind, false
-        end
-    end
-    movekind === :swap_insertion || @warn "Trapped species did not manage to move out of a blocked situation. This could be caused by an impossible initial configuration."
-    return Vector(pos), movekind, true # signal that the move was blocked
-end
 
+    # if there is no possible move because there is no molecule, return early
+    j == 0 && movekind !== :swap_insertion && return j, Vector(pos), movekind, true
 
-function try_swap!(mc::MonteCarloSetup, i::Int, statistics::MoveStatistics, randomdmax, temperature, energy, φPV_div_k::TK)
+    # mark the attempt in the statistics
+    attempt!(statistics, movekind)
+
     ffidxi = mc.step.ffidx[i]
-    pos, move, blocked = choose_newpos!(statistics, mc, mc.models[i], randomdmax, i, ffidxi, :swap)
-    blocked && return energy # insertion failed due to blocking spheres
+    speciesblock = mc.speciesblocks[i]
 
-    isinsertion = move === :swap_insertion
-    j = 0
-    posidxi = mc.step.posidx[i]
-    newpos = if isinsertion
-        j = length(posidxi) + 1
-        pos
+    newpos = if movekind === :translation
+        random_translation(mc.rng, pos, statistics.dmax)
+    elseif movekind === :rotation
+        random_rotation(mc.rng, pos, statistics.θmax, mc.bead[i])
+    elseif movekind === :random_rotation
+        random_rotation(mc.rng, pos, 180u"°", mc.bead[i])
+    elseif movekind === :swap_deletion
+        return j, Vector(pos), :swap_deletion, false
     else
-        isempty(posidxi) && return energy # deletion failed because there is no molecule to delete
-        j = rand(1:length(posidxi))
-        molpos = posidxi[j]
-        mc.step.positions[molpos]
+        for _ in 1:100
+            _newpos = if movekind === :random_translation
+                random_translation(mc.rng, pos, randomdmax)
+            elseif movekind === :random_reinsertion
+                random_rotation(mc.rng, random_translation(mc.rng, pos, randomdmax), 180u"°", mc.bead[i])
+            elseif movekind === :swap_insertion
+                random_rotation(mc.rng, random_translation(mc.rng, j == 0 ? mc.models[i] : pos, randomdmax), 180u"°", mc.bead[i])
+            else
+                error(lazy"Unknown move kind: $movekind")
+            end
+            blocked = inblockpocket(speciesblock, mc.atomblocks, ffidxi, _newpos)
+            if movekind === :swap_insertion
+                # to be consistent with the excluded volume, only refuse insertion where the
+                # bead is in the species blockpocket
+                bead = mc.bead[i]
+                bead += bead==0
+                if !speciesblock[_newpos[bead]]
+                    return length(mc.step.posidx[i]) + 1, _newpos, movekind, blocked
+                end
+            elseif !blocked
+                return j, _newpos, movekind, false
+            end
+        end
+        movekind === :swap_insertion || @warn "Trapped species did not manage to move out of a blocked situation. This could be caused by an impossible initial configuration."
+        return j, Vector(pos), movekind, true # signal that the move was blocked
     end
-    idx = (i, j)
-
-    contrib = movement_energy(mc, idx, newpos)
-    ediff = isdefined_ewald(mc) ? mc.ewald.ctx.energies[i] : 0.0u"K"
-    if !isinsertion
-        contrib = -contrib
-        ediff = -ediff
-    end
-
-    swapinfo = SwapInformation(φPV_div_k, i, true, isinsertion)
-
-    newenergy = first(handle_acceptation(mc, (i,j), MCEnergyReport(0.0u"K", 0.0u"K", 0.0u"K", ediff), contrib, temperature, newpos, move, statistics, nothing, energy, swapinfo))
-
-    return newenergy
+    inblockpocket(speciesblock, mc.atomblocks, ffidxi, newpos) && return j, Vector(pos), movekind, true
+    return j, newpos, movekind, false
 end
+
 
 function risk_of_underflow(current::MCEnergyReport, diff::MCEnergyReport)
     vc = (current.framework.direct, current.framework.vdw, current.inter, current.reciprocal)
@@ -467,6 +450,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         push!(initial_energies, energy)
     end
 
+    numsteps = 0 # number of steps per cycle
+
     # GCMC handling
     has_swap = [i for (i, mcmoves) in enumerate(mc.mcmoves) if mcmoves[:swap] > 0]
     if !isempty(has_swap)
@@ -474,7 +459,12 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         simu.pressure == -Inf*u"Pa" && error("Cannot perform GCMC with unspecified pressure")
     end
     φPV_div_k = Vector{typeof(1.0u"K")}(undef, length(mc.mcmoves))
-    for i_swap in has_swap
+    for (i_swap, mcmoves) in enumerate(mc.mcmoves)
+        if mcmoves[:swap] == 0
+            numsteps += length(mc.flatidx[i_swap])
+            break
+        end
+        numsteps += 50 # fixed number
         T0 = first(simu.temperatures)
         P = simu.pressure
         φ = only(Clapeyron.fugacity_coefficient(mc.gcmcdata.model[i_swap], P, T0; phase=:stable, vol0=Clapeyron.volume(mc.gcmcdata.model0[i_swap], P, T0)))
@@ -482,6 +472,8 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         PV_div_k = uconvert(u"K", P*mc.gcmcdata.volumes[i_swap]/u"k")
         φPV_div_k[i_swap] = φ*PV_div_k
     end
+
+    numsteps == 0 && @error "Empty simulation"
 
     # idle initialisations
     running_update = @spawn nothing
@@ -493,39 +485,26 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
         temperature = simu.temperatures[counter_cycle]
 
-        for i_swap in has_swap
-            accepted && parallel && wait(running_update)
-            for _ in 1:4
-                energy = try_swap!(mc, i_swap, statistics, randomdmax, temperature, energy, φPV_div_k[i_swap])
-            end
-            old_idx = (0,0)
-        end
-
-        numsteps = max(20, length(mc.revflatidx))
         for idx_step in 1:numsteps
-            isempty(mc.revflatidx) && break
+            # Choose the move kind
+            i = rand(1:length(mc.flatidx))
+            movekind = mc.mcmoves[i](rand(mc.rng))
 
-            # choose the species on which to attempt a move
-            idx = choose_random_species(mc)
-            ffidxi = mc.step.ffidx[idx[1]]
-
-            # currentposition is the position of that species
-            # currentposition is either a Vector or a @view, that's OK
-            currentposition = (accepted&(old_idx==idx)) ? oldpos : @view mc.step.positions[mc.step.posidx[idx[1]][idx[2]]]
-
+            # Choose the molecule on which to attempt a move (if relevant)
             # newpos is the position after the trial move
-            newpos, move, blocked = choose_newpos!(statistics, mc, currentposition, randomdmax, idx[1], ffidxi)
+            # move is equal to movekind unless movekind === :swap, in which case it is
+            # either :swap_deletion or :swap_insertion
+            j, newpos, move, blocked = choose_step!(statistics, mc, i, movekind, randomdmax)
 
-            # If, despite the multiple attempts, the move is blocked, skip early to the
-            # next iteration.
+            # If, despite the multiple attempts, the move is blocked, reject it and go to
+            # the next iteration.
             # No need to update oldpos, old_idx nor accepted thus.
-            # The refused move is still taken into account in the statistics.
+            # The rejected move is still taken into account in the statistics.
             blocked && continue
 
+            idx = (i,j)
+
             isswap = move === :swap_insertion || move === :swap_deletion
-            if move === :swap_insertion
-                idx = (idx[1], length(mc.step.posidx[idx[1]]) + 1)
-            end
 
             # if the previous move was accepted, wait for mc to be completely up to date
             # before computing
@@ -552,7 +531,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
                 before, after = combined_movement_energy(mc, idx, newpos)
             end
 
-            swapinfo = SwapInformation(φPV_div_k[idx[1]], idx[1], isswap, move === :swap_insertion)
+            swapinfo = SwapInformation(φPV_div_k[i], i, isswap, move === :swap_insertion)
 
             oldpos = newpos
             energy, accepted, running_update = handle_acceptation(mc, idx, before, after, temperature, oldpos, move, statistics, running_update, energy, swapinfo)
