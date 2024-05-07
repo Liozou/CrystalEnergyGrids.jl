@@ -327,7 +327,7 @@ Compute the energy on the the system given by `setup` on a regular grid with the
 
 If the guest molecule is not monoatomic, the first axe of the returned grid will represent
 the rotation angle of the molecule, and its size will be greater or equal to `num_rotate`.
-Otherwise (or if `num_rotate == 0`), the first axe can be dropped through`dropdims`.
+Otherwise (or if `num_rotate == 0`), the first axe can be dropped through `dropdims`.
 
 A value of 1e100 in the grid indicates an inaccessible point due to blocking spheres.
 
