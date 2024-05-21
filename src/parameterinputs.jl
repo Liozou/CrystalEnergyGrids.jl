@@ -147,7 +147,7 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     k ≤ 0 && return
     ik, r = divrem(k, star.every)
     r == 0 || return
-    newmc = MonteCarloSetup(mc, o; parallel=false, mcmoves=fill(MCMoves(; translation=1), length(mc.mcmoves)))
+    newmc = MonteCarloSetup(mc, o; parallel=false)
     recordminimum = RMinimumEnergy(0, e, o)
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
     newsimu = SimulationSetup(star.temperature, star.length; outdir, star.printevery, star.printeveryinit, star.outtype, star.ninit, record=recordminimum)

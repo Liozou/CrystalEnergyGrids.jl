@@ -61,9 +61,9 @@ struct MCMoves
 end
 function MCMoves(monoatomic::Bool)
     MCMoves(if monoatomic
-        (0.98, 0.98, 1.0, 1.0, 1.0) # 98% translation, 2% random translation
+        (0.5, 0.5, 1.0, 1.0, 1.0) # 50% translation, 50% random translation
     else
-        (0.49, 0.98, 0.98, 0.98, 1.0) # 49% translation, 49% rotation, 2% random reinsertion
+        (0.33, 0.66, 0.66, 0.66, 1.0) # 33% translation, 33% rotation, 34% random reinsertion
     end)
 end
 
