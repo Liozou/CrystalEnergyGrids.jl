@@ -179,16 +179,16 @@ function bin_trajectories(dirs; except=(), step=0.15u"Å", skip=0, count=typema
 end
 
 function _bin_trajectories(bins, total, dir; except, kwargs...)
-    for x in readdir(dir; join=true)
-        basename(x) in except && continue
-        isdir(x) || continue
-        output, kind, valkind = find_output_file(x)
-        if kind === :none
+    output, kind, valkind = find_output_file(dir)
+    if kind === :none
+        for x in readdir(dir; join=true)
+            basename(x) in except && continue
+            isdir(x) || continue
             bins, total = _bin_trajectories(bins, total, x; except, kwargs...)
-        else
-            bins, addtototal = _bin_trajectory(output, bins, valkind; kwargs...)
-            total += addtototal
         end
+    else
+        bins, addtototal = _bin_trajectory(output, bins, valkind; kwargs...)
+        total += addtototal
         yield()
     end
     bins, total
@@ -197,7 +197,7 @@ end
 """
     bin_trajectories(path::AbstractString; except=(), step=0.15u"Å", skip=0, count=typemax(Int), symmetries=[], supercell=(1,1,1))
 
-Call [`bin_trajectories`](@ref) on all subfolders of `path`.
+Call [`bin_trajectories`](@ref) `path` and all its subfolders.
 """
 function bin_trajectories(path::AbstractString; step=0.15u"Å", skip=0, count=typemax(Int), except=(), symmetries=[], supercell=(1,1,1))
     bin_trajectories((path,); except, step, skip, count, symmetries, supercell)
