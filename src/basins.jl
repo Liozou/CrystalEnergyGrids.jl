@@ -697,7 +697,9 @@ function coalescing_basins(grid::Array{<:Any,3}, maxdist, mat; smooth=nothing, a
         Qs, weights, _ = closest_to_sites(grid, last.(ret), mat)
         ret = updated_sites_with_closest(Qs, weights, size(grid))
         cluster_closer_than!(ret, mat, maxdist)
-        filter!(≥(atol)∘first, ret)
+        newret = filter(≥(atol)∘first, ret)
+        isempty(newret) && return ret
+        ret = newret
     end
     return ret
 end
