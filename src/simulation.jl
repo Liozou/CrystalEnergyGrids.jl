@@ -24,9 +24,7 @@ Definition of the simulation setup, which must provide the following information
   cycles. The first recorded position is that at the end of initialization. Using a value
   of 0 (the default) will record only that, as well as the last positions if `ncycles != 0`.
 - `printeveryinit`: similar to `printevery` but for the initialization phase.
-  A value of `0` means that no initialization output is produced.
-  The default value is equal to `printevery`, but note that initialization output is not
-  produced unless one of the `initial_*` options in `outtype` hereafter is set.
+  A value of `0` (the default) means that no initialization output is produced.
 - `outtype`: a `Vector{Symbol}` whose elements represent the different outputs that
   should be produced in `outdir`. The elements can be:
   + `:energies` to have the list of energies output as a serialized
@@ -38,8 +36,10 @@ Definition of the simulation setup, which must provide the following information
     [`StreamSimulationStep`](@ref) in a "steps.zst" file.
   + `:initial_*` where `*` is one of the above to have the corresponding output during
     initialization. The corresponding files have an "initial_" prefix.
-  The default is `[:energies, :zst]`. See [`stream_to_pdb`] to convert a "steps.stream"
-  or "steps.zst" file into the corresponding "trajectory.pdb" output.
+  The default is `[:energies, :zst]` if `printeveryinit==0` (the default), otherwise
+  `[:energies, :zst, :initial_energies, :initial_zst]`.
+  See [`stream_to_pdb`] to convert a "steps.stream" or "steps.zst" file into the
+  corresponding "trajectory.pdb" output.
 - `record::Trecord` a function which can be used to record extra information at the end of
   each cycle. `record` can return `:stop` to end the computation at that point, otherwise
   its return value is ignored. Stopping may not be immediate and can take up to one
@@ -130,11 +130,11 @@ Base.@kwdef struct SimulationSetup{Trecord}
     ninit::Int=0
     outdir::String=""
     printevery::Int=0
-    printeveryinit::Int=printevery
-    outtype::Vector{Symbol}=[:energies, :zst]
+    printeveryinit::Int=0
+    outtype::Vector{Symbol}=_default_outtype(printeveryinit)
     record::Trecord=Returns(nothing)
 
-    function SimulationSetup(T, P::Unitful.Pressure, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, printeveryinit::Int=0, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
+    function SimulationSetup(T, P::Unitful.Pressure, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, printeveryinit::Int=0, outtype::Vector{Symbol}=_default_outtype(printeveryinit), record=Returns(nothing))
         @assert ncycles ≥ 0 && ninit ≥ 0
         n = ncycles + ninit
         temperatures = if T isa Number
@@ -153,6 +153,7 @@ Base.@kwdef struct SimulationSetup{Trecord}
         ret
     end
 end
+_default_outtype(printeveryinit) = printeveryinit==0 ? [:energies, :zst] : [:energies, :zst, :initial_energies, :initial_zst]
 function SimulationSetup(T, ncycles::Int, ninit::Int=0, outdir::String="", printevery::Int=0, printeveryinit::Int=printevery, outtype::Vector{Symbol}=[:energies, :zst], record=Returns(nothing))
     SimulationSetup(T, -Inf*u"Pa", ncycles, ninit, outdir, printevery, printeveryinit, outtype, record)
 end
@@ -279,7 +280,7 @@ function choose_step!(statistics::MoveStatistics, mc::MonteCarloSetup, i::Int, m
     elseif movekind === :swap_deletion
         return j, Vector(pos), :swap_deletion, false
     else
-        for _ in 1:100
+        for _ in 1:1000
             _newpos = if movekind === :random_translation
                 random_translation(mc.rng, pos, randomdmax)
             elseif movekind === :random_reinsertion
