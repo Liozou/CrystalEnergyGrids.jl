@@ -10,6 +10,17 @@ StableHashTraits.hash_method(::EwaldContext) = StableHashTraits.FnHash(x -> (x.e
 StableHashTraits.hash_method(::SimulationStep) = StableHashTraits.FnHash(x -> (ustrip.(u"e_au", x.charges), x.atoms, [[[ustrip(u"Å", k) for k in j] for j in i] for i in x.positions], ustrip.(u"Å", x.mat)))
 StableHashTraits.hash_method(::MonteCarloSetup) = StableHashTraits.FnHash(x -> (x.step, x.ewald.ctx, x.coulomb, x.speciesblocks, x.bead))
 
+StableHashTraits.hash_method(::InteractionRule) = StableHashTraits.StructHash()
+StableHashTraits.hash_method(::InteractionRuleSum) = StableHashTraits.StructHash()
+StableHashTraits.hash_method(::ForceField) = StableHashTraits.StructHash()
+
+StableHashTraits.hash_method(::PseudoAtomInfo) = StableHashTraits.StructHash()
+StableHashTraits.hash_method(::PseudoAtomListing) = StableHashTraits.FnHash(pal -> begin
+    kvs = collect(pal.exact)
+    I = sortperm(kvs; by=last)
+    (first.(kvs)[I], pal.info[I])
+end)
+
 function hash_string(x)
     h = StableHashTraits.stable_hash(x, StableHashTraits.HashVersion{2}())
     bytes2hex(h)

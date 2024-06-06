@@ -203,7 +203,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 end
 
 """
-    setup_montecarlo(framework, forcefield_framework::String, systems;
+    setup_montecarlo(framework, forcefield_framework, systems;
                      blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
                      supercell=nothing, new=false, restart=nothing, parallel=true,
                      mcmoves=fill(nothing, length(systems)), rng=default_rng(),
@@ -211,6 +211,11 @@ end
 
 Prepare a Monte Carlo simulation of the input list of `systems` in a `framework` with the
 given force field.
+
+`forcefield_framework` can be the name of the forcefield, or a pair `(name, ff)` where `ff`
+is a `ForceField`, in which case the given `ff` will be used. It can also be a pair
+`(name, pal)` where `pal` is a `PseudoAtomListing`, in which case the forcefield will be
+read based on its name, but the atom definitions will be taken from the given `pal`.
 
 A system can be either an `AbstractSystem`, or a pair `(s, n)` where `s` is an
 `AbstractSystem` and `n` is an integer. In that case, `n` systems identical to `s` will be
@@ -247,7 +252,7 @@ monoatomic species, or [49% translation, 49% rotation, 2% random reinsertion] el
 
 `rng` is the random number generator, defaulting to `Random.default_rng()`.
 """
-function setup_montecarlo(framework, forcefield_framework::String, systems;
+function setup_montecarlo(framework, forcefield_framework, systems;
                           blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
                           supercell=nothing, new=false, restart=nothing, parallel=true,
                           mcmoves=fill(nothing, length(systems)), rng=default_rng(),
