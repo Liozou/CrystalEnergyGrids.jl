@@ -121,9 +121,42 @@ function bin_trajectory(path::AbstractString; step=0.15u"Å", skip=0, count=typ
     _bin_trajectory(output, bins, valkind; step, skip, count, symmetries, supercell)
 end
 
+function _pathofsavedgrid(path::AbstractString; skip, count, symmetries)
+    file, kind, _ = find_output_file(path)
+    suff = string(count==typemax(Int) ? "" : "-c$count", skip==0 ? "" : "-s$skip")
+    preff = string("grid_", isempty(symmetries) ? "raw_" : "symm_")
+    if kind === :none
+        while path != "/" && last(path) == '/'
+            path = path[1:end-1]
+        end
+        joinpath(path, string(preff, basename(path), suff))
+    else
+        d = dirname(file)
+        bd = basename(d)
+        if startswith(bd, "System_") && basename(dirname(d)) == "Movies"
+            # In RASPA folder
+            sitesdir = joinpath(dirname(dirname(d)), "sites")
+            if !isdir(sitesdir)
+                mkdir(sitesdir)
+            end
+            joinpath(sitesdir, string(preff, first(splitext(basename(file))), suff))
+        else
+            joinpath(d, string(preff, bd, suff))
+        end
+    end
+end
+
 function _bin_trajectory(path, _bins, ::Val{EXT}; step, skip, count, symmetries, supercell) where EXT
     @assert EXT === :pdb || EXT === :stream
     @assert skip ≥ 0 && count ≥ 0
+    pathofsave = _pathofsavedgrid(path; skip, count, symmetries)
+    if isfile(pathofsave)
+        @info "Retrieved saved grid from $pathofsave"
+        savedbins, savedtotal = deserialize(pathofsave)::Tuple{Array{Int,3},Int}
+        _bins isa Nothing && return (savedbins, savedtotal)
+        _bins .+= savedbins
+        return _bins, savedtotal
+    end
     steps = (EXT === :pdb ? PDBModelIterator : StreamSimulationStep)(path)
     mat = mat_from_output(path, Val(EXT), supercell)
     invmat = inv(ustrip.(u"Å", mat))
@@ -155,7 +188,12 @@ function _bin_trajectory(path, _bins, ::Val{EXT}; step, skip, count, symmetries,
             break
         end
     end
-    bins, (stepcounter > skip)*(1 + length(symmetries))*prod(supercell)*(stepcounter - skip)
+    total = (stepcounter > skip)*(1 + length(symmetries))*prod(supercell)*(stepcounter - skip)
+    if _bins isa Nothing
+        @info "Saved grid at $pathofsave."
+        serialize(pathofsave, (bins, total))
+    end
+    return bins, total
 end
 
 """
@@ -200,7 +238,15 @@ end
 Call [`bin_trajectories`](@ref) `path` and all its subfolders.
 """
 function bin_trajectories(path::AbstractString; step=0.15u"Å", skip=0, count=typemax(Int), except=(), symmetries=[], supercell=(1,1,1))
-    bin_trajectories((path,); except, step, skip, count, symmetries, supercell)
+    pathofsave = _pathofsavedgrid(path; skip, count, symmetries)
+    if isfile(pathofsave)
+        @info "Retrieved saved grid from $pathofsave"
+        return deserialize(pathofsave)::Tuple{Array{Int,3},Int}
+    end
+    ret = bin_trajectories((path,); except, step, skip, count, symmetries, supercell)
+    @info "Saved grid at $pathofsave."
+    serialize(pathofsave, ret)
+    return ret
 end
 
 """
