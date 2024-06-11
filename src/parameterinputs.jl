@@ -212,7 +212,8 @@ function run_gcmc!(mc::MonteCarloSetup, simu::SimulationSetup)
     rec = GCMCRecorder(simu)
     mcmoves1 = mc.mcmoves[1]
     if iszero(mcmoves1[:swap])
-        newmcmoves1 = MCMoves(mcmoves1.cumulatives.*(2/3)) # make swap probability 1/3
+        iswap = findfirst(==(:swap), mcmovenames)
+        newmcmoves1 = MCMoves(ntuple(i -> i < iswap ? mcmoves1.cumulatives[i]*2/3 : mcmoves1.cumulatives[i], Val(length(mcmovenames)-1))) # make swap probability 1/3
         mc = MonteCarloSetup(mc; mcmoves=[newmcmoves1; mc.mcmoves[2:end]])
     end
     printstyled("Running GCMC on species ", identify_molecule(mc.step.ff.symbols[mc.step.ffidx[1]]), " at pressure ", simu.pressure, '\n'; color=:green)
