@@ -500,9 +500,12 @@ end
 
 """
     baseline_energy(mc::MonteCarloSetup)
+    baseline_energy(hs::SiteHopping)
 
 Compute the energy of the current configuration.
 """
+baseline_energy
+
 function baseline_energy(mc::MonteCarloSetup)
     reciprocal = compute_ewald(mc.ewald)
     vdw = compute_vdw(mc.step)
