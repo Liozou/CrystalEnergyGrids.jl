@@ -57,7 +57,12 @@ function mat_from_output(path::AbstractString, ::Val{EXT}, supercell=(1,1,1)) wh
     else
         @assert EXT === :stream
         stream = StreamSimulationStep(path)
-        mat = first(stream).mat
+        mat = try
+            first(stream).mat
+        catch
+            @error "Could not read from stream at $path"
+            rethrow()
+        end
         close(stream)
         hcat((SVector{3,TÅ}.(eachcol(mat))./supercell)...)::SMatrix{3,3,TÅ,9}
     end

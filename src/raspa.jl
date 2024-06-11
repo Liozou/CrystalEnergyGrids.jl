@@ -174,8 +174,8 @@ Return a [`PseudoAtomListing`](@ref) extracted from the `pseudo_atoms.def` file 
 given force field.
 """
 function parse_pseudoatoms_RASPA(forcefield, ::Nothing)
-    if forcefield isa AbstractString
-        parse_pseudoatoms_RASPA(joinpath(getdir_RASPA(), "forcefield", forcefield isa AbstractString ? forcefield : first(forcefield), "pseudo_atoms.def"))
+    if forcefield isa AbstractString || !(forcefield[2] isa PseudoAtomListing)
+        parse_pseudoatoms_RASPA(joinpath(getdir_RASPA(), "forcefield", forcefield isa AbstractString ? forcefield : forcefield[1], "pseudo_atoms.def"))
     else
         forcefield[2]::PseudoAtomListing
     end
