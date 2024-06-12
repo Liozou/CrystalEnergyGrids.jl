@@ -40,6 +40,12 @@ Definition of the simulation setup, which must provide the following information
   `[:energies, :zst, :initial_energies, :initial_zst]`.
   See [`stream_to_pdb`] to convert a "steps.stream" or "steps.zst" file into the
   corresponding "trajectory.pdb" output.
+
+  !!! note
+      In the case of [`SiteHopping`](@ref) simulations, the :stream and :initial_stream
+      options do not exist, and the :zst (resp., :initial_zst) option output a
+      "populations.serial" (resp. "initial_populations.serial") file instead of a
+      `StreamSimulationStep`.
 - `record::Trecord` a function which can be used to record extra information at the end of
   each cycle. `record` can return `:stop` to end the computation at that point, otherwise
   its return value is ignored. Stopping may not be immediate and can take up to one
@@ -81,6 +87,12 @@ Upon creation of a `SimulationSetup`, a call to `initialize_record!(record, setu
 realized. By default, `initialize_record!` does nothing, but you can specialize it for
 for your appropriate record type if need be, i.e. by defining a method of signature:
 `initialize_record!(record::T, setup::SimulationSetup{T}) where {T<:MyRecordType}`.
+
+!!! note
+    In the case of [`SiteHopping`](@ref) simulations, the `record` signature is slightly
+    different: there is no `mc` argument anymore, and `o` is replaced by the current state
+    `sh::SiteHopping`. `needcomplete` is not used and `record` is given the exact current
+    state, so it must not be modified.
 
 ## Example
 
@@ -362,7 +374,7 @@ function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature
     end, accepted, running_update
 end
 
-function print_report(simulation::SimulationSetup, time_begin, time_end, statistics::MoveStatistics)
+function print_report(simulation::SimulationSetup, time_begin, time_end, statistics)
     open(joinpath(simulation.outdir, "report.txt"), "a") do io
         if position(io) > 0
             println(io, "\n\n\n### NEW REPORT STARTING HERE ###\n")
@@ -373,6 +385,16 @@ function print_report(simulation::SimulationSetup, time_begin, time_end, statist
             println(io, " (+ ", simulation.ninit, " initialization cycles)")
         else
             println(io)
+        end
+        if simulation.printevery > 0
+            print(io, "Output every ", simulation.printevery, " production cycles")
+            if simulation.ninit > 0 && simulation.printeveryinit > 0
+                println(io, " (+ every ", simulation.printeveryinit, " initialization cycles)")
+            else
+                println(io)
+            end
+        elseif simulation.ninit > 0 && simulation.printeveryinit > 0
+            println(io, "Output every ", simulation.printeveryinit, " initialization cycles")
         end
         if allequal(simulation.temperatures)
             println(io, "Temperature: ", simulation.temperatures[1])
@@ -385,29 +407,24 @@ function print_report(simulation::SimulationSetup, time_begin, time_end, statist
         end
         println(io)
 
-        println(io, "Accepted moves: ", statistics.total.accepted, '/', statistics.total.trials, " (attempted) = ", statistics.total(), " among which:")
-        for (i, symb) in enumerate(mcmovenames)
-            stat = getfield(statistics, 3+i)::MoveKind
-            stat.trials == 0 && continue
-            str = replace(String(symb), '_'=>' ')
-            println(io, " - accepted ", str, stat.accepted > 1 ? "s: " : ": ", stat.accepted, '/', stat.trials, " (attempted) = ", stat())
+        if statistics isa MoveStatistics
+            println(io, "Accepted moves: ", statistics.total.accepted, '/', statistics.total.trials, " (attempted) = ", statistics.total(), " among which:")
+            for (i, symb) in enumerate(mcmovenames)
+                stat = getfield(statistics, 3+i)::MoveKind
+                stat.trials == 0 && continue
+                str = replace(String(symb), '_'=>' ')
+                println(io, " - accepted ", str, stat.accepted > 1 ? "s: " : ": ", stat.accepted, '/', stat.trials, " (attempted) = ", stat())
+            end
+            println(io, "Final dmax: ", statistics.dmax)
+            println(io, "Final θmax: ", statistics.θmax)
+        elseif statistics isa Tuple{Int,Int}
+            print(io, "Accepted hops: ", statistics[1], '/', statistics[2], " (attempted) = ", statistics[1]/statistics[2])
         end
-        println(io, "Final dmax: ", statistics.dmax)
-        println(io, "Final θmax: ", statistics.θmax)
         println(io)
     end
 end
 
-
-"""
-    run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
-
-Run a Monte-Carlo simulation. Return the list of energies of the system during the
-simulation.
-
-See [`MonteCarloSetup`](@ref) for the definition of the system and
-[`SimulationSetup`](@ref) for the parameters of the simulation.
-"""
+# documentation at the end of the file
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     time_begin = time()
     # energy initialization
@@ -612,3 +629,149 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     print_report(simu, time_begin, time_end, statistics)
     energies
 end
+
+
+function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup)
+    time_begin = time()
+    # energy initialization
+    energy = baseline_energy(sh)
+    if isinf(Float64(energy)) || isnan(Float64(energy))
+        @error "Initial energy is not finite, this probably indicates a problem with the initial configuration."
+    end
+
+    # record and outputs
+    mkpath(simu.outdir)
+    simu.record(sh, energy, -simu.ninit, simu) === :stop && @goto end_cleanup
+
+    N_print_init = simu.printeveryinit == 0 ? 0 : cld(simu.ninit, simu.printeveryinit)
+    N_print = simu.printevery == 0 ? 1 + (simu.ncycles>0) : 1 + fld(simu.ncycles, simu.printevery)
+    energies_init = Vector{typeof(energy)}(undef, N_print_init)
+    energies = Vector{typeof(energy)}(undef, N_print)
+    allsteps_init = Vector{Vector{UInt16}}(undef, N_print_init)
+    allsteps = Vector{Vector{UInt16}}(undef, N_print)
+
+    # value initialisations
+    old_i = 0
+    accepted = false
+    acceptedhop, attemptedhop = 0, 0
+    i_print = 1
+    i_print_init = 1
+
+    if simu.ninit == 0
+        allsteps[1] = copy(sh.population)
+        energies[1] = energy
+        i_print = 2
+        if simu.ncycles == 0 # single-point computation
+            @goto end_cleanup
+        end
+    else
+        allsteps_init[1] = copy(sh.population)
+        energies_init[1] = energy
+        i_print_init = 2
+    end
+
+    has_initial_output = any(startswith("initial")∘String, simu.outtype)
+
+    numpop = length(sh.population)
+    numpop == 0 && @error "Empty simulation"
+
+    numsites = length(sh.sites)
+
+    # idle initialisations
+    local before::TK
+    local after::TK
+
+    # main loop
+    for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
+        temperature = simu.temperatures[counter_cycle]
+
+        for idx_step in 1:numpop
+            i = rand(1:numpop)
+            newpos = rand(1:numsites)
+            attemptedhop += 1
+
+            # Core computation: energy difference between after and before the move
+            if old_i == i
+                if accepted
+                    before = after
+                end
+                after = movement_energy(sh, i, newpos)
+            else
+                before, after = combined_movement_energy(sh, i, newpos)
+            end
+
+            accepted = compute_accept_move(before, after, temperature, sh)
+            if accepted
+                energy += after - before
+                sh.population[i] = newpos
+                acceptedhop += 1
+            end
+
+            old_i = i
+        end
+
+        # end of cycle
+        report_now = (idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))) ||
+                     (idx_cycle < 0 && has_initial_output && simu.printeveryinit > 0 && idx_cycle%simu.printeveryinit == 0)
+        if !(simu.record isa Returns) || report_now
+            if idx_cycle == 0 # start production with a precise energy
+                energy = baseline_energy(sh)
+            end
+            if report_now
+                if idx_cycle < 0
+                    allsteps_init[i_print_init] = copy(sh.population)
+                    energies_init[i_print_init] = energy
+                    i_print_init += 1
+                else
+                    allsteps[i_print] = copy(sh.population)
+                    energies[i_print] = energy
+                    i_print += 1
+                end
+            end
+            if !(simu.record isa Returns)
+                simu.record(sh, energy, idx_cycle, simu)
+            end
+            yield()
+        end
+    end
+
+    @label end_cleanup
+    if simu.printevery == 0 && simu.ncycles > 0
+        allsteps[i_print] = copy(sh.population)
+        energies[i_print] = energy
+        i_print += 1
+    end
+    if !isempty(simu.outdir)
+        for initial_ in (:initial_, Symbol(""))
+            if Symbol(initial_, :energies) in simu.outtype
+                serialize(joinpath(simu.outdir, string(initial_, "energies.serial")), initial_ == :initial_ ? energies_init : energies)
+            end
+        end
+        if simu.printeveryinit > 0
+            serialize(joinpath(simu.outdir, "populations_init.serial"), allsteps_init)
+        end
+        serialize(joinpath(simu.outdir, "populations.serial"), allsteps)
+    end
+    if !(simu.ninit == 0 && simu.ncycles == 0) # not a single-point computation
+        lastenergy = baseline_energy(sh)
+        if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
+            @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!" actual=lastenergy recorded=energy
+        end
+    end
+    fetch(simu.record)
+    time_end = time()
+    print_report(simu, time_begin, time_end, (acceptedhop, attemptedhop))
+    energies
+end
+
+"""
+    run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
+    run_montecarlo!(sh::SiteHopping, simu::SimulationSetup)
+
+Run a Monte-Carlo simulation. Return the list of energies of the system during the
+simulation.
+
+See [`MonteCarloSetup`](@ref) or [`SiteHopping`](@ref) for the definition of the system and
+[`SimulationSetup`](@ref) for the parameters of the simulation.
+"""
+run_montecarlo!

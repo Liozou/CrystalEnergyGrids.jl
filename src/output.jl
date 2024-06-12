@@ -23,7 +23,22 @@ function output_pdb(path, o::Union{ProtoSimulationStep,SimulationStep}, (a, b, c
     end
 end
 
-function output_pdb(path, o::Union{ProtoSimulationStep,SimulationStep})
+function output_pdb(path, sh::SiteHopping, (a, b, c), (α, β, γ), modelidx, atomcounter)
+    open(path, "a") do io
+        @printf io "MODEL     %4d\n" modelidx
+        @printf io "CRYST1%9g%9g%9g%7g%7g%7g\n" NoUnits(a/u"Å") NoUnits(b/u"Å") NoUnits(c/u"Å") α β γ
+        for i in sh.population, (k, pos) in enumerate(sh.sites[i])
+            symb = String(sh.atomnames[k])
+            molid, atomid = atomcounter[1, i, k]
+            @printf io "ATOM  %-6d%4.4s MOL  %-8d%8.4lf%8.4lf%8.4lf  1.00  0.00          %2.2s  \n" atomid symb molid NoUnits(pos[1]/u"Å") NoUnits(pos[2]/u"Å") NoUnits(pos[3]/u"Å") symb
+        end
+        @printf io "ENDMDL\n"
+        nothing
+    end
+end
+
+
+function output_pdb(path, o::Union{ProtoSimulationStep,SimulationStep,SiteHopping})
     if splitext(path)[2] != ".pdb"
         path = path*".pdb"
     end

@@ -1,3 +1,5 @@
+using Random: randperm
+
 export SiteHopping
 
 """
@@ -8,42 +10,46 @@ A `SiteHopping` instance stores both the sites and the energies relative to its 
 population, so it depends on both the sites and the framework.
 """
 struct SiteHopping{Trng}
-    population::Vector{Int}
+    population::Vector{UInt16}
     sites::Vector{Vector{SVector{3,TÅ}}}
     frameworkenergies::Vector{TK}
     interactions::Matrix{TK}
-    rng::Trng
+    mat::SMatrix{3,3,TÅ,9}
+    atomnames::Vector{Symbol}
     tailcorrection::TK
+    rng::Trng
 end
 
 function SiteHopping(sites, framework, forcefield_framework, syst_mol, population=-1;
                   supercell=nothing, rng=default_rng(), cutoff=12.0u"Å")
+    length(sites) > typemax(UInt16) && error("Cannot handle more than $(typemax(UInt16)) different sites")
     print_charge_warning = PRINT_CHARGE_WARNING[]
     PRINT_CHARGE_WARNING[] = false
-    mc1 = first(setup_montecarlo(framework, forcefield_framework, [syst_mol]; supercell, blockfiles=[false], cutoff, rng))
-    baseline_energy(mc1)
     n = length(sites)
     frameworkenergies = Vector{TK}(undef, n)
     ewaldenergies = Vector{TK}(undef, n)
-    sites = eltype(eltype(eltype(sites))) <: AbstractFloat ? [[mc1.step.mat * at for at in s] for s in sites] : sites
+    mc1 = first(setup_montecarlo(framework, forcefield_framework, [syst_mol]; supercell, blockfiles=[false], cutoff, rng))
+    mat = mc1.step.mat
+    sites = eltype(eltype(eltype(sites))) <: AbstractFloat ? [[mat * at for at in s] for s in sites] : sites
+    base1 = baseline_energy(mc1).er - movement_energy(mc1, (1,1))
     for (i, s) in enumerate(sites)
-        site = eltype(s) === AbstractFloat ? mc1.step.mat * s : s
-        movement_energy(mc1, (1,1), site); update_mc!(mc1, (1,1), site)
-        baseer = baseline_energy(mc1).er
-        ewaldenergies[i] = baseer.inter + baseer.reciprocal
-        frameworkenergies[i] = Number(baseer)
+        Δ1 = base1 + movement_energy(mc1, (1,1), s)
+        ewaldenergies[i] = Δ1.inter + Δ1.reciprocal
+        frameworkenergies[i] = Number(Δ1)
     end
     mc2 = first(setup_montecarlo(framework, forcefield_framework, [(syst_mol, 2)]; supercell, blockfiles=[false], cutoff, rng))
-    baseline_energy(mc2)
+    root = baseline_energy(mc2).er
     interactions = Matrix{TK}(undef, n, n)
     for (i, si) in enumerate(sites)
         interactions[i,i] = 1e100u"K"
-        movement_energy(mc2, (1,1), si); update_mc!(mc2, (1,1), si)
+        before, after = combined_movement_energy(mc2, (1,1), si)
+        update_mc!(mc2, (1,1), si)
+        root = root - before + after
+        base2 = root - movement_energy(mc2, (1,2))
         for j in (i+1:n)
             sj = sites[j]
-            movement_energy(mc2, (1,2), sj); update_mc!(mc2, (1,2), sj)
-            baseer2 = baseline_energy(mc2).er
-            interactions[i,j] = interactions[j,i] = baseer2.inter + baseer2.reciprocal - ewaldenergies[i] - ewaldenergies[j]
+            Δ2 = base2 + movement_energy(mc2, (1,2), sj)
+            interactions[i,j] = interactions[j,i] = Δ2.inter + Δ2.reciprocal - ewaldenergies[i] - ewaldenergies[j]
         end
     end
     m = population isa Integer ? population : length(population)
@@ -52,11 +58,20 @@ function SiteHopping(sites, framework, forcefield_framework, syst_mol, populatio
     tailcorrection = mcpop.tailcorrection[]
     actualpopulation = if population isa Integer
         m = length(mcpop.revflatidx)
-        actualpopulation = collect(1:m)
+        actualpopulation = randperm(UInt16(n))
+        resize!(actualpopulation, m)
     else
         copy(population)
     end
-    SiteHopping(actualpopulation, sites, frameworkenergies, interactions, rng, tailcorrection)
+    M = maximum(actualpopulation)
+    M > length(sites) && error(lazy"Cannot populate site $M among $(length(sites)) sites")
+    atomnames = mcpop.step.ff.symbols[mcpop.step.ffidx[1]]
+    SiteHopping(actualpopulation, sites, frameworkenergies, interactions, mat, atomnames,
+                tailcorrection, rng)
+end
+
+function Base.show(io::IO, sh::SiteHopping)
+    print(io, "SiteHopping setup with ", length(sh.population) , " molecules among ", length(sh.sites), " sites")
 end
 
 function baseline_energy(sh::SiteHopping)
@@ -67,3 +82,14 @@ function baseline_energy(sh::SiteHopping)
     end
     sh.tailcorrection + sum(@view sh.frameworkenergies[sh.population]) + inter
 end
+
+function movement_energy(sh::SiteHopping, i, si=sh.population[i])
+    inter = 0.0u"K"
+    for (j, sj) in enumerate(sh.population)
+        i == j && continue
+        inter += sh.interactions[si,sj]
+    end
+    sh.frameworkenergies[si] + inter
+end
+combined_movement_energy(sh::SiteHopping, i, si) = (movement_energy(sh, i), movement_energy(sh, i, si))
+
