@@ -79,7 +79,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         block = blocksetup[idxsystem]
         system, n = s isa Tuple ? s : (s, 1)
         m = length(kindsdict)+1
-        mcmove = isnothing(mcmoves[idxsystem]) ? MCMoves(length(systems) == 1) : mcmoves[idxsystem]
+        mcmove = isnothing(mcmoves[idxsystem]) ? MCMoves(length(s) == 1) : mcmoves[idxsystem]
         kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block, mcmove), m)
         if kind === m
             push!(systemkinds, IdSystem(system)::IdSystem)
@@ -678,10 +678,10 @@ end
 
 
 choose_random_species(mc::MonteCarloSetup) = rand(mc.rng, mc.revflatidx)
-function compute_accept_move(before::MCEnergyReport, after::MCEnergyReport, T, mc::MonteCarloSetup, swapinfo::SwapInformation)
+function compute_accept_move(before, after, T, mc, swapinfo::Union{SwapInformation,Nothing}=nothing)
     b = Number(before)
     a = Number(after)
-    if swapinfo.isswap
+    if swapinfo isa SwapInformation && swapinfo.isswap
         return compute_accept_move_swap(a-b, T, mc, swapinfo)
     end
     a < b && return true
