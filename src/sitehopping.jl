@@ -23,38 +23,64 @@ end
 function SiteHopping(sites, framework, forcefield_framework, syst_mol, population=-1;
                   supercell=nothing, rng=default_rng(), cutoff=12.0u"Å")
     length(sites) > typemax(UInt16) && error("Cannot handle more than $(typemax(UInt16)) different sites")
-    print_charge_warning = PRINT_CHARGE_WARNING[]
-    PRINT_CHARGE_WARNING[] = false
-    n = length(sites)
-    frameworkenergies = Vector{TK}(undef, n)
-    ewaldenergies = Vector{TK}(undef, n)
-    mc1 = first(setup_montecarlo(framework, forcefield_framework, [syst_mol]; supercell, blockfiles=[false], cutoff, rng))
-    mat = mc1.step.mat
+    m = population isa Integer ? population : length(population)
+    mcpop = first(setup_montecarlo(framework, forcefield_framework, [(syst_mol, m)]; supercell, blockfiles=[false], cutoff, rng))
+    mat = mcpop.step.mat
     sites = eltype(eltype(eltype(sites))) <: AbstractFloat ? [[mat * at for at in s] for s in sites] : sites
-    base1 = baseline_energy(mc1).er - movement_energy(mc1, (1,1))
-    for (i, s) in enumerate(sites)
-        Δ1 = base1 + movement_energy(mc1, (1,1), s)
-        ewaldenergies[i] = Δ1.inter + Δ1.reciprocal
-        frameworkenergies[i] = Number(Δ1)
-    end
-    mc2 = first(setup_montecarlo(framework, forcefield_framework, [(syst_mol, 2)]; supercell, blockfiles=[false], cutoff, rng))
-    root = baseline_energy(mc2).er
-    interactions = Matrix{TK}(undef, n, n)
-    for (i, si) in enumerate(sites)
-        interactions[i,i] = 1e100u"K"
-        before, after = combined_movement_energy(mc2, (1,1), si)
-        update_mc!(mc2, (1,1), si)
-        root = root - before + after
-        base2 = root - movement_energy(mc2, (1,2))
-        for j in (i+1:n)
-            sj = sites[j]
-            Δ2 = base2 + movement_energy(mc2, (1,2), sj)
-            interactions[i,j] = interactions[j,i] = Δ2.inter + Δ2.reciprocal - ewaldenergies[i] - ewaldenergies[j]
+    n = length(sites)
+    atomnames = mcpop.step.ff.symbols[mcpop.step.ffidx[1]]
+
+    storeinteractions = joinpath(scratchspace, string(join(atomnames), '-', hash_string(string(hash_string(mcpop.step.ff), '-', hash_string(sites)))))
+    storeframework = string(storeinteractions, '-', hash_string(string(hash_string(mcpop.coulomb.grid), '-', isempty(mcpop.grids) ? "0" : hash_string([mcpop.grids[k].grid for k in mcpop.step.ffidx[1]]))))
+    frameworkenergies, interactions = if isfile(storeframework) && isfile(storeinteractions)
+        printstyled("Retrieved framework site energies at ", storeframework, " and site interactions at ", storeinteractions, ".\n"; color=:cyan)
+        _frameworkenergies = deserialize(storeframework)::Vector{TK}
+        _interactions = deserialize(storeinteractions)::Matrix{TK}
+        (_frameworkenergies, _interactions)
+    else
+        frameworkenergiesC = Vector{TK}(undef, n)
+        ewaldenergies = Vector{TK}(undef, n)
+        print_charge_warning = PRINT_CHARGE_WARNING[]
+        PRINT_CHARGE_WARNING[] = false
+        mc1 = first(setup_montecarlo(framework, forcefield_framework, [syst_mol]; supercell, blockfiles=[false], cutoff, rng))
+        PRINT_CHARGE_WARNING[] = print_charge_warning
+        printstyled("Creating framework site energies at ", storeframework, " ... "; color=:yellow)
+        base1 = baseline_energy(mc1).er - movement_energy(mc1, (1,1))
+        for (i, s) in enumerate(sites)
+            Δ1 = base1 + movement_energy(mc1, (1,1), s)
+            ewaldenergies[i] = Δ1.inter + Δ1.reciprocal
+            frameworkenergiesC[i] = Number(Δ1)
+        end
+        serialize(storeframework, frameworkenergiesC)
+        printstyled("Done.\n"; color=:cyan)
+        if isfile(storeinteractions)
+            _interactions2 = deserialize(storeinteractions)::Matrix{TK}
+            printstyled("Retrieved site interactions at ", storeinteractions, ".\n"; color=:cyan)
+            frameworkenergiesC, _interactions2
+        else
+            PRINT_CHARGE_WARNING[] = false
+            mc2 = first(setup_montecarlo(framework, forcefield_framework, [(syst_mol, 2)]; supercell, blockfiles=[false], cutoff, rng))
+            PRINT_CHARGE_WARNING[] = print_charge_warning
+            printstyled("Creating site interactions at ", storeinteractions, " ... "; color=:yellow)
+            root = baseline_energy(mc2).er
+            interactionsC = Matrix{TK}(undef, n, n)
+            for (i, si) in enumerate(sites)
+                interactionsC[i,i] = 1e100u"K"
+                before, after = combined_movement_energy(mc2, (1,1), si)
+                update_mc!(mc2, (1,1), si)
+                root = root - before + after
+                base2 = root - movement_energy(mc2, (1,2))
+                for j in (i+1:n)
+                    sj = sites[j]
+                    Δ2 = base2 + movement_energy(mc2, (1,2), sj)
+                    interactionsC[i,j] = interactionsC[j,i] = Δ2.inter + Δ2.reciprocal - ewaldenergies[i] - ewaldenergies[j]
+                end
+            end
+            serialize(storeinteractions, interactionsC)
+            printstyled("Done.\n"; color=:cyan)
+            frameworkenergiesC, interactionsC
         end
     end
-    m = population isa Integer ? population : length(population)
-    PRINT_CHARGE_WARNING[] = print_charge_warning
-    mcpop = first(setup_montecarlo(framework, forcefield_framework, [(syst_mol, m)]; supercell, blockfiles=[false], cutoff, rng))
     tailcorrection = mcpop.tailcorrection[]
     actualpopulation = if population isa Integer
         m = length(mcpop.revflatidx)
@@ -65,7 +91,6 @@ function SiteHopping(sites, framework, forcefield_framework, syst_mol, populatio
     end
     M = maximum(actualpopulation)
     M > length(sites) && error(lazy"Cannot populate site $M among $(length(sites)) sites")
-    atomnames = mcpop.step.ff.symbols[mcpop.step.ffidx[1]]
     SiteHopping(actualpopulation, sites, frameworkenergies, interactions, mat, atomnames,
                 tailcorrection, rng)
 end
