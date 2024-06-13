@@ -641,6 +641,7 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup)
 
     # record and outputs
     mkpath(simu.outdir)
+    serialize(joinpath(simu.outdir, "sitehopping.serial"), sh)
     simu.record(sh, energy, -simu.ninit, simu) === :stop && @goto end_cleanup
 
     N_print_init = simu.printeveryinit == 0 ? 0 : cld(simu.ninit, simu.printeveryinit)
@@ -664,7 +665,7 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup)
         if simu.ncycles == 0 # single-point computation
             @goto end_cleanup
         end
-    else
+    elseif simu.printeveryinit > 0
         allsteps_init[1] = copy(sh.population)
         energies_init[1] = energy
         i_print_init = 2
