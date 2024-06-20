@@ -372,10 +372,11 @@ function grid_locations(framework, forcefield_framework, atoms, gridstep, superc
     return coulomb_grid_path, vdws
 end
 
-function retrieve_or_create_grid(grid_path, syst_framework, forcefield, gridstep, atom_or_eframework, mat, new, cutoff)
+function retrieve_or_create_grid(grid_path, syst_framework, forcefield::ForceField, gridstep, atom_or_eframework, mat, new, cutoff)
     (isempty(grid_path) || isinf(cutoff)) && return EnergyGrid(false)
     cutoff == 12.0u"Å" || error("Cutoff other than 12 Å or infinity is not supported.")
     iscoulomb = atom_or_eframework isa EwaldFramework
+    !iscoulomb && !needsvdwgrid(forcefield, atom_or_eframework) && return EnergyGrid(true)
     text = iscoulomb ? "Coulomb grid" : "VdW grid for $atom_or_eframework"
     if new || !isfile(grid_path)
         mkpath(dirname(grid_path))
@@ -394,10 +395,14 @@ end
 
 """
     setup_RASPA(framework, forcefield_framework, molecule, forcefield_molecule; gridstep=0.15u"Å", supercell=nothing, blockfile=nothing, new=false, cutoff=12.0u"Å")
+    setup_RASPA(framework, forcefield_framework, syst_mol; gridstep=0.15u"Å", supercell=nothing, blockfile=nothing, new=false, cutoff=12.0u"Å")
+    setup_RASPA(framework, forcefield, atom::Union{AbstractString,Symbol}; gridstep=0.15u"Å", supercell=nothing, blockfile=nothing, new=false, cutoff=12.0u"Å")
 
 Return a [`CrystalEnergySetup`](@ref) for studying `molecule` (with its forcefield) in
 `framework` (with its forcefield), extracted from existing RASPA grids and completed with
 Ewald sums precomputations.
+The molecule can alternatively be directly as an abstract system `syst_mol`, or, if it is
+a single atom defined in the `forcefield`, as that very `atom`.
 
 `forcefield_framework` can be the name of the forcefield, or a pair `(name, ff)` where `ff`
 is a `ForceField`, in which case the given `ff` will be used. It can also be a pair
@@ -474,6 +479,18 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
     syst_framework = load_framework_RASPA(framework, forcefield_framework)
     syst_mol = load_molecule_RASPA(molecule, forcefield_molecule, forcefield_framework, syst_framework)
     setup_RASPA(framework, forcefield_framework, syst_mol; gridstep, supercell, blockfile, new, cutoff)
+end
+function setup_RASPA(framework, forcefield, atom::Union{AbstractString,Symbol}; gridstep=0.15u"Å", supercell=nothing, blockfile=nothing, new=false, cutoff=12.0u"Å")
+    syst_framework = load_framework_RASPA(framework, forcefield)
+    symbol = Symbol(atom)
+    pseudo = parse_pseudoatoms_RASPA(forcefield, nothing)[symbol]
+    mass  = pseudo.mass*1.0u"u"
+    charge = pseudo.charge*1.0u"e_au"
+    el = get(AtomsBase.PeriodicTable.elements, pseudo.symbol, missing)
+    atom_number = ismissing(el) ? 0 : el.number
+    bbox = bounding_box(syst_framework)
+    syst_mol = RASPASystem(bbox, [zero(SVector{3,Float64})*u"Å"], [symbol], [atom_number], [mass], [charge], true)
+    setup_RASPA(framework, forcefield, syst_mol; gridstep, supercell, blockfile, new, cutoff)
 end
 
 

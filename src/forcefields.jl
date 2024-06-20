@@ -294,3 +294,15 @@ Base.getindex(ff::ForceField, a::Symbol, b::Symbol) = ff[ff.sdict[a], ff.sdict[b
 function derivatives_nocutoff(ff::ForceField, i::Integer, j::Integer, distance)
     derivativesGrid(ff.interactions[i,j], distance)
 end
+
+function needsvdwgrid(ff::ForceField, atom)
+    i = ff.sdict[Symbol(get_atom_name(atom))]
+    for inters in @view ff.interactions[:,i]
+        for inter in (inters isa InteractionRule ? (inters,) : inters.rules)
+            if inter.kind != FF.NoInteraction && inter.kind != FF.CoulombEwaldDirect
+                return true
+            end
+        end
+    end
+    return false
+end

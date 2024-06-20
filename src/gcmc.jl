@@ -67,9 +67,9 @@ function compute_accept_move_swap(diff::TK, T, mc, swapinfo::SwapInformation)
     expterm = exp(-diff/T)
     prefix = swapinfo.φPV_div_k/T
     N = length(mc.step.posidx[swapinfo.i])
-    rand(mc.rng) < if swapinfo.isinsertion
+    rand(mc.rng) < if swapinfo.isinsertion # if insertion
         prefix/(N+1) * expterm
-    else
+    else # deletion
         N/prefix * expterm
     end
 end
