@@ -77,7 +77,8 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         idxsystem += 1
         s = systems[idxsystem]
         block = blocksetup[idxsystem]
-        system, n = s isa Tuple ? s : (s, 1)
+        _system, n = s isa Tuple ? s : (s, 1)
+        system = default_system(_system, ff)
         m = length(kindsdict)+1
         mcmove = isnothing(mcmoves[idxsystem]) ? MCMoves(length(s) == 1) : mcmoves[idxsystem]
         kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block, mcmove), m)
@@ -113,13 +114,14 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 
     if charge_flag isa NTuple{4,Int}
         idxsystem′, kind′, i_revidxk′, i_possk′ = charge_flag
-        system′, _ = systems[idxsystem]
+        _system′ = first(systems[idxsystem])
+        system′ = default_system(_system′, ff)
         tot_charge = eframework.net_charges_framework + sum(sum(charges[ix] for ix in ffidx[i]; init=0.0u"e_au")*length(poss[i]) for i in 1:length(poss); init=0.0u"e_au")
         this_charge = sum(uconvert(u"e_au", system′[i,:atomic_charge])::Te_au for i in 1:length(system′); init=0.0u"e_au")
         iszero(this_charge) && error("Cannot use a number equal to -1 on a neutral species")
         n′ = round(Int, -tot_charge/this_charge)
         n′ ≥ 0 || error(lazy"Cannot compensate the total charge of $tot_charge with a species of the charge $this_charge")
-        systems[idxsystem] = (system′, n′)
+        systems[idxsystem] = (_system′, n′)
         splice!(rev_indices[kind′], (i_revidxk′+1):i_revidxk′, idxsystem′ for _ in 1:n′)
         restartpositions isa Nothing && splice!(poss[kind′], (i_possk′+1):i_possk′, copy(position(system′)::Vector{SVector{3,TÅ}}) for _ in 1:n′)
     end
@@ -276,7 +278,7 @@ function setup_montecarlo(framework, forcefield_framework, systems;
     needcoulomb = false
     encountered_atoms = Set{Symbol}()
     for s in systems
-        system = s isa Tuple ? s[1] : s
+        system = default_system((s isa Tuple ? s[1] : s), ff)
         if !needcoulomb
             needcoulomb = any(!iszero(system[i,:atomic_charge])::Bool for i in 1:length(system))
         end

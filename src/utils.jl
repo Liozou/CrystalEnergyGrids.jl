@@ -328,7 +328,6 @@ function fraction_sites(egrid)
         bins[1+floor(Int, -val/100)] += 1
     end
     s = sum(bins)
-    @show s, s/length(egrid)
     bins ./= s
     bins
 end

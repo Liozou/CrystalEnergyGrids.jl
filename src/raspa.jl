@@ -174,8 +174,10 @@ Return a [`PseudoAtomListing`](@ref) extracted from the `pseudo_atoms.def` file 
 given force field.
 """
 function parse_pseudoatoms_RASPA(forcefield, ::Nothing)
-    if forcefield isa AbstractString || !(forcefield[2] isa PseudoAtomListing)
-        parse_pseudoatoms_RASPA(joinpath(getdir_RASPA(), "forcefield", forcefield isa AbstractString ? forcefield : forcefield[1], "pseudo_atoms.def"))
+    if forcefield isa AbstractString || forcefield isa ForceField || !(forcefield[2] isa PseudoAtomListing)
+        ff = forcefield isa Tuple ? forcefield[1] : forcefield
+        ffname = ff isa ForceField ? ff.name : ff
+        parse_pseudoatoms_RASPA(joinpath(getdir_RASPA(), "forcefield", ffname, "pseudo_atoms.def"))
     else
         forcefield[2]::PseudoAtomListing
     end
@@ -325,6 +327,21 @@ function load_molecule_RASPA(name::AbstractString, forcefield::AbstractString, f
         SVector{3,SVector{3,TÅ}}([[Inf, 0.0, 0.0]*u"Å", [0.0, Inf, 0.0]*u"Å", [0.0, 0.0, Inf]*u"Å"])
     end
     RASPASystem(bbox, positions, symbols, atom_numbers, mass, charges, true)
+end
+
+function default_system(s, ff)
+    forcefield = parse_forcefield_RASPA(ff)
+    s isa AbstractSystem && return s
+    symbol = Symbol(get_atom_name(s))
+    idx = get(forcefield.sdict, symbol, 0)
+    idx == 0 && return load_molecule_RASPA(s, "Default", forcefield)
+    pseudo = parse_pseudoatoms_RASPA(ff, nothing)[symbol]
+    mass  = pseudo.mass*1.0u"u"
+    charge = pseudo.charge*1.0u"e_au"
+    el = get(AtomsBase.PeriodicTable.elements, pseudo.symbol, missing)
+    atom_number = ismissing(el) ? 0 : el.number
+    bbox = SA[SA[Inf, 0.0, 0.0]u"Å", SA[0.0, Inf, 0.0]u"Å", SA[0.0, 0.0, Inf]u"Å"]
+    RASPASystem(bbox, [zero(SVector{3,Float64})*u"Å"], [symbol], [atom_number], [mass], [charge], true)
 end
 
 function decide_parse_block(blockfile, molecule, framework_name)::String
@@ -481,15 +498,7 @@ function setup_RASPA(framework, forcefield_framework, molecule, forcefield_molec
     setup_RASPA(framework, forcefield_framework, syst_mol; gridstep, supercell, blockfile, new, cutoff)
 end
 function setup_RASPA(framework, forcefield, atom::Union{AbstractString,Symbol}; gridstep=0.15u"Å", supercell=nothing, blockfile=nothing, new=false, cutoff=12.0u"Å")
-    syst_framework = load_framework_RASPA(framework, forcefield)
-    symbol = Symbol(atom)
-    pseudo = parse_pseudoatoms_RASPA(forcefield, nothing)[symbol]
-    mass  = pseudo.mass*1.0u"u"
-    charge = pseudo.charge*1.0u"e_au"
-    el = get(AtomsBase.PeriodicTable.elements, pseudo.symbol, missing)
-    atom_number = ismissing(el) ? 0 : el.number
-    bbox = bounding_box(syst_framework)
-    syst_mol = RASPASystem(bbox, [zero(SVector{3,Float64})*u"Å"], [symbol], [atom_number], [mass], [charge], true)
+    syst_mol = default_system(atom, forcefield)
     setup_RASPA(framework, forcefield, syst_mol; gridstep, supercell, blockfile, new, cutoff)
 end
 
@@ -570,9 +579,12 @@ value, the returned force field will include [`CoulombEwaldDirect`](@ref) pair i
 between all charged species, which corresponds to the direct part of the Ewald summation.
 """
 function parse_forcefield_RASPA(name, pseudoatoms_input::Union{Nothing,PseudoAtomListing}=nothing; cutoff=12.0u"Å", ewald_precision=!isinf(cutoff)*1e-6u"Å^-1")
-    if !(name isa AbstractString) && name[2] isa ForceField
-        name[2].cutoff == cutoff || error("Inconsistent cutoffs: choose between $(ff.cutoff) from force field or given $cutoff")
-        return name[2]
+    if !(name isa AbstractString)
+        _ff = name isa ForceField ? name : name[2]
+        if _ff isa ForceField
+            _ff.cutoff == cutoff || error("Inconsistent cutoffs: choose between $(_ff.cutoff) from force field or given $cutoff")
+            return _ff
+        end
     end
     pseudoatoms = if pseudoatoms_input isa Nothing
         parse_pseudoatoms_RASPA(name, nothing)
