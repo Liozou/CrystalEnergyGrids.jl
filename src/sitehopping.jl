@@ -1,4 +1,4 @@
-using Random: randperm
+using Random: randperm, shuffle!
 
 export SiteHopping
 
@@ -98,6 +98,9 @@ end
 function Base.show(io::IO, sh::SiteHopping)
     print(io, "SiteHopping setup with ", length(sh.population) , " molecules among ", length(sh.sites), " sites")
 end
+function Base.copy(sh::SiteHopping)
+    SiteHopping(copy(sh.population), sh.sites, sh.frameworkenergies, sh.interactions, sh.mat, sh.atomnames, copy(sh.tailcorrection), copy(sh.rng))
+end
 
 function baseline_energy(sh::SiteHopping)
     inter = 0.0u"K"
@@ -118,3 +121,72 @@ function movement_energy(sh::SiteHopping, i, si=sh.population[i])
 end
 combined_movement_energy(sh::SiteHopping, i, si) = (movement_energy(sh, i), movement_energy(sh, i, si))
 
+"""
+    extremal_placements(sh::SiteHopping, sitemap::AbstractVector{T}) where T
+
+Return a list of pairs `priorities => energy` that give the energy corresponding to placing
+the mobile species of `sh` according to `priorities`. The list is sorted by `energy`.
+
+`sitemap` is the list such that `sitemap[i]` is the name of site `i`. Given this, a
+`priorities` equal to `[p1, p2, ..., pN]` means: fill all the sites whose name is `p1`,
+then fill all the sites whose name is `p2`, etc., until trying to fill the sites whose name
+is `pN` and placing the last species. If the sites `pN` are not filled, the returned energy
+is the minimum over 100 random assignments among those sites.
+"""
+function extremal_placements(sh::SiteHopping, sitemap::AbstractVector{T}) where {T}
+    allsites = unique!(sort(sitemap))
+    N = length(allsites)
+    allsitesdict = Dict(n => i for (i,n) in enumerate(allsites))
+    newsitemap = [allsitesdict[name] for name in sitemap]
+    sites_per_name = [UInt16[] for _ in 1:N]
+    for (i, site) in enumerate(newsitemap)
+        push!(sites_per_name[site], i)
+    end
+    ret = Pair{Vector{Int},Tuple{TK,Vector{UInt16}}}[]
+    newsh = copy(sh)
+    m = length(sh.population)
+    empty!(newsh.population)
+    _extremal_placements!(ret, newsh, Int[], BitSet(), m, N, newsitemap, sites_per_name)
+    sort!([[allsites[i] for i in t] => (e, sort!(l)) for (t,(e,l)) in ret]; by=first∘last)
+end
+
+function _extremal_placements!(ret, sh::SiteHopping, priorities, used, m, N, newsitemap, sites_per_name)
+    for site in 1:N
+        site in used && continue
+        idxs = sites_per_name[site]
+        n = length(idxs)
+        currpopsize = length(sh.population)
+        currpopsize + n == m || isempty(priorities) || site > priorities[end] || continue
+        push!(priorities, site)
+        r = m - currpopsize
+        if r >= n
+            append!(sh.population, idxs)
+            if currpopsize + n == m
+                push!(ret, copy(priorities) => (baseline_energy(sh), copy(sh.population)))
+            else
+                _extremal_placements!(ret, copy(sh), copy(priorities), union(used, site), m, N, newsitemap, sites_per_name)
+            end
+        else
+            perm = randperm(n)
+            append!(sh.population, @views idxs[perm[1:r]])
+            min_e = baseline_energy(sh)
+            min_pop = sh.population[end-r+1:end]
+            RETRIES = 100
+            for _ in 2:RETRIES
+                resize!(sh.population, currpopsize)
+                shuffle!(perm)
+                append!(sh.population, @views idxs[perm[1:r]])
+                @assert length(sh.population) == m
+                new_e = baseline_energy(sh)
+                if new_e < min_e
+                    min_pop = sh.population[end-r+1:end]
+                    min_e = new_e
+                end
+            end
+            push!(ret, copy(priorities) => (min_e, [(@view sh.population[1:end-r]); min_pop]))
+        end
+
+        pop!(priorities)
+        resize!(sh.population, currpopsize)
+    end
+end
