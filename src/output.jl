@@ -316,9 +316,10 @@ Output `step` as a CIF file at the given `path`.
 
 Only the content of the `SimulationStep` is exported, not the underlying framework.
 The optional argument `framework` can be set to an `AtomsBase`-compliant system to export
-its content along that of the `step`.
+its content along that of the `step`. It can also be the path to a cif file representing
+that system.
 """
-function output_cif(path, step::SimulationStep, framework=RASPASystem(SA[SA[0.,0.,0.]u"Å",SA[0.,0.,0.]u"Å",SA[0.,0.,0.]u"Å"],SVector{3,TÅ}[],Symbol[],Int[],typeof(1.0u"u")[],Te_au[],false))
+function output_cif(path, step::SimulationStep, framework::AbstractSystem=RASPASystem(SA[SA[0.,0.,0.]u"Å",SA[0.,0.,0.]u"Å",SA[0.,0.,0.]u"Å"],SVector{3,TÅ}[],Symbol[],Int[],typeof(1.0u"u")[],Te_au[],false))
     if !all(iszero, bounding_box(framework))
         step.mat ≈ stack(bounding_box(framework)) || throw(MismatchedUnitCells(step.mat, SMatrix{3,3,TÅ,9}(stack(bounding_box(framework)))))
     end
@@ -384,6 +385,11 @@ function output_cif(path, step::SimulationStep, framework=RASPASystem(SA[SA[0.,0
     end
     nothing
 end
+function output_cif(path, step::SimulationStep, framework::AbstractString)
+    cif = ispath(framework) ? framework : joinpath(RASPADIR[], "structures", "cif", framework*".cif")
+    system = load_system(AtomsIO.ChemfilesParser(), cif)
+    output_cif(path, step, system)
+end
 
 function output_cif(path, framework::AbstractSystem{3})
     mat = stack3(bounding_box(framework))*u"Å"
@@ -391,4 +397,9 @@ function output_cif(path, framework::AbstractSystem{3})
     zeroff = ForceField(Matrix{Union{InteractionRule,InteractionRuleSum}}(undef, 0, 0), IdDict{Symbol,Int}(), Symbol[], min(a, b, c)/3, "")
     zerostep = SimulationStep(ProtoSimulationStep(zeroff, Te_au[], mat,SVector{3,TÅ}[], false, NTuple{3,Int}[], falses(0), Vector{Int}[]))
     output_cif(path, zerostep, framework)
+end
+function output_cif(path, framework::AbstractString)
+    cif = ispath(framework) ? framework : joinpath(RASPADIR[], "structures", "cif", framework*".cif")
+    system = load_system(AtomsIO.ChemfilesParser(), cif)
+    output_cif(path, system)
 end
