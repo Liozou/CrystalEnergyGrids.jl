@@ -55,7 +55,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
                           blocksetup::Vector{String},
                           num_framework_atoms::Vector{Int},
                           restartpositions::Union{Nothing,Vector{Vector{Vector{SVector{3,TÅ}}}}};
-                          parallel::Bool=true, rng=default_rng(), mcmoves::Vector)
+                          parallel::Bool=true, rng=default_rng(), mcmoves::Vector, pff=ff)
     if any(≤(24.0u"Å"), perpendicular_lengths(cell.mat))
         error("The current cell has at least one perpendicular length lower than 24.0Å: please use a larger supercell")
     end
@@ -78,7 +78,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         s = systems[idxsystem]
         block = blocksetup[idxsystem]
         _system, n = s isa Tuple ? s : (s, 1)
-        system = default_system(_system, ff)
+        system = default_system(_system, pff)
         m = length(kindsdict)+1
         mcmove = isnothing(mcmoves[idxsystem]) ? MCMoves(length(s) == 1) : mcmoves[idxsystem]
         kind = get!(kindsdict, (atomic_symbol(system)::Vector{Symbol}, block, mcmove), m)
@@ -115,7 +115,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     if charge_flag isa NTuple{4,Int}
         idxsystem′, kind′, i_revidxk′, i_possk′ = charge_flag
         _system′ = first(systems[idxsystem])
-        system′ = default_system(_system′, ff)
+        system′ = default_system(_system′, pff)
         tot_charge = eframework.net_charges_framework + sum(sum(charges[ix] for ix in ffidx[i]; init=0.0u"e_au")*length(poss[i]) for i in 1:length(poss); init=0.0u"e_au")
         this_charge = sum(uconvert(u"e_au", system′[i,:atomic_charge])::Te_au for i in 1:length(system′); init=0.0u"e_au")
         iszero(this_charge) && error("Cannot use a number equal to -1 on a neutral species")
@@ -205,19 +205,18 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
 end
 
 """
-    setup_montecarlo(framework, forcefield_framework, systems;
+    setup_montecarlo(framework, pff, systems;
                      blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
                      supercell=nothing, new=false, restart=nothing, parallel=true,
                      mcmoves=fill(nothing, length(systems)), rng=default_rng(),
                      cutoff=12.0u"Å")
 
 Prepare a Monte Carlo simulation of the input list of `systems` in a `framework` with the
-given force field.
+given force field `pff`.
 
-`forcefield_framework` can be the name of the forcefield, or a pair `(name, ff)` where `ff`
-is a `ForceField`, in which case the given `ff` will be used. It can also be a pair
-`(name, pal)` where `pal` is a `PseudoAtomListing`, in which case the forcefield will be
-read based on its name, but the atom definitions will be taken from the given `pal`.
+`pff` can be either a [`ForceField`](@ref), its name only, or a tuple with a name and
+either a `ForceField` or a [`PseudoAtomListing`](@ref). If a `PseudoAtomListing` is
+provided, it takes priority over the "pseudo_atoms.def" of the force field.
 
 A system can be either an `AbstractSystem`, or a pair `(s, n)` where `s` is an
 `AbstractSystem` and `n` is an integer. In that case, `n` systems identical to `s` will be
@@ -254,7 +253,7 @@ monoatomic species, or [49% translation, 49% rotation, 2% random reinsertion] el
 
 `rng` is the random number generator, defaulting to `Random.default_rng()`.
 """
-function setup_montecarlo(framework, forcefield_framework, systems;
+function setup_montecarlo(framework, pff, systems;
                           blockfiles=fill(nothing, length(systems)), gridstep=0.15u"Å",
                           supercell=nothing, new=false, restart=nothing, parallel=true,
                           mcmoves=fill(nothing, length(systems)), rng=default_rng(),
@@ -262,8 +261,8 @@ function setup_montecarlo(framework, forcefield_framework, systems;
     if framework isa AbstractString && endswith(framework, ".cif")
         framework = framework[1:prevind(framework, end-3)]
     end
-    syst_framework = load_framework_RASPA(framework, forcefield_framework)
-    ff = parse_forcefield_RASPA(forcefield_framework; cutoff)
+    syst_framework = load_framework_RASPA(framework, pff)
+    ff = _ff(pff; cutoff)
     mat = stack3(bounding_box(syst_framework))
     if supercell isa Nothing
         supercell = find_supercell(syst_framework, cutoff)
@@ -278,7 +277,7 @@ function setup_montecarlo(framework, forcefield_framework, systems;
     needcoulomb = false
     encountered_atoms = Set{Symbol}()
     for s in systems
-        system = default_system((s isa Tuple ? s[1] : s), ff)
+        system = default_system((s isa Tuple ? s[1] : s), pff)
         if !needcoulomb
             needcoulomb = any(!iszero(system[i,:atomic_charge])::Bool for i in 1:length(system))
         end
@@ -290,7 +289,7 @@ function setup_montecarlo(framework, forcefield_framework, systems;
     sort!(atoms; by=last)
     # atoms is the list of unique atom types encountered in the molecule species
 
-    coulomb_grid_path, vdw_grid_paths = grid_locations(framework, forcefield_framework, first.(atoms), gridstep, supercell)
+    coulomb_grid_path, vdw_grid_paths = grid_locations(framework, pff, ff, first.(atoms), gridstep, supercell)
 
     coulomb, eframework = if needcoulomb
         _eframework = initialize_ewald(syst_framework)
@@ -318,7 +317,7 @@ function setup_montecarlo(framework, forcefield_framework, systems;
 
     restartpositions = restart isa Nothing ? nothing : read_restart_RASPA(restart)
 
-    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; parallel, rng, mcmoves)
+    setup_montecarlo(cell, csetup, systems, ff, eframework, coulomb, grids, blocksetup, num_framework_atoms, restartpositions; parallel, rng, mcmoves, pff)
 end
 
 """
