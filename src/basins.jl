@@ -25,7 +25,8 @@ end
 """
     local_minima(grid::Array{<:Any,3}, tolerance=1e-2; lt=(<))
 
-Find the positions of the local minima of an energy grid.
+Find the positions of the local minima of an energy grid, i.e. the indices I such that
+`grid[I]` is lower than the 26 grid points forming the smallest cube around it.
 
 If `tolerance ≥ 0`, only return the smallest minima within the relative tolerance compared
 to the energy minimum. `tolerance == 0` corresponds to only returning the minimum while
@@ -47,15 +48,40 @@ function local_minima(grid::Array{<:Any,3}, tolerance=1e-2; lt=(<))
     @loadbalance 0.5 for i3 in 1:a3
         for i2 in 1:a2, i1 in 1:a1
             val = grid[i1,i2,i3]
-            if lt(val, grid[mod1(i1-1,a1),i2,i3]) &&
-                lt(val, grid[mod1(i1+1,a1),i2,i3]) &&
-                lt(val, grid[i1,mod1(i2-1,a2),i3]) &&
-                lt(val, grid[i1,mod1(i2+1,a2),i3]) &&
-                lt(val, grid[i1,i2,mod1(i3-1,a3)]) &&
-                lt(val, grid[i1,i2,mod1(i3+1,a3)])
-                push!(localmins_t[taskid], CartesianIndex(i1, i2, i3))
-                # push!(localmins, CartesianIndex(i1, i2, i3))
-            end
+            m1 = mod1(i1-1,a1)
+            lt(val, grid[m1,i2,i3]) || continue
+            p1 = mod1(i1+1, a1)
+            lt(val, grid[p1,i2,i3]) || continue
+            m2 = mod1(i2-1,a2)
+            lt(val, grid[i1,m2,i3]) || continue
+            lt(val, grid[m1,m2,i3]) || continue
+            lt(val, grid[p1,m2,i3]) || continue
+            p2 = mod1(i2+1,a2)
+            lt(val, grid[i1,p2,i3]) || continue
+            lt(val, grid[m1,p2,i3]) || continue
+            lt(val, grid[p1,p2,i3]) || continue
+            m3 = mod1(i3-1,a3)
+            lt(val, grid[i1,i2,m3]) || continue
+            lt(val, grid[m1,i2,m3]) || continue
+            lt(val, grid[p1,i2,m3]) || continue
+            lt(val, grid[i1,m2,m3]) || continue
+            lt(val, grid[m1,m2,m3]) || continue
+            lt(val, grid[p1,m2,m3]) || continue
+            lt(val, grid[i1,p2,m3]) || continue
+            lt(val, grid[m1,p2,m3]) || continue
+            lt(val, grid[p1,p2,m3]) || continue
+            p3 = mod1(i3+1,a3)
+            lt(val, grid[i1,i2,p3]) || continue
+            lt(val, grid[m1,i2,p3]) || continue
+            lt(val, grid[p1,i2,p3]) || continue
+            lt(val, grid[i1,m2,p3]) || continue
+            lt(val, grid[m1,m2,p3]) || continue
+            lt(val, grid[p1,m2,p3]) || continue
+            lt(val, grid[i1,p2,p3]) || continue
+            lt(val, grid[m1,p2,p3]) || continue
+            lt(val, grid[p1,p2,p3]) || continue
+            push!(localmins_t[taskid], CartesianIndex(i1, i2, i3))
+            # push!(localmins, CartesianIndex(i1, i2, i3))
         end
     end
     # close(lb) # this causes spurious errors to be printed from the `take!`ing tasks
