@@ -608,7 +608,7 @@ function update_mc!(mc::MonteCarloSetup, (i,j)::Tuple{Int,Int}, positions::Vecto
 end
 
 
-function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::Vector{Int}, newpos::Vector{SVector{3,TÅ}})
+function inblockpocket(block::BlockFile, atomblocks::Vector{BlockFile}, ffidxi::Vector{Int}, newpos::AbstractVector{SVector{3,TÅ}})
     for (j, pos) in enumerate(newpos)
         block[pos] && return true
         if !isempty(atomblocks) # atomblocks
