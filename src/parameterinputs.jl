@@ -78,14 +78,13 @@ end
 ## Record inputs
 abstract type RecordFunction <: Function end
 
-mutable struct RMinimumEnergy{T} <: RecordFunction
+mutable struct RMinimumEnergy{Tenergy,Tpos} <: RecordFunction
     mink::Int
-    mine::BaselineEnergyReport
-    minpos::SimulationStep{T}
+    mine::Tenergy
+    minpos::Tpos
 
-    RMinimumEnergy{T}() where {T} = new{T}(BaselineEnergyReport(0, Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K", Inf*u"K"))
-    function RMinimumEnergy(mink::Int, mine::BaselineEnergyReport, minpos::SimulationStep{T}) where T
-        new{T}(mink, mine, minpos)
+    function RMinimumEnergy(mink::Int, mine::Tenergy, minpos::Tpos) where {Tenergy,Tpos}
+        new{Tenergy,Tpos}(mink, mine, minpos)
     end
 end
 function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k::Int,
@@ -102,41 +101,72 @@ function (record::RMinimumEnergy)(o::SimulationStep, e::BaselineEnergyReport, k:
     end
     nothing
 end
+function (record::RMinimumEnergy)(sh::SiteHopping, e::TK, k::Int, simu::SimulationSetup)
+    if Float64(e) < Float64(record.mine)
+        record.mink = k
+        record.mine = e
+        record.minpos = copy(sh.population)
+    end
+    if k == simu.ncycles && !isempty(simu.outdir)
+        open(Base.Fix2(println, record.mink), joinpath(simu.outdir, "min_k"), "w")
+        open(joinpath(simu.outdir, "min_energy.pdb"), "w") do io
+            println(io, record.minpos)
+        end
+    end
+    nothing
+end
 
 _empty_elastic_matrix!(x::ElasticMatrix) = resize!(x, size(x, 1), 0)
+function _gc_maintenance!(newmc::MonteCarloSetup)
+    _empty_elastic_matrix!(newmc.ewald.sums)
+    foreach(_empty_elastic_matrix!, newmc.ewald.tmpEiks)
+    empty!(newmc.ewald.tmpsums)
+end
+_gc_maintenance!(::SiteHopping) = nothing
 
-struct ShootingStarMinimizer{T} <: RecordFunction
+struct ShootingStarMinimizer{Tenergy,Tpos,Tsimu} <: RecordFunction
     temperature::TK
     every::Int
     length::Int
-    positions::Vector{SimulationStep{T}}
-    energies::Vector{BaselineEnergyReport}
+    positions::Vector{Tpos}
+    energies::Vector{Tenergy}
     ninit::Int
     outdir::String
     printevery::Int
     printeveryinit::Int
     outtype::Vector{Symbol}
-    lb::LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}
+    lb::LoadBalancer{Tuple{Int,Tsimu,SimulationSetup{RMinimumEnergy{Tenergy,Tpos}}}}
 end
-function ShootingStarMinimizer(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, printeveryinit::Integer=printevery, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads())
-    T = typeof_psystem(Val(3))
-    positions = Vector{SimulationStep{T}}(undef, 0)
-    energies = Vector{BaselineEnergyReport}(undef, 0)
-    lb = LoadBalancer{Tuple{Int,MonteCarloSetup{T},SimulationSetup{RMinimumEnergy{T}}}}(numthreads) do (ik, newmc, newsimu), _
+function ShootingStarMinimizer{Tsimu,Tenergy,Tpos}(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, printeveryinit::Integer=printevery, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads()) where {Tsimu,Tenergy,Tpos}
+    positions = Vector{Tpos}(undef, 0)
+    energies = Vector{Tenergy}(undef, 0)
+    lb = LoadBalancer{Tuple{Int,Tsimu,SimulationSetup{RMinimumEnergy{Tenergy,Tpos}}}}(numthreads) do (ik, newmc, newsimu), _
         let ik=ik, newmc=newmc, newsimu=newsimu, positions=positions, energies=energies
             run_montecarlo!(newmc, newsimu)
             positions[ik] = newsimu.record.minpos
             energies[ik] = newsimu.record.mine
 
             # GC maintenance: force freeing the buffers to avoid memory leak
-            _empty_elastic_matrix!(newmc.ewald.sums)
-            foreach(_empty_elastic_matrix!, newmc.ewald.tmpEiks)
-            empty!(newmc.ewald.tmpsums)
+            _gc_maintenance!(newmc)
             GC.gc()
         end
     end
     ShootingStarMinimizer(temperature, every, length, positions, energies, ninit, outdir, printevery, printeveryinit, outtype, lb)
 end
+function ShootingStarMinimizer{MonteCarloSetup}(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, printeveryinit::Integer=printevery, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads())
+    T = typeof_psystem(Val(3))
+    Tsimu = MonteCarloSetup{T}
+    Tenergy = BaselineEnergyReport
+    Tpos = SimulationStep{T}
+    ShootingStarMinimizer{Tsimu,Tenergy,Tpos}(; length, every, outdir, printevery, printeveryinit, outtype, temperature, ninit, numthreads)
+end
+function ShootingStarMinimizer{SiteHopping}(; length::Int=100, every::Int=1, outdir="", printevery::Integer=0, printeveryinit::Integer=printevery, outtype::AbstractVector{Symbol}=[:energies, :zst], temperature=300u"K", ninit=20_000, numthreads=nthreads())
+    Tsimu = SiteHopping
+    Tenergy = TK
+    Tpos = Vector{UInt16}
+    ShootingStarMinimizer{Tsimu,Tenergy,Tpos}(; length, every, outdir, printevery, printeveryinit, outtype, temperature, ninit, numthreads)
+end
+
 function initialize_record!(star::T, simu::SimulationSetup{T}) where {T <: ShootingStarMinimizer}
     n = simu.ncycles ÷ star.every
     resize!(star.positions, n)
@@ -152,6 +182,17 @@ function (star::ShootingStarMinimizer)(o::SimulationStep, e::BaselineEnergyRepor
     outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
     newsimu = SimulationSetup(star.temperature, star.length; outdir, star.printevery, star.printeveryinit, star.outtype, star.ninit, record=recordminimum)
     put!(star.lb, (ik, newmc, newsimu))
+    nothing
+end
+function (star::ShootingStarMinimizer)(sh::SiteHopping, e::TK, k::Int, _)
+    k ≤ 0 && return
+    ik, r = divrem(k, star.every)
+    r == 0 || return
+    newsh = copy(sh)
+    outdir = isempty(star.outdir) ? "" : joinpath(star.outdir, string(ik))
+    recordminimum = RMinimumEnergy(0, e, copy(sh.population))
+    newsimu = SimulationSetup(star.temperature, star.length; outdir, star.printevery, star.printeveryinit, star.outtype, star.ninit, record=recordminimum)
+    put!(star.lb, (ik, newsh, newsimu))
     nothing
 end
 
