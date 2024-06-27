@@ -1,3 +1,5 @@
+using Random: randperm!, randsubseq
+
 export SimulationSetup, run_montecarlo!
 
 """
@@ -423,6 +425,214 @@ function print_report(simulation::SimulationSetup, time_begin, time_end, statist
         println(io)
     end
 end
+
+
+"""
+    run_random_quenching(sh::SiteHopping, simu::SimulationSetup, N)
+
+Run a simulation in which `N` initial random configurations are quenched through MC
+simulations specified by `simu`.
+"""
+function run_random_quenching(sh::SiteHopping, simu::SimulationSetup, N)
+    mkpath(simu.outdir)
+    isempty(readdir(simu.outdir)) || error(lazy"destination $(simu.outdir) is not empty")
+    refshfile = joinpath(simu.outdir, "sitehopping.serial")
+    serialize(refshfile, sh)
+    m = length(sh.population)
+    n = UInt16(length(sh.sites))
+    @loadbalance for i in 1:N
+        newsh = copy(sh)
+        resize!(newsh.population, n)
+        randperm!(newsh.population)
+        resize!(newsh.population, m)
+        outdir = joinpath(simu.outdir, string(i))
+        newsimu = SimulationSetup(; simu.temperatures, simu.pressure, simu.ncycles, simu.ninit, outdir, simu.printevery, simu.printeveryinit, simu.outtype, simu.record)
+        run_montecarlo!(newsh, newsimu)
+        thisshfile = joinpath(outdir, "sitehopping.serial")
+        rm(thisshfile); hardlink(refshfile, thisshfile) # avoid having N copies of the same file
+    end
+end
+
+"""
+    run_parallel_tempering(sh0::SiteHopping, simu::SimulationSetup, temperatures)
+
+Run parallel tempering atop site hopping
+"""
+function run_parallel_tempering(sh0::SiteHopping, simu::SimulationSetup, temperatures)
+    time_begin = time()
+
+    Ts = sort([t isa Quantity ? uconvert(u"K", t) : t*u"K" for t in temperatures])
+    Npt = length(Ts)
+    shs = [copy(sh0) for _ in 1:Npt]
+    simus = [SimulationSetup(; temperatures=T, simu.ncycles, simu.ninit, outdir=joinpath(simu.outdir, string(T)), simu.outtype, simu.printevery, simu.printeveryinit, simu.record) for T in Ts]
+
+    # energy initialization
+    energy0 = baseline_energy(sh0)
+    energypt = fill(energy0, Npt)
+    if isinf(Float64(energy0)) || isnan(Float64(energy0))
+        @error "Initial energy is not finite, this probably indicates a problem with the initial configuration."
+    end
+
+    # record and outputs
+    mkpath(simu.outdir)
+    serialize(joinpath(simu.outdir, "sitehopping.serial"), sh0)
+    for (sh, simupt) in zip(shs, simus)
+        mkpath(simupt.outdir)
+        hardlink(joinpath(simu.outdir, "sitehopping.serial"), joinpath(simupt.outdir, "sitehopping.serial"))
+        simu.record(sh, energy0, -simu.ninit, simupt) === :stop && @goto end_cleanup
+    end
+
+    N_print_init = simu.printeveryinit == 0 ? 0 : cld(simu.ninit, simu.printeveryinit)
+    N_print = simu.printevery == 0 ? 1 + (simu.ncycles>0) : 1 + fld(simu.ncycles, simu.printevery)
+    energies_init = Matrix{typeof(energy0)}(undef, N_print_init, Npt)
+    energies = Matrix{typeof(energy0)}(undef, N_print, Npt)
+    allsteps_init = Matrix{Vector{UInt16}}(undef, N_print_init, Npt)
+    allsteps = Matrix{Vector{UInt16}}(undef, N_print, Npt)
+
+    # value initialisations
+    acceptedhop = zeros(Int, Npt)
+    attemptedhop = zeros(Int, Npt)
+    acceptedpt = zeros(Int, Npt-1)
+    attemptedpt = zeros(Int, Npt-1)
+    i_print = 1
+    i_print_init = 1
+
+    if simu.ninit == 0
+        for jpt in 1:Npt
+            allsteps[1,jpt] = copy(shs[jpt].population)
+            energies[1,jpt] = energy0
+        end
+        i_print = 2
+        if simu.ncycles == 0 # single-point computation
+            @goto end_cleanup
+        end
+    elseif simu.printeveryinit > 0
+        for jpt in 1:Npt
+            allsteps_init[1,jpt] = copy(shs[jpt].population)
+            energies_init[1,jpt] = energy
+        end
+        i_print_init = 2
+    end
+
+    has_initial_output = any(startswith("initial")∘String, simu.outtype)
+
+    numpop = length(sh0.population)
+    numpop == 0 && @error "Empty simulation"
+
+    numsites = length(sh0.sites)
+
+    # main loop
+    for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
+
+        for idx_step in 1:numpop
+            ptmoves = randsubseq(shs[1].rng, 1:(Npt-1), 0.1) # attempt a PT move with proba 0.1
+            fstptmove = isempty(ptmoves) ? 0 : popfirst!(ptmoves)
+        for (ipt, (sh, T)) in enumerate(zip(shs, Ts))
+            if ipt == fstptmove
+                attemptedpt[ipt] += 1
+                if compute_accept_move(energypt[ipt], energypt[ipt+1], inv(inv(T) - inv(Ts[ipt+1])), sh)
+                    acceptedpt[ipt] += 1
+                    energypt[ipt], energypt[ipt+1] = energypt[ipt+1], energypt[ipt]
+                    posA = sh.population; posB = shs[ipt+1].population
+                    for (idx, (posa, posb)) in enumerate(zip(posA, posB))
+                        posA[idx] = posb
+                        posB[idx] = posa
+                    end
+                end
+                continue
+            end
+            (ipt-1) == fstptmove && continue
+
+            i = rand(1:numpop)
+            newpos = rand(1:numsites)
+            attemptedhop[ipt] += 1
+
+            # Core computation: energy difference between after and before the move
+            before, after = combined_movement_energy(sh, i, newpos)
+
+            accepted = compute_accept_move(before, after, T, sh)
+            if accepted
+                energypt[ipt] += after - before
+                sh.population[i] = newpos
+                acceptedhop[ipt] += 1
+            end
+        end # PT loop
+        end
+
+        # end of cycle
+        report_now = (idx_cycle ≥ 0 && (idx_cycle == 0 || (simu.printevery > 0 && idx_cycle%simu.printevery == 0))) ||
+                     (idx_cycle < 0 && has_initial_output && simu.printeveryinit > 0 && idx_cycle%simu.printeveryinit == 0)
+        if !(simu.record isa Returns) || report_now
+            if idx_cycle == 0 # start production with a precise energy
+                energy = baseline_energy(sh)
+            end
+            if report_now
+                if idx_cycle < 0
+                    for (ipt, sh) in enumerate(shs)
+                        allsteps_init[i_print_init,ipt] = copy(sh.population)
+                        energies_init[i_print_init,ipt] = energypt[ipt]
+                    end
+                    i_print_init += 1
+                else
+                    for (ipt, sh) in enumerate(shs)
+                        allsteps[i_print,ipt] = copy(sh.population)
+                        energies[i_print,ipt] = energypt[ipt]
+                    end
+                    i_print += 1
+                end
+            end
+            if !(simu.record isa Returns)
+                for (ipt, sh) in enumerate(shs)
+                    simu.record(sh, energypt[ipt], idx_cycle, simus[ipt])
+                end
+            end
+            yield()
+        end
+    end
+
+    @label end_cleanup
+    for (ipt, (sh, simupt)) in enumerate(zip(shs, simus))
+
+    if simu.printevery == 0 && simu.ncycles > 0
+        allsteps[i_print,ipt] = copy(sh.population)
+        energies[i_print,ipt] = energypt[ipt]
+        i_print += 1
+    end
+    if !isempty(simupt.outdir)
+        for initial_ in (:initial_, Symbol(""))
+            if Symbol(initial_, :energies) in simu.outtype
+                serialize(joinpath(simupt.outdir, string(initial_, "energies.serial")), initial_ == :initial_ ? energies_init[:,ipt] : energies[:,ipt])
+            end
+        end
+        if simu.printeveryinit > 0
+            serialize(joinpath(simupt.outdir, "populations_init.serial"), allsteps_init[:,ipt])
+        end
+        serialize(joinpath(simupt.outdir, "populations.serial"), allsteps[:,ipt])
+    end
+    if !(simu.ninit == 0 && simu.ncycles == 0) # not a single-point computation
+        lastenergy = baseline_energy(sh)
+        if !isapprox(Float64(energypt[ipt]), Float64(lastenergy), rtol=1e-9)
+            @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!" actual=lastenergy recorded=energy
+        end
+    end
+    fetch(simupt.record)
+    time_end = time()
+    print_report(simupt, time_begin, time_end, (acceptedhop, attemptedhop))
+
+    end # PT loop
+    time_end_last = time()
+    open(joinpath(simu.outdir, "report.txt"), "w") do io
+        println(io, "PT Simulation ran for ", time_end_last - time_begin, " s")
+        print(io, "Temperatures: ")
+        join(io, Ts, ", ")
+        println(io, '\n')
+        for ipt in 1:(Npt-1)
+            println(io, "Accepted exchange between ", Ts[ipt], " and ", Ts[ipt+1], ": ", acceptedpt[ipt], '/', attemptedpt[ipt], " (attempted) = ", acceptedpt[ipt]/attemptedpt[ipt])
+        end
+    end
+    energies
+end
+
 
 # documentation at the end of the file
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
