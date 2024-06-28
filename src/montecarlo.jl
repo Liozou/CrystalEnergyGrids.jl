@@ -321,14 +321,19 @@ function setup_montecarlo(framework, pff, systems;
 end
 
 """
-    MonteCarloSetup(mc::MonteCarloSetup; parallel::Bool=mc.step.parallel)
+    MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel, mcmoves::AbstractVector{MCMoves}=copy(mc.mcmoves))
 
 Create a copy of `mc` that does not share its modifiable internal states (the positions and
 the Ewald state). For example, the copy and the original can be used to run Monte-Carlo
 simulations in parallel, and the state of one will not influence that of the other.
 
+The step elements of `mc` are actually copied from `o`, which can be set to a different
+`SimulationStep` if need be.
+
 `parallel` specifies whether the computations on the resulting `MonteCarloSetup` should be
 parallelized or not.
+
+`mcmoves` specifies the new [`MCMoves`](@ref) of the setup.
 
 !!! warning
     Internal states that are semantically immutable are shared, although some of them are
