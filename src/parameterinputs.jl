@@ -257,16 +257,21 @@ function run_gcmc!(mc::MonteCarloSetup, simu::SimulationSetup)
         newmcmoves1 = MCMoves(ntuple(i -> i < iswap ? mcmoves1.cumulatives[i]*2/3 : mcmoves1.cumulatives[i], Val(length(mcmovenames)-1))) # make swap probability 1/3
         mc = MonteCarloSetup(mc; mcmoves=[newmcmoves1; mc.mcmoves[2:end]])
     end
-    printstyled("Running GCMC on species ", identify_molecule(mc.step.ff.symbols[mc.step.ffidx[1]]), " at pressure ", simu.pressure, '\n'; color=:green)
+    printstyled("Running GCMC on species ", first_species(mc), " at pressure ", simu.pressure, '\n'; color=:green)
     newsimu = SimulationSetup(simu.temperatures, simu.pressure, simu.ncycles, simu.ninit, simu.outdir, simu.printevery, simu.printeveryinit, simu.outtype, rec)
     ret = run_montecarlo!(mc, newsimu)
     ret, rec.Ns
 end
 
+function first_species(mc::MonteCarloSetup)
+    identify_molecule(mc.step.ff.symbols[mc.step.ffidx[1]])
+end
+
 function make_isotherm(mc::MonteCarloSetup, simu::SimulationSetup, pressures)
     n = length(pressures)
     isotherm = Vector{Float64}(undef, n)
-    energies = Vector{BaselineEnergyReport}(undef, n)
+    loadings = Vector{Vector{Float64}}(undef, n)
+    energies = Vector{Vector{BaselineEnergyReport}}(undef, n)
     @assert allequal(simu.temperatures)
     _mp = minimum(pressures)
     if (_mp isa Quantity ? _mp : _mp*u"Pa") ≤ 1e4u"Pa"
@@ -277,7 +282,6 @@ function make_isotherm(mc::MonteCarloSetup, simu::SimulationSetup, pressures)
         pressure = pressures[i]
         P = pressure isa Quantity ? uconvert(u"Pa", pressure) : pressure*u"Pa"
         ncycles = ceil(Int, simu.ncycles*(1+1e3/ustrip(u"Pa", P)))
-        ncycles = simu.ncycles
         temperatures = fill(simu.temperatures[1], ncycles+simu.ninit)
         newsimu = SimulationSetup(temperatures, P, ncycles, simu.ninit, simu.outdir, simu.printevery, simu.printeveryinit, simu.outtype, simu.record)
         sleep(1)
@@ -287,8 +291,9 @@ function make_isotherm(mc::MonteCarloSetup, simu::SimulationSetup, pressures)
         t1 = time()
         Δt = (t1-t0)*u"s"
         isotherm[i] = mean(Ns)
-        energies[i] = mean(es)
+        loadings[i] = Ns
+        energies[i] = es
         println("Finished $P in $Δt")
     end
-    isotherm, energies
+    isotherm, loadings, energies
 end
