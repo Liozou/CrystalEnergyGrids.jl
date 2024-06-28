@@ -358,6 +358,9 @@ function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature
         end
         diff = after - before
         accept!(statistics, ifelse(swapinfo.isswap, :swap, move))
+        if swapinfo.isswap # update the tail correction as well
+            modify_species!(mc.tailcorrection, idx[1], ifelse(swapinfo.isinsertion, 1, -1))
+        end
         if risk_of_underflow(energy.er, diff)
             parallel && wait(running_update)
             newenergy = baseline_energy(mc) # reset computation to avoid underflows
@@ -366,7 +369,6 @@ function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature
             end
             newenergy
         elseif swapinfo.isswap # update the tail correction as well
-            modify_species!(mc.tailcorrection, idx[1], ifelse(swapinfo.isinsertion, 1, -1))
             BaselineEnergyReport(energy.er + diff, mc.tailcorrection[])
         else
             energy + diff
