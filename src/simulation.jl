@@ -428,12 +428,12 @@ end
 
 
 """
-    run_random_quenching(sh::SiteHopping, simu::SimulationSetup, N)
+    run_random_quenching(sh::SiteHopping, simu::SimulationSetup, N; groupcycles=nothing, restartgroupcycle=false)
 
 Run a simulation in which `N` initial random configurations are quenched through MC
 simulations specified by `simu`.
 """
-function run_random_quenching(sh::SiteHopping, simu::SimulationSetup, N)
+function run_random_quenching(sh::SiteHopping, simu::SimulationSetup, N; groupcycles=nothing, restartgroupcycle=false)
     mkpath(simu.outdir)
     isempty(readdir(simu.outdir)) || error(lazy"destination $(simu.outdir) is not empty")
     refshfile = joinpath(simu.outdir, "sitehopping.serial")
@@ -447,7 +447,7 @@ function run_random_quenching(sh::SiteHopping, simu::SimulationSetup, N)
         resize!(newsh.population, m)
         outdir = joinpath(simu.outdir, string(i))
         newsimu = SimulationSetup(; simu.temperatures, simu.pressure, simu.ncycles, simu.ninit, outdir, simu.printevery, simu.printeveryinit, simu.outtype, simu.record)
-        run_montecarlo!(newsh, newsimu)
+        run_montecarlo!(newsh, newsimu; groupcycles, restartgroupcycle)
         thisshfile = joinpath(outdir, "sitehopping.serial")
         rm(thisshfile); hardlink(refshfile, thisshfile) # avoid having N copies of the same file
     end
@@ -841,7 +841,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 end
 
 
-function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup)
+function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup; groupcycles=nothing, restartgroupcycle=false)
     time_begin = time()
     # energy initialization
     energy = baseline_energy(sh)
@@ -889,36 +889,73 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup)
     numsites = length(sh.sites)
 
     # idle initialisations
-    local before::TK
-    local after::TK
+    before = movement_energy(sh, 1)
+    after = movement_energy(sh, 1)
+    if !(groupcycles isa Nothing)
+        group_populations = similar(sh.population)
+    end
 
     # main loop
     for (counter_cycle, idx_cycle) in enumerate((-simu.ninit+1):simu.ncycles)
         temperature = simu.temperatures[counter_cycle]
 
-        for idx_step in 1:numpop
-            i = rand(1:numpop)
-            newpos = rand(1:numsites)
-            attemptedhop += 1
+        if !(groupcycles isa Nothing)
+            group_before = before
+            group_after = after
+            copyto!(group_populations, sh.population)
+            group_energy = energy
+            if restartgroupcycle
+                npop = length(sh.population)
+                resize!(sh.population, length(sh.sites))
+                randperm!(sh.population)
+                resize!(sh.population, npop)
+                energy = baseline_energy(sh)
+                old_i = 0
+                accepted = false
+            end
+        end
 
-            # Core computation: energy difference between after and before the move
-            if old_i == i
-                if accepted
-                    before = after
+        for idx_groupcycle in 1:(groupcycles isa Nothing ? 1 : groupcycles)
+
+            for idx_step in 1:numpop
+                i = rand(1:numpop)
+                newpos = rand(1:numsites)
+                attemptedhop += groupcycles isa Nothing
+
+                # Core computation: energy difference between after and before the move
+                if old_i == i
+                    if accepted
+                        before = after
+                    end
+                    after = movement_energy(sh, i, newpos)
+                else
+                    before, after = combined_movement_energy(sh, i, newpos)
                 end
-                after = movement_energy(sh, i, newpos)
-            else
-                before, after = combined_movement_energy(sh, i, newpos)
-            end
 
-            accepted = compute_accept_move(before, after, temperature, sh)
-            if accepted
-                energy += after - before
-                sh.population[i] = newpos
+                accepted = compute_accept_move(before, after, temperature, sh)
+                if accepted
+                    energy += after - before
+                    sh.population[i] = newpos
+                    acceptedhop += groupcycles isa Nothing
+                end
+
+                old_i = i
+            end # cycle loop
+
+        end # group cycle loop
+
+        if !(groupcycles isa Nothing)
+            attemptedhop += 1
+            if compute_accept_move(group_energy, energy, temperature, sh)
                 acceptedhop += 1
+            else
+                before = group_before
+                after = group_after
+                copyto!(sh.population, group_populations)
+                energy = group_energy
+                old_i = 0
+                accepted = false
             end
-
-            old_i = i
         end
 
         # end of cycle
