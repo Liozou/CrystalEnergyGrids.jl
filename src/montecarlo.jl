@@ -688,7 +688,8 @@ function compute_accept_move(before, after, T, mc, swapinfo::Union{SwapInformati
     b = Number(before)
     a = Number(after)
     if swapinfo isa SwapInformation && swapinfo.isswap
-        return compute_accept_move_swap(a-b, T, mc, swapinfo)
+        tcchange = modify_species_dryrun(mc.tailcorrection, swapinfo.i, ifelse(swapinfo.isinsertion, 1, -1))
+        return compute_accept_move_swap(a+tcchange-b, T, mc, swapinfo)
     end
     a < b && return true
     e = exp((b-a)/T)
