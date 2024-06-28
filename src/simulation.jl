@@ -692,6 +692,9 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
     for (i_swap, mcmoves) in enumerate(mc.mcmoves)
         if mcmoves[:swap] == 0
             numsteps += length(mc.flatidx[i_swap])
+            if isempty(mc.flatidx[i_swap])
+                @info "Species n°$i_swap is included in MC setup but cannot appear (no swap probability nor any species in system)"
+            end
             break
         end
         numsteps += 50 # fixed number

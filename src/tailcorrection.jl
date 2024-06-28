@@ -88,8 +88,8 @@ function modify_species_dryrun(tc::TailCorrection, i, num)
     diff * num
 end
 
-function modify_species!(tc::TailCorrection, i, num)
-    diffnum = modify_species_dryrun(tc, i, num)
+function _modify_species!(tc::TailCorrection, i, num, diffnum)
     tc.numspecies[i] += num
     tc.value[] += diffnum
 end
+modify_species!(tc::TailCorrection, i, num) = _modify_species!(tc, i, num, modify_species_dryrun(tc, i, num))
