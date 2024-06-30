@@ -296,11 +296,11 @@ function choose_step!(statistics::MoveStatistics, mc::MonteCarloSetup, i::Int, m
     else
         for _ in 1:1000
             _newpos = if movekind === :random_translation
-                random_translation(mc.rng, pos, randomdmax)
+                random_translation(mc.rng, pos, mc.step.mat)
             elseif movekind === :random_reinsertion
-                random_rotation(mc.rng, random_translation(mc.rng, pos, randomdmax), 180u"°", mc.bead[i])
+                random_rotation(mc.rng, random_translation(mc.rng, pos, mc.step.mat), 180u"°", mc.bead[i])
             elseif movekind === :swap_insertion
-                random_rotation(mc.rng, random_translation(mc.rng, j == 0 ? mc.models[i] : pos, randomdmax), 180u"°", mc.bead[i])
+                random_rotation(mc.rng, random_translation(mc.rng, j == 0 ? mc.models[i] : pos, mc.step.mat), 180u"°", mc.bead[i])
             else
                 error(lazy"Unknown move kind: $movekind")
             end
@@ -358,11 +358,8 @@ function handle_acceptation(mc::MonteCarloSetup, idx, before, after, temperature
         end
         diff = after - before
         accept!(statistics, ifelse(swapinfo.isswap, :swap, move))
-        if swapinfo.isswap # update the tail correction as well
-            modify_species!(mc.tailcorrection, idx[1], ifelse(swapinfo.isinsertion, 1, -1))
-        end
         if risk_of_underflow(energy.er, diff)
-            parallel && wait(running_update)
+            parallel && !swapinfo.isswap && wait(running_update)
             newenergy = baseline_energy(mc) # reset computation to avoid underflows
             if underflow_averted_warning(energy.er, newenergy.er, diff)
                 @error "Underflow mitigation stems from incorrect energy computation:" energy diff newenergy
