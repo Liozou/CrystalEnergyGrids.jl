@@ -178,12 +178,11 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
         rev_idx = rev_indices[i]
         bead = beads[i]
         block = speciesblocks[i]
-        d = norm(sum(cell.mat; dims=2))/4
         for j in 1:length(positioni)
             s = systems[rev_idx[j]]
             n = restartpositions isa Nothing && s isa Tuple ? s[2]::Int : 1
             if n > 1
-                randomize_position!(positioni[j], rng, 1:length(ffidxi), bead, block, ffidxi, atomblocks, d)
+                randomize_position!(positioni[j], rng, 1:length(ffidxi), bead, block, ffidxi, atomblocks, cell.mat)
             end
             push!(ewaldsystems[i], EwaldSystem(positioni[j], charge))
         end
@@ -697,12 +696,12 @@ function compute_accept_move(before, after, T, mc, swapinfo::Union{SwapInformati
 end
 
 
-function randomize_position!(positions, rng, indices, bead, block, ffidxi, atomblocks, d)
+function randomize_position!(positions, rng, indices, bead, block, ffidxi, atomblocks, mat)
     pos = @view positions[indices]
     for _ in 1:30
         posr = random_rotation(rng, random_rotation(rng, random_rotation(rng, pos, 90u"°", bead, 1), 90u"°", bead, 2), 90u"°", bead, 3)
         for _ in 1:1000
-            post = random_translation(rng, posr, d)
+            post = random_translation(rng, posr, mat)
             if !inblockpocket(block, atomblocks, ffidxi, post)
                 positions[indices] .= post
                 return post
@@ -726,8 +725,7 @@ Put the species at the given index to a random position and orientation.
     `update_ewald=true` requires a prior call to [`baseline_energy(mc)`](@ref).
 """
 function randomize_position!(mc::MonteCarloSetup, (i,j), update_ewald=true)
-    d = norm(sum(mc.step.mat; dims=2))/4
-    newpos = randomize_position!(mc.step.positions, mc.step.posidx[i][j], mc.bead[i], mc.speciesblocks[i], mc.step.ffidx[i], mc.atomblocks, d)
+    newpos = randomize_position!(mc.step.positions, mc.step.posidx[i][j], mc.bead[i], mc.speciesblocks[i], mc.step.ffidx[i], mc.atomblocks, mc.step.mat)
     if update_ewald
         single_contribution_ewald(mc.ewald, mc.offsets[i] + j, newpos)
         update_mc!(mc, (i,j), newpos)

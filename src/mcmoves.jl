@@ -136,11 +136,11 @@ Base.:(==)(m1::MCMoves, m2::MCMoves) = m1.cumulatives == m2.cumulatives
 Base.hash(m::MCMoves) = hash(m.cumulatives, hash(MCMoves))
 
 
-function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}}, dmax::Union{TÅ,AbstractMatrix})
-    r = if d isa TÅ
-        SVector{3}(((2*rand(rng)-1)*dmax) for _ in 1:3)
+function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}}, dmax_or_mat::Union{TÅ,AbstractMatrix})
+    r = if dmax_or_mat isa TÅ
+        SVector{3}(((2*rand(rng)-1)*dmax_or_mat) for _ in 1:3)
     else
-        mat*(rand(rng, SVector{3,Float64}) .- 0.5)
+        dmax_or_mat*(rand(rng, SVector{3,Float64}) .- 0.5)
     end
     [poss + r for poss in positions]
 end
