@@ -44,6 +44,16 @@ function GridCoordinatesSetup(framework::AbstractSystem{3}, spacing::TÅ)
     GridCoordinatesSetup(CellMatrix(framework), spacing)
 end
 
+function Base.:(==)(c1::GridCoordinatesSetup, c2::GridCoordinatesSetup)
+    c1.cell.mat ≈ c2.cell.mat &&
+    c1.dims == c2.dims &&
+    c1.shift ≈ c2.shift &&
+    c1.size ≈ c2.size &&
+    c1.spacing ≈ c2.spacing &&
+    c1.unitcell ≈ c2.unitcell &&
+    c1.Δ ≈ c2.Δ
+end
+
 
 function wrap_atom(point, cell::CellMatrix)
     abc = cell.invmat * (point isa SVector ? point : SVector{3}(point))
