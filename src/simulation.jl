@@ -697,6 +697,10 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         numsteps += 50 # fixed number
         T0 = first(simu.temperatures)
         P = simu.pressure
+        if !isassigned(mc.gcmcdata.model, i_swap)
+            _atomgas = [ff.symbols[k] for k in ffidx[i]]
+            error("Species made of atoms $(_atomgas) identified as gas $(identify_molecule(_atomgas)) is not part of the known gas: $(unique!(sort!(collect(keys(GAS_NAMES)))))")
+        end
         φ = only(Clapeyron.fugacity_coefficient(mc.gcmcdata.model[i_swap], P, T0; phase=:stable, vol0=Clapeyron.volume(mc.gcmcdata.model0[i_swap], P, T0)))
         isnan(φ) && error("Specified gas not in gas form at the required temperature ($T0) and pressure ($P)!")
         PV_div_k = uconvert(u"K", P*mc.gcmcdata.volumes[i_swap]/u"k")

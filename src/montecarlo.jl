@@ -260,7 +260,7 @@ function setup_montecarlo(framework, pff, systems;
     if framework isa AbstractString && endswith(framework, ".cif")
         framework = framework[1:prevind(framework, end-3)]
     end
-    syst_framework = load_framework_RASPA(framework, pff)
+    syst_framework = framework isa AbstractSystem ? framework : load_framework_RASPA(framework, pff)
     ff = _ff(pff; cutoff)
     mat = stack3(bounding_box(syst_framework))
     if supercell isa Nothing
