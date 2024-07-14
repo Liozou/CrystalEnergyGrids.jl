@@ -10,6 +10,14 @@ struct ForceField
     name::String
 end
 
+function Base.:(==)(ff1::ForceField, ff2::ForceField)
+    ff1.interactions == ff2.interactions &&
+    ff1.sdict == ff2.sdict &&
+    ff1.symbols == ff2.symbols &&
+    ff1.cutoff == ff2.cutoff
+    # do not check equality of names
+end
+
 struct DoubleDefinedInteractionRule <: Exception
     a::Symbol
     b::Symbol

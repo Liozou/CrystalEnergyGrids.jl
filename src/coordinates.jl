@@ -100,6 +100,7 @@ function Base.getindex(x::BlockFile, pos::SVector{3,TÅ})
     x.block[a,b,c]
 end
 Base.getindex(x::BlockFile, i, j, k) = x[SVector{3}(i, j, k)]
+Base.:(==)(b1::BlockFile, b2::BlockFile) = b1.block == b2.block && b1.csetup == b2.csetup && b1.empty == b2.empty
 
 """
     parse_blockfile(file, csetup)

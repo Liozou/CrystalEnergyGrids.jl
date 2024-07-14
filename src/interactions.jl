@@ -594,6 +594,8 @@ function (f::InteractionRuleSum)(r)
     ret
 end
 
+Base.:(==)(a::InteractionRuleSum, b::InteractionRuleSum) = a.rules == b.rules
+
 function derivativesGrid(f::InteractionRuleSum, d2)
     r2 = @convertifnotfloat u"Å^2" d2
     value = ∂1 = ∂2 = ∂3 = 0.0

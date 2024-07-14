@@ -13,6 +13,13 @@ end
 
 Base.getindex(tc::TailCorrection) = tc.value[]
 
+function Base.:(==)(tc1::TailCorrection, tc2::TailCorrection)
+    tc1.value[] == tc2.value[] &&
+    tc1.framework == tc2.framework &&
+    tc1.cross == tc2.cross &&
+    tc1.numspecies == tc2.numspecies
+end
+
 function TailCorrection(ff::ForceField, ffidx::Vector{Vector{Int}}, framework_atoms::Vector{Int}, λ::Float64, numspecies)
     n = length(framework_atoms)
     @assert n == length(ff.sdict)

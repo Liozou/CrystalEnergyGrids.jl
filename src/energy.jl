@@ -95,6 +95,18 @@ function Base.propertynames(::SimulationStep{T}, private::Bool=false) where T
     (:ff, :charges, :mat, :positions, :parallel, :atoms, :posidx, :freespecies, :ffidx)
 end
 
+function Base.:(==)(s1::SimulationStep, s2::SimulationStep)
+    s1.positions == s2.positions &&
+    s1.ff == s2.ff &&
+    mapreduce(===, &, s1.charges, s2.charges) # consider NaN as equals
+    s1.mat == s2.mat &&
+    s1.atoms == s2.atoms &&
+    s1.posidx == s2.posidx &&
+    s1.freespecies == s2.freespecies &&
+    s1.ffidx == s2.ffidx
+    # do not check for equality of "parallel" field
+end
+
 
 function SimulationStep(ff::ForceField, charges::Vector{Te_au},
                         inputpos::Vector{Vector{Vector{SVector{3,TÅ}}}},

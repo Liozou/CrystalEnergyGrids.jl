@@ -36,6 +36,14 @@ function Base.show(io::IO, ::MIME"text/plain", rg::EnergyGrid)
     join(io, rg.csetup.unitcell, " × ")
 end
 
+function Base.:(==)(eg1::EnergyGrid, eg2::EnergyGrid)
+    eg1.csetup == eg2.csetup &&
+    eg1.num_unitcell == eg2.num_unitcell &&
+    eg1.ewald_precision == eg2.ewald_precision &&
+    eg1.higherorder == eg2.higherorder &&
+    eg1.grid ≈ eg2.grid
+end
+
 macro triplet(foo)
     esc(quote
         ($foo, $foo, $foo)
