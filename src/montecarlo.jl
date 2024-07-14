@@ -30,6 +30,24 @@ function Base.show(io::IO, mc::MonteCarloSetup)
     m > 1 && print(io, 's')
 end
 
+function Base.:(==)(mc1::MonteCarloSetup, mc2::MonteCarloSetup)
+    mc1.step == mc2.step &&
+    mc1.ewald == mc2.ewald &&
+    mc1.flatidx == mc2.flatidx &&
+    mc1.revflatidx == mc2.revflatidx &&
+    mc1.tailcorrection == mc2.tailcorrection &&
+    mc1.coulomb == mc2.coulomb &&
+    length(mc1.grids) == length(mc2.grids) &&
+    all(i -> begin a = isassigned(mc1.grids, i); a == isassigned(mc2.grids, i) && (!a || mc1.grids[i] == mc2.grids[i]) end, 1:length(mc1.grids)) &&
+    mc1.speciesblocks == mc2.speciesblocks &&
+    length(mc1.atomblocks) == length(mc2.atomblocks) &&
+    all(i -> begin a = isassigned(mc1.atomblocks, i); a == isassigned(mc2.atomblocks, i) && (!a || mc1.atomblocks[i] == mc2.atomblocks[i]) end, 1:length(mc1.atomblocks)) &&
+    mc1.bead == mc2.bead &&
+    mc1.models == mc2.models &&
+    mc1.mcmoves == mc2.mcmoves &&
+    mc1.gcmcdata == mc2.gcmcdata
+end
+
 isdefined_ewald(mc::MonteCarloSetup) = isdefined_ewald(mc.ewald)
 
 struct EwaldSystem # pseudo-AbstractSystem with only positions and charges

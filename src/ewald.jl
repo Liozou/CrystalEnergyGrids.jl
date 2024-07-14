@@ -600,6 +600,13 @@ function IncrementalEwaldContext(ctx::EwaldContext)
     IncrementalEwaldContext(ctx, ElasticMatrix{ComplexF64}(undef, m, (m!=0)*(n+1)), (Eikx, Eiky, Eikz), tmpsums, Ref(-isdefined_ewald(ctx)))
 end
 
+function Base.:(==)(iec1::IncrementalEwaldContext, iec2::IncrementalEwaldContext)
+    iec1.ctx == iec2.ctx &&
+    iec1.last[] == iec2.last[] &&
+    iec1.sums == iec2.sums
+    # Do not check tmp fields
+end
+
 isdefined_ewald(ewald::IncrementalEwaldContext) = isdefined_ewald(ewald.ctx)
 
 """

@@ -9,6 +9,17 @@ struct GCMCData
     Π::Int # number of unit cells in the supercell
 end
 
+function Base.:(==)(g1::GCMCData, g2::GCMCData)
+    (g1.volumes == g2.volumes && g1.Π == g2.Π) || return false
+    n = length(g1.model)
+    (n == length(g2.model) == length(g1.model0) == length(g2.model0)) || return false
+    for i in 1:n, P in (100u"Pa", 1e6u"Pa"), T in (300u"K", 500u"K")
+        φ1 = only(Clapeyron.fugacity_coefficient(g1.model[i], P, T; phase=:stable, vol0=Clapeyron.volume(g1.model0[i], P, T)))
+        φ2 = only(Clapeyron.fugacity_coefficient(g2.model[i], P, T; phase=:stable, vol0=Clapeyron.volume(g2.model0[i], P, T)))
+        φ1 ≈ φ2 || return false
+    end
+    return true
+end
 
 function GCMCData(ff::ForceField, ffidx, speciesblocks::Vector{BlockFile}, unitcell)
     n = length(ffidx)
@@ -68,8 +79,10 @@ function compute_accept_move_swap(diff::TK, T, mc, swapinfo::SwapInformation)
     prefix = swapinfo.φPV_div_k/T
     N = length(mc.step.posidx[swapinfo.i])
     rand(mc.rng) < if swapinfo.isinsertion # if insertion
+        # @show prefix/(N+1) * expterm
         prefix/(N+1) * expterm
     else # deletion
+        # @show N/prefix * expterm
         N/prefix * expterm
     end
 end
