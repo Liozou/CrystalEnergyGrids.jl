@@ -309,7 +309,6 @@ function choose_step!(statistics::MoveStatistics, mc::MonteCarloSetup, i::Int, m
                 # to be consistent with the excluded volume, only refuse insertion where the
                 # bead is in the species blockpocket
                 bead = mc.bead[i]
-                bead += bead==0
                 if !speciesblock[_newpos[bead]]
                     return length(mc.step.posidx[i]) + 1, _newpos, movekind, blocked
                 end

@@ -161,11 +161,7 @@ function setup_montecarlo(cell::CellMatrix, csetup::GridCoordinatesSetup,
     buffer2 = MVector{3,Float64}(undef)
     beads = Vector{Int}(undef, n)
     for i in 1:n
-        if isempty(poss[i])
-            beads[i] = 0
-            continue
-        end
-        possi = poss[i][1]
+        possi = models[i]
         refpos = possi[1]
         meanpos = refpos + mean(pos - refpos for pos in possi)
         mind2 = Inf*u"Å^2"

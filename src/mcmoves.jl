@@ -86,7 +86,7 @@ function MCMoves(; kwargs...)
     acc = AccumulateKwargs(tot, kwargs)
     ret = MCMoves(ntuple(acc, Val(length(mcmovenames)-1)))
     @assert acc.c ≤ 1.0
-    if acc.setkwargs + haskey(kwargs, last(mcmovenames)) != length(kwargs)
+    if acc.setkwargs + haskey(kwargs, last(mcmovenames)) != length(kwargs) - sum(iszero, values(kwargs))
         wrongkwargs = filter(x -> first(x) ∉ mcmovenames, kwargs)
         error(lazy"""The following kwarg$(length(wrongkwargs)==1 ? " is" : "s are") invalid for MCMoves: \"$(join([first(x) for x in wrongkwargs], "\\\", \\\"", "\\\" and \\\""))\".
         Choose among \"$(join(mcmovenames, "\\\", \\\"", "\\\" and \\\""))\"""")
@@ -145,7 +145,10 @@ function random_translation(rng, positions::AbstractVector{SVector{3,TÅ}}, dmax
     [poss + r for poss in positions]
 end
 function random_rotation(rng, positions::AbstractVector{SVector{3,TÅ}}, θmax, bead, _r=nothing)
-    bead == 0 && return positions
+    if length(positions) == 1
+        @assert bead == 1
+        return positions
+    end
     θ = θmax*(2*rand(rng)-1)
     s, c = sincos(θ)
     r = _r isa Nothing ? rand(rng, 1:3) : _r
