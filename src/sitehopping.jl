@@ -167,7 +167,7 @@ function _extremal_placements!(ret, sh::SiteHopping, priorities, used, m, N, new
                 _extremal_placements!(ret, copy(sh), copy(priorities), union(used, site), m, N, newsitemap, sites_per_name)
             end
         else
-            perm = randperm(n)
+            perm = randperm(sh.rng, n)
             append!(sh.population, @views idxs[perm[1:r]])
             min_e = baseline_energy(sh)
             min_pop = sh.population[end-r+1:end]

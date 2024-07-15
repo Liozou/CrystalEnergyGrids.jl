@@ -355,7 +355,10 @@ parallelized or not.
     `deppcopy` or a custom copy implementation to circumvent this issue if you plan on
     modifying states outside of the API.
 """
-function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; parallel::Bool=mc.step.parallel, mcmoves::AbstractVector{MCMoves}=copy(mc.mcmoves))
+function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step;
+                         parallel::Bool=mc.step.parallel,
+                         mcmoves::AbstractVector{MCMoves}=copy(mc.mcmoves),
+                         rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng))
     ewaldsystems = Vector{EwaldSystem}[]
     for (i, posidxi) in enumerate(o.posidx)
         ffidxi = o.ffidx[i]
@@ -367,7 +370,6 @@ function MonteCarloSetup(mc::MonteCarloSetup, o::SimulationStep=mc.step; paralle
         push!(ewaldsystems[i_empty], EwaldSystem(mc.models[i_empty], o.charges[o.ffidx[i_empty]]))
     end
     ewald = IncrementalEwaldContext(EwaldContext(mc.ewald.ctx.eframework, ewaldsystems, emptysystems))
-    rng = mc.rng isa TaskLocalRNG ? mc.rng : copy(mc.rng)
     MonteCarloSetup(SimulationStep(o, :all; parallel),
                     ewald, map(copy, mc.flatidx), copy(mc.revflatidx), copy(mc.tailcorrection),
                     mc.coulomb, mc.grids, mc.speciesblocks, mc.atomblocks, mc.bead, mc.models,

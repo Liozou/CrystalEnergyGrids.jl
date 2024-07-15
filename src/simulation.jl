@@ -300,27 +300,27 @@ function choose_step!(statistics::MoveStatistics, mc::MonteCarloSetup, i::Int, m
             elseif movekind === :random_reinsertion
                 random_rotation(mc.rng, random_translation(mc.rng, pos, mc.step.mat), 180u"°", mc.bead[i])
             elseif movekind === :swap_insertion
-                random_rotation(mc.rng, random_translation(mc.rng, j == 0 ? mc.models[i] : pos, mc.step.mat), 180u"°", mc.bead[i])
+                random_rotation(mc.rng, random_translation(mc.rng, mc.models[i], mc.step.mat), 180u"°", mc.bead[i])
             else
                 error(lazy"Unknown move kind: $movekind")
             end
-            blocked = inblockpocket(speciesblock, mc.atomblocks, ffidxi, _newpos)
+            _blocked = inblockpocket(speciesblock, mc.atomblocks, ffidxi, _newpos)
             if movekind === :swap_insertion
                 # to be consistent with the excluded volume, only refuse insertion where the
                 # bead is in the species blockpocket
                 bead = mc.bead[i]
                 if !speciesblock[_newpos[bead]]
-                    return length(mc.step.posidx[i]) + 1, _newpos, movekind, blocked
+                    return length(mc.step.posidx[i]) + 1, _newpos, movekind, _blocked
                 end
-            elseif !blocked
+            elseif !_blocked
                 return j, _newpos, movekind, false
             end
         end
         movekind === :swap_insertion || @warn "Trapped species did not manage to move out of a blocked situation. This could be caused by an impossible initial configuration."
         return j, Vector(pos), movekind, true # signal that the move was blocked
     end
-    inblockpocket(speciesblock, mc.atomblocks, ffidxi, newpos) && return j, Vector(pos), movekind, true
-    return j, newpos, movekind, false
+    blocked = inblockpocket(speciesblock, mc.atomblocks, ffidxi, newpos)
+    return j, newpos, movekind, blocked
 end
 
 
@@ -441,7 +441,7 @@ function run_random_quenching(sh::SiteHopping, simu::SimulationSetup, N; groupcy
     @loadbalance for i in 1:N
         newsh = copy(sh)
         resize!(newsh.population, n)
-        randperm!(newsh.population)
+        randperm!(sh.rng, newsh.population)
         resize!(newsh.population, m)
         outdir = joinpath(simu.outdir, string(i))
         newsimu = SimulationSetup(; simu.temperatures, simu.pressure, simu.ncycles, simu.ninit, outdir, simu.printevery, simu.printeveryinit, simu.outtype, simu.record)
@@ -541,8 +541,8 @@ function run_parallel_tempering(sh0::SiteHopping, simu::SimulationSetup, tempera
             end
             (ipt-1) == fstptmove && continue
 
-            i = rand(1:numpop)
-            newpos = rand(1:numsites)
+            i = rand(sh.rng, 1:numpop)
+            newpos = rand(sh.rng, 1:numsites)
             attemptedhop[ipt] += 1
 
             # Core computation: energy difference between after and before the move
@@ -720,7 +720,7 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
 
         for idx_step in 1:numsteps
             # Choose the move kind
-            i = rand(1:length(mc.flatidx))
+            i = rand(mc.rng, 1:length(mc.flatidx))
             movekind = mc.mcmoves[i](rand(mc.rng))
 
             # Choose the molecule on which to attempt a move (if relevant)
@@ -912,7 +912,7 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup; groupcycles=not
             if restartgroupcycle
                 npop = length(sh.population)
                 resize!(sh.population, length(sh.sites))
-                randperm!(sh.population)
+                randperm!(sh.rng, sh.population)
                 resize!(sh.population, npop)
                 energy = baseline_energy(sh)
                 old_i = 0
@@ -923,8 +923,8 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup; groupcycles=not
         for idx_groupcycle in 1:(groupcycles isa Nothing ? 1 : groupcycles)
 
             for idx_step in 1:numpop
-                i = rand(1:numpop)
-                newpos = rand(1:numsites)
+                i = rand(sh.rng, 1:numpop)
+                newpos = rand(sh.rng, 1:numsites)
                 attemptedhop += groupcycles isa Nothing
 
                 # Core computation: energy difference between after and before the move
