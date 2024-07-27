@@ -7,8 +7,8 @@ struct TRamp <: TemperatureFunction
     start::TK
     Δ::TK
 
-    function TRamp(start::TK, Δ::TK, ::Nothing)
-        new(start, Δ)
+    function TRamp(start::Unitful.Temperature, Δ::Unitful.Temperature, ::Nothing)
+        new(uconvert(u"K", start), uconvert(u"K", Δ))
     end
 end
 function TRamp(start, stop)
@@ -53,7 +53,7 @@ function (tf::TParts{N})(k, n) where N
     0.0u"K"
 end
 
-function TAnneal(bottom::TK, top::TK, wait::Float64)
+function TAnneal(bottom::Unitful.Temperature, top::Unitful.Temperature, wait::Float64)
     TParts(((1.0 - wait)/2, (1.0 + wait)/2, 1.0), (
         TRamp(bottom, top),
         Returns(top),
@@ -74,6 +74,11 @@ function TAnneal(sequence, wait::Number)
     )
 end
 
+function TRepeat(part, times::Int)
+    fractions = ntuple(i -> i/times, times)
+    parts = fill(part, times)
+    TParts(fractions, parts)
+end
 
 ## Record inputs
 abstract type RecordFunction <: Function end
