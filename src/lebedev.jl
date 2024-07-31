@@ -64,6 +64,7 @@ end
 
 function get_lebedev_direct(size)
     idx = searchsortedfirst(lebedev_sizes, size)
+    islinear = true
     islinearsymmetric = false
     realsize = size
     if get(lebedev_sizes, idx, -1) != size
@@ -73,9 +74,15 @@ function get_lebedev_direct(size)
     end
     if get(lebedev_sizes, idx, -1) != realsize
         size == 1 && return LebedevGrid(one(Int32), one(Int32), [4π], [zero(SVector{3,Float64})])
-        error(lazy"Size $size does not correspond to a registered lebedev grid")
+        realsize = size÷5
+        5*realsize == size || error(lazy"Size $size does not correspond to a registered lebedev grid")
+        idx = searchsortedfirst(lebedev_sizes, realsize)
+        islinearsymmetric = false
+        islinear = false
     end
-    read_lebedev_grid(joinpath(lebedev_path, string(realsize)), islinearsymmetric)
+    leb = read_lebedev_grid(joinpath(lebedev_path, string(realsize)), islinearsymmetric)
+    islinear && return leb
+    return LebedevGrid(size, leb.degree, repeat(leb.weights, 5)./5, repeat(leb.points, 5))
 end
 
 """
