@@ -89,7 +89,7 @@ function SiteHopping(sites, framework, forcefield_framework, syst_mol, populatio
     else
         copy(population)
     end
-    M = maximum(actualpopulation)
+    M = maximum(actualpopulation; init=0) # init is used if the population is empty
     M > length(sites) && error(lazy"Cannot populate site $M among $(length(sites)) sites")
     SiteHopping(actualpopulation, sites, frameworkenergies, interactions, mat, atomnames,
                 tailcorrection, rng)

@@ -1,27 +1,34 @@
-import StableHashTraits
+import StableHashTraits: transformer
+using StableHashTraits: Transformer, omit_fields, pick_fields, stable_hash, HashVersion
 
-StableHashTraits.hash_method(::CrystalEnergySetup) = StableHashTraits.StructHash()
-StableHashTraits.hash_method(::EnergyGrid) = StableHashTraits.StructHash(filter(!=(:grid))∘fieldnames∘typeof => getfield)
-StableHashTraits.hash_method(::GridCoordinatesSetup) = StableHashTraits.StructHash()
-StableHashTraits.hash_method(::BlockFile) = StableHashTraits.StructHash(filter(!=(:block))∘fieldnames∘typeof => getfield)
-StableHashTraits.hash_method(::EwaldFramework) = StableHashTraits.FnHash(x -> (x.kspace.ks, x.kspace.num_kvecs, x.precision))
+# transformer(::Type{<:CrystalEnergySetup}) = # DEFAULT
+transformer(::Type{EnergyGrid}) = Transformer(omit_fields(:grid))
+# transformer(::Type{GridCoordinatesSetup}) = # DEFAULT
+transformer(::Type{BlockFile}) = Transformer(omit_fields(:block))
+transformer(::Type{EwaldFramework}) = Transformer(x -> (x.kspace.ks, x.kspace.num_kvecs, x.precsision); hoist_type=true)
 
-StableHashTraits.hash_method(::EwaldContext) = StableHashTraits.FnHash(x -> (x.eframework, x.charges, x.atoms, x.speciesof, ustrip(u"K", x.static_contribution[])))
-StableHashTraits.hash_method(::SimulationStep) = StableHashTraits.FnHash(x -> (ustrip.(u"e_au", x.charges), x.atoms, [[[ustrip(u"Å", k) for k in j] for j in i] for i in x.positions], ustrip.(u"Å", x.mat)))
-StableHashTraits.hash_method(::MonteCarloSetup) = StableHashTraits.FnHash(x -> (x.step, x.ewald.ctx, x.coulomb, x.speciesblocks, x.bead))
+function transformer(::Type{EwaldContext})
+    Transformer(x -> (x.eframework, x.charges, x.atoms, x.speciesof, ustrip(u"K", x.static_contribution[])); hoist_type=true)
+end
+function transformer(::Type{SimulationStep{T}}) where T
+    Transformer(x -> (ustrip.(u"e_au", x.charges), x.atoms, [[[ustrip(u"Å", k) for k in j] for j in i] for i in x.positions], ustrip.(u"Å", x.mat)); hoist_type=true)
+end
+function transformer(::Type{MonteCarloSetup{T,Trng}}) where {T,Trng}
+    Transformer(x -> (x.step, x.ewald.ctx, x.coulomb, x.speciesblocks, x.bead); hoist_type=true)
+end
 
-StableHashTraits.hash_method(::InteractionRule) = StableHashTraits.StructHash()
-StableHashTraits.hash_method(::InteractionRuleSum) = StableHashTraits.StructHash()
-StableHashTraits.hash_method(::ForceField) = StableHashTraits.StructHash()
+# transformer(::Type{InteractionRule}) = # DEFAULT
+# transformer(::Type{InteractionRuleSum}) = # DEFAULT
+# transformer(::Type{ForceField}) = # DEFAULT
 
-StableHashTraits.hash_method(::PseudoAtomInfo) = StableHashTraits.StructHash()
-StableHashTraits.hash_method(::PseudoAtomListing) = StableHashTraits.FnHash(pal -> begin
+# transformer(::Type{PseudoAtomInfo}) = # DEFAULT
+transformer(::Type{PseudoAtomListing}) = Transformer(pal -> begin
     kvs = collect(pal.exact)
     I = sortperm(kvs; by=last)
     (first.(kvs)[I], pal.info[I])
-end)
+end; hoist_type=true)
 
 function hash_string(x)
-    h = StableHashTraits.stable_hash(x, StableHashTraits.HashVersion{2}())
+    h = stable_hash(x, HashVersion{4}())
     bytes2hex(h)
 end
