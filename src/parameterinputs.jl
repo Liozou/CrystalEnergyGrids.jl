@@ -227,7 +227,7 @@ end
 
 ## GCMC
 
-export run_gcmc!
+export run_gcmc
 
 struct GCMCRecorder{T}
     Ns::Vector{Float64}
@@ -254,17 +254,33 @@ function initialize_record!(rec::T, simu::SimulationSetup{T}) where {T <: GCMCRe
     nothing
 end
 
-function run_gcmc!(mc::MonteCarloSetup, simu::SimulationSetup)
+"""
+    run_gcmc(mc::MonteCarloSetup, simu::SimulationSetup)
+
+Run a grand canonical Monte Carlo simulation for the first mobile species in `mc`.
+
+Return the energies encountered during the simulation and the corresponding list of number
+of molecules in the system.
+
+!!! note
+    The input `mc` is not modified, but `simu.record` may be if it modifies itself.
+
+    To run a simulation and keep the modified `mc`, build a `MonteCarloSetup` with a
+    non-zero `:swap` value in the `MCMoves` of the species, and launch `run_montecarlo!`.
+"""
+function run_gcmc(mc::MonteCarloSetup, simu::SimulationSetup)
     rec = GCMCRecorder(simu)
     mcmoves1 = mc.mcmoves[1]
-    if iszero(mcmoves1[:swap])
+    newmcmoves1 = if mcmoves1.cumulatives[end] ≈ 1.0 # no swap probability
         iswap = findfirst(==(:swap), mcmovenames)
-        newmcmoves1 = MCMoves(ntuple(i -> i < iswap ? mcmoves1.cumulatives[i]*2/3 : mcmoves1.cumulatives[i], Val(length(mcmovenames)-1))) # make swap probability 1/3
-        mc = MonteCarloSetup(mc; mcmoves=[newmcmoves1; mc.mcmoves[2:end]])
+        MCMoves(ntuple(i -> i < iswap ? mcmoves1.cumulatives[i]*2/3 : mcmoves1.cumulatives[i], Val(length(mcmovenames)-1))) # make swap probability 1/3
+    else
+        mcmoves1
     end
-    printstyled("Running GCMC on species ", first_species(mc), " at pressure ", simu.pressure, '\n'; color=:green)
+    newmc = MonteCarloSetup(mc; mcmoves=[newmcmoves1; mc.mcmoves[2:end]])
+    printstyled("Running GCMC on species ", first_species(newmc), " at pressure ", simu.pressure, '\n'; color=:green)
     newsimu = SimulationSetup(simu.temperatures, simu.pressure, simu.ncycles, simu.ninit, simu.outdir, simu.printevery, simu.printeveryinit, simu.outtype, rec)
-    ret = run_montecarlo!(mc, newsimu)
+    ret = run_montecarlo!(newmc, newsimu)
     ret, rec.Ns
 end
 
@@ -272,6 +288,20 @@ function first_species(mc::MonteCarloSetup)
     identify_molecule(mc.step.ff.symbols[mc.step.ffidx[1]])
 end
 
+"""
+    make_isotherm(mc::MonteCarloSetup, simu::SimulationSetup, pressures)
+
+Compute the adsorption isotherm of the first mobile species of `mc` at the given
+`pressures` (irrespective of that stored in `simu`) in parallel.
+
+Return the isotherm, the loadings encountered during the simulation as well as the
+corresponding energies.
+
+!!! note
+    The number of cycles may be tweaked to correct precision issues at low pressures.
+    Since those simulations run faster, and all the pressures run in parallel, this should
+    not affect the overall timing.
+"""
 function make_isotherm(mc::MonteCarloSetup, simu::SimulationSetup, pressures)
     n = length(pressures)
     isotherm = Vector{Float64}(undef, n)
@@ -292,7 +322,7 @@ function make_isotherm(mc::MonteCarloSetup, simu::SimulationSetup, pressures)
         sleep(1)
         yield()
         t0 = time()
-        es, Ns = run_gcmc!(newmc, newsimu)
+        es, Ns = run_gcmc(newmc, newsimu)
         t1 = time()
         Δt = (t1-t0)*u"s"
         isotherm[i] = mean(Ns)
