@@ -861,6 +861,10 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup; groupcycles=not
 
     N_print_init = simu.printeveryinit == 0 ? 0 : cld(simu.ninit, simu.printeveryinit)
     N_print = simu.printevery == 0 ? 1 + (simu.ncycles>0) : 1 + fld(simu.ncycles, simu.printevery)
+    if isempty(sh.population)
+        @error "Empty site hopping simulation: only one step will be produced."
+        N_print_init = 0; N_print = 1
+    end
     energies_init = Vector{typeof(energy)}(undef, N_print_init)
     energies = Vector{typeof(energy)}(undef, N_print)
     allsteps_init = Vector{Vector{UInt16}}(undef, N_print_init)
@@ -873,11 +877,11 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup; groupcycles=not
     i_print = 1
     i_print_init = 1
 
-    if simu.ninit == 0
+    if simu.ninit == 0 || isempty(sh.population)
         allsteps[1] = copy(sh.population)
         energies[1] = energy
         i_print = 2
-        if simu.ncycles == 0 # single-point computation
+        if simu.ncycles == 0 || isempty(sh.population) # single-point computation
             @goto end_cleanup
         end
     elseif simu.printeveryinit > 0
@@ -989,7 +993,7 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup; groupcycles=not
     end
 
     @label end_cleanup
-    if simu.printevery == 0 && simu.ncycles > 0
+    if simu.printevery == 0 && simu.ncycles > 0 && !isempty(sh.population)
         allsteps[i_print] = copy(sh.population)
         energies[i_print] = energy
         i_print += 1
@@ -1005,7 +1009,7 @@ function run_montecarlo!(sh::SiteHopping, simu::SimulationSetup; groupcycles=not
         end
         serialize(joinpath(simu.outdir, "populations.serial"), allsteps)
     end
-    if !(simu.ninit == 0 && simu.ncycles == 0) # not a single-point computation
+    if !(simu.ninit == 0 && simu.ncycles == 0) && !isempty(sh.population) # not a single-point computation
         lastenergy = baseline_energy(sh)
         if !isapprox(Float64(energy), Float64(lastenergy), rtol=1e-9)
             @error "Energy deviation observed between actual ($lastenergy) and recorded ($energy), this means that the simulation results are wrong!" actual=lastenergy recorded=energy
