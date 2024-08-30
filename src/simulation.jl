@@ -13,6 +13,8 @@ Definition of the simulation setup, which must provide the following information
   which varies between `1` and `n`.
 - `pressure` the pressure (in Pa). Only used for GCMC, for which the Monte-Carlo moves must
   include a non-zero swap probability.
+  If the pressure is negative, its opposite is used in cunjunction with the GERG2008
+  equation of state, instead of the default Peng-Robinson.
 - `ncycles` the number of cycles of the simulation. Each cycle consists in `N` steps, where
   a step is a Monte-Carlo movement attempt on a random species, and `N` is the number of
   species.
@@ -697,12 +699,17 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
         T0 = first(simu.temperatures)
         P = simu.pressure
         if !isassigned(mc.gcmcdata.model, i_swap)
-            _atomgas = [ff.symbols[k] for k in ffidx[i]]
+            _atomgas = [mc.step.ff.symbols[k] for k in mc.step.ffidx[i_swap]]
             error("Species made of atoms $(_atomgas) identified as gas $(identify_molecule(_atomgas)) is not part of the known gas: $(unique!(sort!(collect(keys(GAS_NAMES)))))")
         end
-        φ = only(Clapeyron.fugacity_coefficient(mc.gcmcdata.model[i_swap], P, T0; phase=:stable, vol0=Clapeyron.volume(mc.gcmcdata.model0[i_swap], P, T0)))
-        isnan(φ) && error("Specified gas not in gas form at the required temperature ($T0) and pressure ($P)!")
-        PV_div_k = uconvert(u"K", P*mc.gcmcdata.volumes[i_swap]/u"k")
+        φ = only(if P > 0u"Pa"
+            Clapeyron.fugacity_coefficient(mc.gcmcdata.model0[i_swap], P, T0; phase=:stable, vol0=Clapeyron.volume(mc.gcmcdata.model0[i_swap], P, T0))
+        else
+            @info "Using GERG2008 equation of state with pressure $(-P)"
+            Clapeyron.fugacity_coefficient(mc.gcmcdata.model[i_swap], -P, T0; phase=:stable, vol0=Clapeyron.volume(mc.gcmcdata.model0[i_swap], -P, T0))
+        end)
+        isnan(φ) && error("Specified gas not in gas form at the required temperature ($T0) and pressure ($(abs(P)))!")
+        PV_div_k = uconvert(u"K", abs(P)*mc.gcmcdata.volumes[i_swap]/u"k")
         φPV_div_k[i_swap] = φ*PV_div_k
     end
 
