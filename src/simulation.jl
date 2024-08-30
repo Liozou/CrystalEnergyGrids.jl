@@ -633,6 +633,8 @@ function run_parallel_tempering(sh0::SiteHopping, simu::SimulationSetup, tempera
     energies
 end
 
+# const Dmax = TÅ[]
+# const Θmax = typeof(1.0u"°")[]
 
 # documentation at the end of the file
 function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
@@ -810,13 +812,18 @@ function run_montecarlo!(mc::MonteCarloSetup, simu::SimulationSetup)
             yield()
         end
 
+        # global Dmax
+        # global Θmax
+
         translation_ratio = statistics.translation()
         if !isnan(translation_ratio)
-            statistics.dmax = clamp(statistics.dmax * (1 + (translation_ratio - 0.5)*sqrt(10/(99+counter_cycle))), 0.1u"Å", 3.0u"Å")
+            statistics.dmax = clamp(statistics.dmax * (1 + (translation_ratio - 0.25)*sqrt(10/(99+counter_cycle))), 0.1u"Å", 3.0u"Å")
+            # push!(Dmax, statistics.dmax)
         end
         rotation_ratio = statistics.rotation()
         if !isnan(rotation_ratio)
-            statistics.θmax = (counter_cycle-1)/counter_cycle*statistics.θmax + rotation_ratio/counter_cycle*120u"°"
+            statistics.θmax = clamp(statistics.θmax + (rotation_ratio - 0.5)/counter_cycle*120u"°", 10u"°", 180u"°") #(counter_cycle-1)/counter_cycle*statistics.θmax + rotation_ratio/counter_cycle*120u"°"
+            # push!(Θmax, statistics.θmax)
         end
     end
     if parallel
